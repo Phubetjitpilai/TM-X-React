@@ -10,107 +10,18 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TM-X Database Editor</title>
-  <style>
+  <title>TM-X Control System</title>
+  <!-- สไตล์/โค้ดที่ทุกหน้าใช้ร่วมกัน — โหลดก่อนเสมอ เพื่อให้ของเฉพาะหน้าทับได้ -->
+<link rel="stylesheet" href="shared.css" />
+<script src="shared.js"></script>
+<style>
     /* ── Variables (ชุดเดียวกับ index.html) ───────────────────────────── */
-    :root {
-      --bg:        #f4f3ef;
-      --surface:   #ffffff;
-      --surface2:  #f7f6f3;
-      --border:    #e3e1da;
-      --accent:    #378ade;
-      --accent2:   #7f77dd;
-      --ok:        #3b6d11;
-      --ok-bg:     #eaf3de;
-      --ng:        #a32d2d;
-      --ng-bg:     #fcebeb;
-      --warn:      #854f0b;
-      --warn-bg:   #faeeda;
-      --text:      #1a1a18;
-      --muted:     #5f5e5a;
-      --radius:    8px;
-    }
-
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-    }
-    a { color: var(--accent); text-decoration: none; }
-    button {
-      cursor: pointer;
-      border: none;
-      border-radius: var(--radius);
-      font-size: 0.875rem;
-      font-weight: 500;
-      padding: 0.45rem 1rem;
-      transition: opacity .15s, background .15s;
-    }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
-    button:not(:disabled):hover { opacity: 0.85; }
-    select, input, textarea {
-      background: var(--bg);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 0.4rem 0.6rem;
-      font-size: 0.875rem;
-      font-family: inherit;
-    }
-    select:focus, input:focus, textarea:focus {
-      outline: 2px solid var(--accent);
-      outline-offset: 1px;
-    }
-
-    /* ── Top bar ───────────────────────────────────────────────────────── */
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0 1.5rem;
-      height: 52px;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-    .topbar-left { display: flex; align-items: center; gap: 1rem; }
-    .topbar-title {
-      font-size: 1.1rem;
-      font-weight: 700;
-      letter-spacing: .03em;
-      color: var(--text);
-    }
-    .topbar-title span { color: var(--accent); }
-    .topbar-back {
-      font-size: 0.82rem;
-      color: var(--muted);
-      font-weight: 600;
-    }
+    /* ── ตัวแปรสี, ปุ่ม/อินพุตพื้นฐาน, แถบเมนูบน, ป้ายสถานะ, toast ──
+       ย้ายไปที่ shared.css แล้ว (โหลดไว้ใน <head> ก่อนบล็อกนี้)
+       เขียนทับเฉพาะที่ต้องต่างจากส่วนกลางได้ที่นี่ */
+    /* rule เฉพาะหน้านี้ที่เคยอยู่ในบล็อกร่วม */
+    .topbar-back { font-size: 0.82rem; color: var(--muted); font-weight: 600; }
     .topbar-back:hover { color: var(--accent); }
-    /* แถบเมนูนำทางบนสุด — "ข้อความล้วน" (ไม่ใช่ปุ่ม) สี --muted ปกติ เปลี่ยนเป็น
-       --accent ตอน hover พร้อม transition นุ่มๆ (.15s) ให้เหมือนกันทุกหน้า */
-    .topbar-nav { display: flex; align-items: center; gap: 1.25rem; }
-    .topbar-link {
-      font-size: 0.85rem;
-      font-weight: normal;
-      color: var(--muted);
-      transition: color .15s;
-    }
-    .topbar-link:hover { color: var(--accent); }
-    .station-badge {
-      font-size: 0.8rem;
-      font-weight: 600;
-      padding: 0.3rem 0.85rem;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-    }
-    .station-badge.online     { background: var(--ok-bg);   border-color: var(--ok);   color: var(--ok); }
-    .station-badge.offline    { background: var(--ng-bg);   border-color: var(--ng);   color: var(--ng); }
-    .station-badge.connecting { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
 
     /* ── Main content ──────────────────────────────────────────────────── */
     .main {
@@ -118,6 +29,9 @@
       display: flex;
       flex-direction: column;
       gap: 1.5rem;
+      /* width:100% จำเป็นเพราะ body เป็น flex column (ดูหมายเหตุใน shared.css)
+         ถ้ามีแต่ margin:0 auto กล่องจะหุบตามเนื้อหาแทนที่จะกางเต็มความกว้าง */
+      width: 100%;
       max-width: 1400px;
       margin: 0 auto;
     }
@@ -222,13 +136,42 @@
     .result-badge.ok { background: var(--ok-bg); color: var(--ok); }
     .result-badge.ng { background: var(--ng-bg); color: var(--ng); }
 
+    /* ค่าที่วัดได้ในตาราง Measurements — เขียว=อยู่ในสเปคของแกนนั้น แดง=หลุดสเปค
+       (DB เก็บแค่ result รวมของทั้ง 2 แกน จึงคำนวณรายแกนเองจาก nominal/tolerance
+       ที่ /api/measurements แนบมาให้) */
+    .val-ok { color: var(--ok); font-weight: 600; }
+    .val-ng { color: var(--ng); font-weight: 600; }
+
     .desc-cell {
       max-width: 220px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .row-actions { display: flex; gap: 0.4rem; }
+
+    /* คอลัมน์ read-only ที่ derive มาจาก Part Number / Package Size — ทำให้ดู
+       "จางกว่า" คอลัมน์ที่แก้ไขได้จริง เพื่อสื่อว่าเป็นข้อมูลอ้างอิงให้ดูเฉยๆ */
+    .th-derived, .td-derived {
+      background: var(--surface2);
+      color: var(--muted);
+    }
+    .th-derived::after { content: ' 🔒'; font-size: 0.85em; opacity: .6; }
+    .derived-legend {
+      background: var(--surface2);
+      color: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0 0.35rem;
+      font-weight: 600;
+    }
+    /* ⚠ ห้ามใส่ display:flex ที่ <td> โดยตรง — จะทำให้ cell นั้นหลุดจากการเป็น
+       table-cell ทำให้ความสูง/เส้น border-bottom ไม่ตรงกับแถวที่เหลือ (เป็นสาเหตุ
+       ที่เส้นคอลัมน์ Actions เหลื่อมกับคอลัมน์อื่น) — ให้ flex ที่ div ข้างในแทน */
+    .row-actions > .actions-inner {
+      display: flex;
+      gap: 0.4rem;
+      align-items: center;
+    }
     .btn-icon {
       background: transparent;
       border: 1px solid var(--border);
@@ -236,10 +179,19 @@
       padding: 0.25rem 0.55rem;
       font-size: 0.85rem;
       border-radius: 6px;
+      white-space: nowrap;
     }
     .btn-icon:hover { background: var(--surface2); }
     .btn-icon.delete:hover { background: var(--ng-bg); border-color: var(--ng); color: var(--ng); }
     .btn-icon.edit:hover { background: rgba(55,138,222,.1); border-color: var(--accent); color: var(--accent); }
+    /* ปุ่ม Save ตอนแถวถูกแก้แล้วยังไม่บันทึก — เขียวเด่นให้รู้ว่ายังค้างอยู่ */
+    .btn-icon.dirty {
+      background: var(--ok);
+      border-color: var(--ok);
+      color: #fff;
+      font-weight: 600;
+    }
+    .btn-icon.dirty:hover { background: var(--ok); opacity: .85; }
 
     .empty-row td {
       text-align: center;
@@ -345,6 +297,35 @@
     .btn-cancel { background: transparent; border: 1px solid var(--border); color: var(--muted); }
     .btn-delete-inline { background: transparent; border: 1px solid var(--ng); color: var(--ng); }
 
+    /* ปุ่มกู้คืนในถังขยะ — ใช้สีเขียว (--ok) ให้ต่างจากปุ่มลบสีแดงชัดเจน
+       กันกดผิดในหน้าเดียวกันที่มีทั้งปุ่มลบและปุ่มกู้ */
+    .btn-restore {
+      background: transparent; border: 1px solid var(--ok); color: var(--ok);
+      padding: 0.25rem 0.7rem; border-radius: 6px; font-size: 0.8rem;
+      font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    .btn-restore:hover { background: var(--ok-bg); }
+
+    /* ลบถาวร — สีแดงเหมือนปุ่มลบที่อื่นในหน้านี้ ให้แยกออกจากปุ่มกู้คืนสีเขียว
+       ชัดเจน เพราะอยู่ติดกันในแถวเดียวและผลลัพธ์ตรงข้ามกันสุดขั้ว */
+    .btn-purge {
+      background: transparent; border: 1px solid var(--ng); color: var(--ng);
+      padding: 0.25rem 0.7rem; border-radius: 6px; font-size: 0.8rem;
+      font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    .btn-purge:hover { background: var(--ng-bg); }
+
+    /* ปุ่มยืนยันแบบ "ไม่อันตราย" ใน popup — ใช้กับ action ที่ไม่ได้ทำลายอะไร
+       เช่นกู้คืน ให้สีเดียวกับปุ่มกู้คืนในตารางเพื่อให้คนโยงถูกว่ากำลังทำอะไรอยู่ */
+    .btn-confirm-safe {
+      background: var(--ok); border: 1px solid var(--ok); color: #fff;
+      padding: 0.45rem 1.1rem; border-radius: var(--radius);
+      font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    }
+    .btn-confirm-safe:hover { filter: brightness(0.93); }
+    .trash-actions { display: flex; gap: 0.4rem; justify-content: flex-end; }
+    #trash-section .empty-row td { text-align: center; color: var(--muted); padding: 1.5rem; }
+
     /* ── Confirm delete modal ─────────────────────────────────────────── */
     .confirm-box {
       background: var(--surface);
@@ -380,20 +361,34 @@
 
 <header class="topbar">
   <div class="topbar-left">
-    <div class="topbar-title">TM-X <span>Database Editor</span></div>
-    <nav class="topbar-nav">
-      <a class="topbar-link" href="index.html">Home</a>
-      <a class="topbar-link" href="edit.html">Edit</a>
-      <a class="topbar-link" href="export.html">Export</a>
-    </nav>
+    <div class="topbar-brand">
+      <img class="topbar-logo" src="assets/adi-logo.svg" alt="Analog Devices"
+           onerror="this.style.display='none'" />
+      <div class="topbar-title">TM-X <span>Control System</span></div>
+    </div>
   </div>
-  <span class="station-badge connecting" id="station-badge">🟡 Connecting</span>
+
+  <nav class="topbar-nav">
+      <a class="topbar-link" href="index.html">Home</a>
+      <a class="topbar-link active" href="edit.html">Edit</a>
+      <span class="topbar-menu" id="export-menu">
+        <span class="topbar-link" id="export-menu-btn" role="button" tabindex="0" aria-haspopup="true" aria-expanded="false">Export<span class="topbar-caret">▼</span></span>
+        <span class="topbar-dropdown">
+          <a href="export.html?format=csv">CSV</a>
+          <a href="export.html?format=pdf">PDF</a>
+          <a href="export.html?format=excel">Excel</a>
+        </span>
+      </span>
+  </nav>
+  <div class="topbar-right">
+    <span class="station-badge connecting" id="station-badge">🟡 Connecting</span>
+  </div>
 </header>
 
 <main class="main">
 
   <div class="mock-banner" id="running-lock-banner" style="display:none">
-    &#9203; ขณะนี้กำลังวัดอยู่ (Session Running) — ไม่สามารถแก้ไขหรือลบข้อมูล Part / Measurement ได้ กรุณากด Stop session ก่อน
+    &#9203; ขณะนี้กำลังวัดอยู่ (Session Running) — ไม่สามารถแก้ไขหรือลบข้อมูล Part / Measurement ได้ กรุณากด Stop หรือ Pulse ก่อน
   </div>
 
   <!-- ════════════════════════════ PARTS TABLE ════════════════════════════ -->
@@ -407,24 +402,40 @@
       <input type="text" id="parts-search" placeholder="ค้นหาด้วย ALPL Number..." />
       <button class="btn-clear-filter" id="parts-clear-filter">✕ Clear Filter</button>
     </div>
-    <div class="filter-result-note" id="parts-filter-note"></div>
+    <div class="filter-result-note" id="parts-filter-note">
+      คอลัมน์ที่เป็น <span class="derived-legend">สีเทา</span> คือค่าที่ระบบดึงมาให้อัตโนมัติ (แก้ไม่ได้) —
+      Handler / Nominal / Tolerance อิงตาม <strong>Part Number</strong> ที่เลือก
+      ส่วน Template อิงตาม Package Size อีกทอด &nbsp;·&nbsp; ตารางเลื่อนซ้าย-ขวาได้
+    </div>
 
     <div class="table-wrap">
-      <table>
+      <!-- min-width บังคับให้ตารางกว้างพอสำหรับทุกคอลัมน์เสมอ แล้วปล่อยให้
+           .table-wrap (overflow-x:auto) ทำ scroll ซ้าย-ขวาแทนการบีบคอลัมน์
+           จนอ่านไม่ออก -->
+      <table style="min-width: 1500px;">
         <thead>
           <tr>
+            <!-- คอลัมน์ 8 ตัวแรกอิงตาม schema ของ parts_specifications ตรงๆ
+                 (part_id / number_alpl / part_number_id / vendor_id / owner_id /
+                 po_number / description / recieve_date) — field ที่เป็น FK แสดง
+                 เป็น "ชื่อ" ที่ join มาแล้ว ไม่ใช่ id ดิบๆ
+                 ส่วนคอลัมน์ที่มี class="th-derived" เป็นค่า read-only ที่ derive
+                 ต่อมาจาก part_number (handler/package_size/nominal/tolerance) และ
+                 จาก package_size อีกทอด (template) — โชว์ให้ดูเฉยๆ แก้ที่นี่ไม่ได้
+                 ต้องไปแก้ที่ตาราง Part Number ใน Lookup Tables แทน -->
+            <th>Part ID</th>
             <th>ALPL</th>
             <th>Part Number</th>
-            <th>Handler</th>
-            <th>Category</th>
+            <th class="th-derived">Handler</th>
             <th>Package Size</th>
+            <th class="th-derived">Template</th>
+            <th class="th-derived">Nominal X / Y</th>
+            <th class="th-derived">Tol (+/-)</th>
             <th>Vendor</th>
             <th>Owner</th>
-            <th>Description</th>
             <th>PO Number</th>
-            <th>Nominal X/Y</th>
-            <th>Tol (+/-)</th>
-            <th>Template</th>
+            <th>Description</th>
+            <th>Receive Date</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -449,20 +460,30 @@
       <input type="date" id="meas-filter-date" title="กรองตาม Timestamp (วันที่)" />
       <button class="btn-clear-filter" id="meas-clear-filter">✕ Clear Filter</button>
     </div>
-    <div class="filter-result-note" id="meas-filter-note"></div>
+    <div class="filter-result-note" id="meas-filter-note">
+      แก้ไขได้เฉพาะ <strong>ALPL</strong> กับ <strong>Operator</strong> (ใช้กรณีวัดแล้วผูกกับ ALPL ผิดตัว หรือบันทึกชื่อผู้ปฏิบัติงานผิด) —
+      คอลัมน์ <span class="derived-legend">สีเทา</span> เป็นผลการวัดจริงกับข้อมูลของ session ที่แก้ย้อนหลังไม่ได้
+      &nbsp;·&nbsp; Result จะถูกคำนวณ OK/NG ใหม่ให้อัตโนมัติทุกครั้งที่เปลี่ยน ALPL
+    </div>
 
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>ID</th>
-            <th>Session</th>
+            <!-- แก้ไขได้เฉพาะ ALPL เท่านั้น (ใช้กรณีเลือก/พิมพ์ ALPL ผิดตัว) —
+                 คอลัมน์ที่เหลือเป็นผลการวัดจริงจากเครื่องกับ metadata ของ session
+                 ที่ไม่ควรถูกแก้ย้อนหลัง จึงล็อกไว้ให้ดูอย่างเดียวทั้งหมด
+                 (Result คำนวณใหม่อัตโนมัติจาก tolerance ทุกครั้งที่ ALPL เปลี่ยน) -->
+            <th class="th-derived">ID</th>
+            <th class="th-derived">Session</th>
             <th>ALPL</th>
-            <th>Value X</th>
-            <th>Value Y</th>
-            <th>Result</th>
-            <th>Note</th>
-            <th>Timestamp</th>
+            <th class="th-derived">Value X</th>
+            <th class="th-derived">Value Y</th>
+            <th class="th-derived">Result</th>
+            <th class="th-derived">Note</th>
+            <th>Operator</th>
+            <th class="th-derived">Measure Type</th>
+            <th class="th-derived">Timestamp</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -476,7 +497,78 @@
     </div>
   </section>
 
+  <!-- ═════════════════════════ LOOKUP TABLES ═════════════════════════ -->
+  <!-- จัดการตาราง lookup ทั้ง 7 ตาราง (Operator/Owner/Vendor/Handler/Template/
+       Package Size/Part Number) — เปลี่ยนชื่อได้เสมอ (Rename) แต่ลบไม่ได้ถ้ายัง
+       มี Part/Measurement/ตารางอื่นอ้างอิงอยู่จริง (backend เช็คให้แล้ว คืน 409
+       พร้อมข้อความบอกให้เปลี่ยนชื่อแทน — ดู _delete_lookup ใน main.py) -->
+  <section class="card" id="lookup-section">
+    <div class="card-header">
+      <div class="card-title">Lookup Tables</div>
+      <select id="lookup-table-select" style="min-width:180px">
+        <option value="operator">Operator</option>
+        <option value="owner">Owner</option>
+        <option value="vendor">Vendor</option>
+        <option value="handler">Handler</option>
+        <option value="template">Template</option>
+        <option value="package_size">Package Size</option>
+        <option value="part_number">Part Number</option>
+      </select>
+    </div>
+    <div class="filter-result-note">เปลี่ยนชื่อ/ค่าได้เสมอ (แก้แล้วกด Save ของแถวนั้น) — ลบไม่ได้ถ้ายังมีตารางอื่นอ้างอิงอยู่ (ระบบจะแจ้งเตือนให้เปลี่ยนชื่อแทน)</div>
+
+    <div class="table-wrap">
+      <table id="lookup-table" style="table-layout: fixed;">
+        <thead><tr id="lookup-thead"></tr></thead>
+        <!-- แถว "เพิ่มใหม่" (id="lookup-add-tr") อยู่ในตารางเดียวกันเสมอ (ไม่ใช่
+             div แยกแบบ flex เหมือนเดิม) เพื่อให้แต่ละช่องตรงกับคอลัมน์ของ header
+             ด้านบนพอดี — ผู้ใช้จะเห็นได้ทันทีว่าแต่ละช่องคือ field อะไรจากหัวตาราง
+             ที่อยู่เหนือมันตรงๆ -->
+        <tbody id="lookup-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ── ถังขยะ ────────────────────────────────────────────────────────────
+       วางไว้ท้ายสุดของหน้า Edit โดยตั้งใจ — เป็นหน้าเดียวกับที่ผู้ใช้กดลบ
+       เผลอลบแล้วเลื่อนลงมากู้ได้ทันที ไม่ต้องจำว่าต้องไปหน้าไหน -->
+  <section class="card" id="trash-section">
+    <div class="card-header">
+      <div class="card-title">🗑 ถังขยะ <span class="count" id="trash-count"></span></div>
+    </div>
+    <div class="filter-result-note" id="trash-note">
+      ข้อมูลที่ลบจะถูกเก็บไว้ที่นี่ชั่วคราว กดกู้คืนได้ตลอด
+    </div>
+
+    <div class="table-wrap">
+      <table id="trash-table">
+        <thead>
+          <tr>
+            <th style="width:170px">ลบเมื่อ</th>
+            <th style="width:130px">ประเภท</th>
+            <th>รายละเอียด</th>
+            <th style="width:220px"></th>
+          </tr>
+        </thead>
+        <tbody id="trash-body"></tbody>
+      </table>
+    </div>
+  </section>
+
 </main>
+
+<!-- ── Alert modal (แจ้งเตือนเฉยๆ ไม่มีปุ่ม Cancel) ───────────────────────── -->
+<!-- ใช้แยกจาก #confirm-modal เพราะ #confirm-modal มีปุ่ม "ลบ" ที่ทำ action จริง
+     ส่วนนี้ใช้แค่โชว์ข้อความเตือน (เช่น ลบไม่ได้เพราะมีตารางอื่นอ้างอิงอยู่) แล้วกด
+     ตกลงปิดไปเฉยๆ ไม่ทำอะไรต่อ -->
+<div class="modal-overlay" id="alert-modal">
+  <div class="confirm-box">
+    <p id="alert-text"></p>
+    <div class="confirm-actions">
+      <button class="btn-save" id="alert-ok">ตกลง</button>
+    </div>
+  </div>
+</div>
 
 <!-- Shared datalist: Package Size (ดึงจาก /api/package-sizes) -->
 <datalist id="package-size-datalist"></datalist>
@@ -520,33 +612,13 @@
 <div class="toast" id="toast"></div>
 
 <script>
-  // ══════════════════════════════════════════════════════════════════════
-  // การตั้งค่าตัวแปรสำหรับเชื่อมต่อ API 
-  // ══════════════════════════════════════════════════════════════════════
-  const API = 'http://localhost:8000'; // ปรับ URL ให้ตรงกับเซิร์ฟเวอร์ของคุณ
 
   // ── สถานะการเชื่อมต่อ Backend (เหมือน index.html) ──────────────────────
   // หน้านี้ไม่ได้ใช้ SSE ขับ table เหมือน index.html (ยังคง poll
   // checkSessionRunning ทุก 4 วิเหมือนเดิม) แต่เปิด EventSource ไว้ "เฉยๆ"
   // เพื่อรู้ว่า backend ยังตอบสนองอยู่ไหม แล้วขึ้น badge ให้เหมือนหน้า Home
-  let sse = null;
-  let stationStatus = 'connecting';
 
-  function setStationBadge(status) {
-    stationStatus = status;
-    const el = document.getElementById('station-badge');
-    const map = { online: '🟢 Online', offline: '🔴 Offline', connecting: '🟡 Connecting' };
-    el.textContent = map[status] || status;
-    el.className = `station-badge ${status}`;
-  }
 
-  function connectSSE() {
-    if (sse) { sse.close(); sse = null; }
-    setStationBadge('connecting');
-    sse = new EventSource(`${API}/api/stream`);
-    sse.onopen  = () => setStationBadge('online');
-    sse.onerror = () => { setStationBadge('offline'); setTimeout(connectSSE, 3000); };
-  }
 
   let partsData = [];          // เก็บเฉพาะ "หน้าปัจจุบัน" ของ parts (ไม่ใช่ทั้งหมด)
   let measurementsData = [];   // เก็บเฉพาะ "หน้าปัจจุบัน" ของ measurements
@@ -571,18 +643,33 @@
   // เป็นระยะ (ไม่มี SSE ในหน้านี้เหมือน index.html) เพื่อรู้ว่า running อยู่ไหม
   let sessionRunning = false;
 
-  // dropdown lookup data (Handler/Vendor/Category/Owner/Package Size) — โหลดครั้งเดียว
-  // ตอนเปิดหน้า แล้ว cache ไว้ในตัวแปรพวกนี้ ใช้ตอนสร้าง <select>/<datalist> ของ modal
+  // dropdown lookup data (Vendor/Owner/Package Size) — โหลดครั้งเดียวตอนเปิดหน้า
+  // แล้ว cache ไว้ในตัวแปรพวกนี้ ใช้ตอนสร้าง <select>/<datalist> ของ modal
   // Add/Edit Part (ดู buildOptions / openPartModal) — dropdown เป็นแบบปิด เลือกได้แค่
-  // ค่าที่มีอยู่จริงใน DB เท่านั้น
-  let handlerOptions = [], vendorOptions = [], categoryOptions = [], ownerOptions = [];
+  // ค่าที่มีอยู่จริงใน DB เท่านั้น — Handler ไม่มีในนี้แล้ว (derive จาก Part Number
+  // ที่เลือก ไม่ใช่ field ที่กรอกตรงๆ อีกต่อไป — ดู schema part_number ใน init.sql)
+  let vendorOptions = [], ownerOptions = [], operatorOptions = [];
 
   document.addEventListener('DOMContentLoaded', async () => {
-    connectSSE();
+    initTopbar();
+    connectSSE({
+      // กด Back กลับมาที่หน้านี้ — BFCache ไม่ยิง DOMContentLoaded ซ้ำ
+      // ต้องโหลดตารางใหม่เอง ไม่งั้นแสดงข้อมูล ณ ตอนที่ออกไป
+      onRestore: async () => {
+        await Promise.all([loadParts(), loadMeasurements(), checkSessionRunning()]);
+        renderPartsTable();
+        renderMeasTable();
+      },
+    });
     // โหลด "หน้าแรก" ของทั้ง 2 ตารางแบบ server-side (คนละ request กัน) แล้วค่อย render
-    await Promise.all([loadParts(), loadMeasurements(), loadDropdownData(), checkSessionRunning()]);
+    await Promise.all([
+      loadParts(), loadMeasurements(), loadDropdownData(), checkSessionRunning(),
+      loadLookupSupportData(), loadLookupTable(), loadTrash(),
+    ]);
     renderPartsTable();
     renderMeasTable();
+    renderLookupTable();
+    renderTrashTable();
     bindGlobalHandlers();
     // poll ทุก 4 วินาที เพื่อรู้ทันทีที่มีคนกด Start/Stop จากหน้า dashboard
     // (หน้านี้ไม่มี SSE เหมือน index.html) — re-render ตารางใหม่เฉพาะตอนสถานะ
@@ -606,19 +693,26 @@
     } catch (e) { /* poll ล้มเหลวเงียบๆ — ไม่ให้กระทบการใช้งานหน้าอื่น */ }
   }
 
+  // cache ของ catalog Part Number + Package Size (พร้อม template) — ใช้แสดง
+  // ค่า derive แบบ read-only ในฟอร์ม Add/Edit Part ให้อัปเดตทันทีที่เลือก Part
+  // Number ใหม่ โดยไม่ต้องยิง API ซ้ำทุกครั้งที่เปลี่ยน dropdown
+  let partNumberCatalog = [];   // [{part_number_name, package_size, handler, nominal_x, ...}]
+  let packageSizeCatalog = [];  // [{package_size, template_name}]
+
   async function loadDropdownData() {
     try {
-      const [handlers, vendors, categories, owners, packageSizes] = await Promise.all([
-        fetch(`${API}/api/handlers`).then(r => r.ok ? r.json() : []),
+      const [vendors, owners, packageSizes, partNumbers, operators] = await Promise.all([
         fetch(`${API}/api/vendors`).then(r => r.ok ? r.json() : []),
-        fetch(`${API}/api/categories`).then(r => r.ok ? r.json() : []),
         fetch(`${API}/api/owners`).then(r => r.ok ? r.json() : []),
         fetch(`${API}/api/package-sizes`).then(r => r.ok ? r.json() : []),
+        fetch(`${API}/api/part-numbers/all`).then(r => r.ok ? r.json() : []),
+        fetch(`${API}/api/operators`).then(r => r.ok ? r.json() : []),
       ]);
-      handlerOptions  = handlers.map(h => h.handler_name);
-      vendorOptions   = vendors.map(v => v.vendor_name);
-      categoryOptions = categories.map(c => c.category_name);
-      ownerOptions    = owners.map(o => o.owner_name);
+      vendorOptions      = vendors.map(v => v.vendor_name);
+      ownerOptions       = owners.map(o => o.owner_name);
+      operatorOptions    = operators.map(o => o.operator_name);
+      packageSizeCatalog = packageSizes;
+      partNumberCatalog  = partNumbers;
 
       const datalist = document.getElementById('package-size-datalist');
       if (datalist) {
@@ -627,7 +721,65 @@
     } catch (e) { console.warn('loadDropdownData:', e); }
   }
 
-  // สร้าง <option> HTML สำหรับ dropdown ปิด (Handler/Vendor/Category/Owner) — ใส่ตัวเลือก
+  // อัปเดตกล่องแสดงค่า read-only ในฟอร์ม Part ตาม Part Number ที่เลือกอยู่ตอนนี้
+  // (Handler/Package Size/Nominal/Tolerance มาจาก part_number ตรงๆ ส่วน Template
+  // ต้อง lookup ต่ออีกทอดจาก package_size ของ part_number นั้น)
+  function updateDerivedPreview() {
+    const box = document.getElementById('derived-preview');
+    if (!box) return;
+    const selected = document.getElementById('f-part_number')?.value || '';
+    const pn = partNumberCatalog.find(x => x.part_number_name === selected);
+    if (!pn) {
+      box.innerHTML = '<span style="color:var(--muted)">เลือก Part Number เพื่อดู Handler / Template / Nominal / Tolerance ที่ผูกอยู่</span>';
+      return;
+    }
+    const tpl = packageSizeCatalog.find(ps => ps.package_size === pn.package_size)?.template_name ?? '—';
+    const cell = (label, value) =>
+      `<div><div style="font-size:0.7rem;color:var(--muted);font-weight:600">${label}</div><div>${value}</div></div>`;
+    box.innerHTML =
+      cell('Handler', pn.handler ?? '—') +
+      cell('Template', tpl) +
+      cell('Nominal X / Y', `${pn.nominal_x} / ${pn.nominal_y}`) +
+      cell('Tol (+/-)', `+${pn.upper_tol} / -${pn.lower_tol}`);
+  }
+
+  // ── Part Number dropdown — cascade จาก Package Size (เหมือน index.html) ────
+  // Part Number ตอนนี้เป็น catalog ที่ผูก package_size + handler + nominal/
+  // tolerance ของตัวเองไว้แล้ว (ดู part_number table ใน init.sql) — เลือก
+  // Package Size ก่อน ค่อยเลือก Part Number ได้ ไม่มีช่อง Handler ให้กรอกตรงๆ
+  // อีกต่อไปเพราะ derive มาจาก Part Number ที่เลือกอัตโนมัติ
+  let _partNumberDebounceEdit = null;
+  function schedulePartNumberUpdateEdit() {
+    clearTimeout(_partNumberDebounceEdit);
+    _partNumberDebounceEdit = setTimeout(() => updatePartNumberOptionsEdit(), 250);
+  }
+  async function updatePartNumberOptionsEdit(preserveValue = null) {
+    const pkgInput = document.getElementById('f-package_size');
+    const select    = document.getElementById('f-part_number');
+    if (!pkgInput || !select) return;
+    const pkgVal = pkgInput.value.trim();
+    const keep = preserveValue ?? select.value;
+    if (!pkgVal) {
+      select.innerHTML = '<option value="">-- เลือก Package Size ก่อน --</option>';
+      select.disabled = true;
+      return;
+    }
+    try {
+      const r = await fetch(`${API}/api/part-numbers?package_size=${encodeURIComponent(pkgVal)}`);
+      const names = r.ok ? await r.json() : [];
+      select.innerHTML = '<option value="">-- เลือก --</option>' +
+        names.map(n => `<option value="${n}" ${n === keep ? 'selected' : ''}>${n}</option>`).join('');
+      select.disabled = names.length === 0;
+      // option ถูกสร้างใหม่แบบ async — ค่าที่ถูกเลือกอาจเพิ่งเปลี่ยน (หรือถูกล้าง
+      // ถ้า Package Size ใหม่ไม่มี Part Number เดิมอยู่) จึงต้องรีเฟรชกล่องค่า
+      // read-only ตามทุกครั้งหลังเติม option เสร็จ
+      updateDerivedPreview();
+    } catch (e) {
+      console.warn('updatePartNumberOptionsEdit:', e);
+    }
+  }
+
+  // สร้าง <option> HTML สำหรับ dropdown ปิด (Vendor/Owner) — ใส่ตัวเลือก
   // ว่างไว้บนสุดเสมอ แล้ว mark selected ตัวที่ตรงกับค่าปัจจุบันของ part (โหมด Edit)
   function buildOptions(items, selectedValue) {
     const blank = `<option value="">-- เลือก --</option>`;
@@ -635,6 +787,269 @@
       `<option value="${name}" ${name === selectedValue ? 'selected' : ''}>${name}</option>`
     ).join('');
     return blank + opts;
+  }
+
+  // ══════════════════════════════════════════════════════════════════════
+  // ── Lookup Tables management (Operator/Owner/Vendor/Handler/Template/
+  //    Package Size/Part Number) ───────────────────────────────────────
+  // ══════════════════════════════════════════════════════════════════════
+  // ตารางแบบ "ชื่อเดียว" (operator/owner/vendor/handler/template) ทั้งหมดใช้
+  // config เดียวกัน (field เดียวคือชื่อ) — package_size/part_number มี field
+  // มากกว่านั้นและมี field ที่เป็น FK (แสดงเป็น <select> จากตารางอื่น) จึง
+  // ประกาศ type ต่างกันไว้ใน fields[] ของแต่ละ config
+  // `width` = ความกว้างของคอลัมน์นั้นในตาราง (ตั้งให้พอดีกับความยาวข้อมูลจริง
+  // ที่คาดไว้ ไม่ปล่อยให้ยืดเต็มหน้าจอ) — คอลัมน์สุดท้ายของแต่ละ config ปล่อยไม่
+  // กำหนด width ไว้ 1 ตัวไม่ได้ เพราะ table-layout:fixed จะแบ่งที่เหลือให้เอง
+  // ผ่าน <th> ที่ไม่ระบุ width (ดู renderLookupTable — เพิ่ม spacer column ท้ายสุด)
+  const LOOKUP_CONFIG = {
+    operator:     { label: 'Operator',     listUrl: '/api/operators',        idField: 'operator_id',
+                    fields: [{ key: 'operator_name', label: 'Name', width: '260px' }] },
+    owner:        { label: 'Owner',        listUrl: '/api/owners',           idField: 'owner_id',
+                    fields: [{ key: 'owner_name', label: 'Name', width: '260px' }] },
+    vendor:       { label: 'Vendor',       listUrl: '/api/vendors',          idField: 'vendor_id',
+                    fields: [{ key: 'vendor_name', label: 'Name', width: '260px' }] },
+    handler:      { label: 'Handler',      listUrl: '/api/handlers',         idField: 'handler_id',
+                    fields: [{ key: 'handler_name', label: 'Name', width: '260px' }] },
+    template:     { label: 'Template',     listUrl: '/api/templates',        idField: 'template_id',
+                    fields: [{ key: 'template_name', label: 'Name', width: '260px' }] },
+    package_size: { label: 'Package Size', listUrl: '/api/package-sizes',    idField: 'package_size_id',
+                    fields: [
+                      { key: 'package_size',  label: 'Package Size', width: '180px' },
+                      { key: 'template_name', label: 'Template', type: 'select-template', width: '180px' },
+                    ] },
+    // minWidth: ความกว้างขั้นต่ำของทั้งตาราง — ตั้งเฉพาะ config ที่มีคอลัมน์เยอะ
+    // (part_number) เพื่อให้ .table-wrap เลื่อนซ้าย-ขวาแทนการบีบคอลัมน์จนช่อง
+    // ตัวเลขแคบเกินอ่านไม่ออก
+    part_number:  { label: 'Part Number',  listUrl: '/api/part-numbers/all', idField: 'part_number_id',
+                    minWidth: '1420px',
+                    fields: [
+                      { key: 'part_number_name', label: 'Part Number', width: '230px' },
+                      { key: 'package_size',     label: 'Package Size', type: 'select-package-size', width: '170px' },
+                      { key: 'handler',          label: 'Handler',      type: 'select-handler',      width: '170px' },
+                      { key: 'nominal_x',        label: 'Nominal X',    type: 'number',              width: '140px' },
+                      { key: 'nominal_y',        label: 'Nominal Y',    type: 'number',              width: '140px' },
+                      { key: 'upper_tol',        label: 'Upper Tol',    type: 'number',              width: '140px' },
+                      { key: 'lower_tol',        label: 'Lower Tol',    type: 'number',              width: '140px' },
+                    ] },
+  };
+
+  let currentLookupKind = 'operator';
+  let lookupRows = [];
+  // ตัวเลือกของ <select> ที่ใช้ใน field ประเภท FK (โหลดครั้งเดียวตอน refresh
+  // ส่วนนี้ — แยกจาก handlerOptions/vendorOptions/ownerOptions ของ Parts modal
+  // เพราะคนละจุดประสงค์กัน)
+  let lookupHandlerNames = [], lookupPackageSizeNames = [], lookupTemplateNames = [];
+
+  async function loadLookupSupportData() {
+    try {
+      const [handlers, packageSizes, templates] = await Promise.all([
+        fetch(`${API}/api/handlers`).then(r => r.ok ? r.json() : []),
+        fetch(`${API}/api/package-sizes`).then(r => r.ok ? r.json() : []),
+        fetch(`${API}/api/templates`).then(r => r.ok ? r.json() : []),
+      ]);
+      lookupHandlerNames     = handlers.map(h => h.handler_name);
+      lookupPackageSizeNames = packageSizes.map(p => p.package_size);
+      lookupTemplateNames    = templates.map(t => t.template_name);
+    } catch (e) { console.warn('loadLookupSupportData:', e); }
+  }
+
+  async function loadLookupTable() {
+    const cfg = LOOKUP_CONFIG[currentLookupKind];
+    try {
+      const r = await fetch(`${API}${cfg.listUrl}`);
+      lookupRows = r.ok ? await r.json() : [];
+    } catch (e) {
+      console.error('loadLookupTable:', e);
+      lookupRows = [];
+    }
+  }
+
+  // ตัวเลือกว่างของ <select> ระบุชื่อ field ไว้ตรงๆ (เช่น "-- Package Size --"
+  // แทน "-- เลือก --" เฉยๆ) เพื่อให้รู้ทันทีว่า select ตัวนี้คือ field อะไร แม้
+  // ก่อนจะสังเกตเห็นหัวคอลัมน์เหนือมันก็ตาม (สำคัญมากตอนแถว Add ที่ field ID
+  // จะเรียงติดกันหลายตัว เช่น Part Number มีทั้ง select Package Size และ
+  // select Handler ติดกัน)
+  function buildOptionsLabeled(items, selectedValue, blankLabel) {
+    const blank = `<option value="">-- ${blankLabel} --</option>`;
+    const opts = items.map(name =>
+      `<option value="${name}" ${name === selectedValue ? 'selected' : ''}>${name}</option>`
+    ).join('');
+    return blank + opts;
+  }
+
+  // สร้าง <input>/<select> ของ 1 field — id แยกตาม rowId เพื่ออ่านค่ากลับตอน
+  // Save/Add (ดู readLookupFields) — rowId = 'new' สำหรับแถว Add ในตาราง
+  function lookupFieldInputHtml(field, value, rowId) {
+    const idAttr = `lk-${rowId}-${field.key}`;
+    if (field.type === 'select-template')     return `<select id="${idAttr}">${buildOptionsLabeled(lookupTemplateNames, value, field.label)}</select>`;
+    if (field.type === 'select-package-size') return `<select id="${idAttr}">${buildOptionsLabeled(lookupPackageSizeNames, value, field.label)}</select>`;
+    if (field.type === 'select-handler')      return `<select id="${idAttr}">${buildOptionsLabeled(lookupHandlerNames, value, field.label)}</select>`;
+    // ช่องตัวเลข: ลด padding ขวาลง (spinner ของ input[type=number] กินที่อยู่แล้ว)
+    // เพื่อให้ตัวเลข/placeholder แสดงได้เต็มไม่โดนตัดกลางคำ
+    if (field.type === 'number')              return `<input type="number" step="0.001" id="${idAttr}" value="${value ?? ''}" placeholder="${field.label}" style="width:100%; padding-right:0.25rem" />`;
+    return `<input type="text" id="${idAttr}" value="${value ?? ''}" placeholder="${field.label}" style="width:100%" />`;
+  }
+
+  function renderLookupTable() {
+    const cfg = LOOKUP_CONFIG[currentLookupKind];
+
+    // ตั้ง min-width ของทั้งตารางตาม config (ถ้ามี) — ให้ .table-wrap เลื่อน
+    // ซ้าย-ขวาแทนการบีบคอลัมน์ทิ้ง
+    const tableEl = document.getElementById('lookup-table');
+    if (tableEl) tableEl.style.minWidth = cfg.minWidth || '';
+
+    // คอลัมน์ ID (Primary Key) โชว์ไว้ตลอด — read-only ไม่ใช่ field ที่แก้ได้
+    // คอลัมน์ spacer ท้ายสุด (ไม่มีหัวข้อ ไม่กำหนด width) ดูดพื้นที่ที่เหลือทั้งหมด
+    // ไว้เอง เพื่อไม่ให้ table-layout:fixed ไปยืดคอลัมน์ข้อมูลจริงจนกว้างเกินความ
+    // จำเป็น (ปัญหาเดิมที่ช่องข้อความสั้นๆ อย่าง Name กลับกว้างเต็มหน้าจอ)
+    document.getElementById('lookup-thead').innerHTML =
+      '<th style="width:80px">ID</th>' +
+      cfg.fields.map(f => `<th style="width:${f.width}">${f.label}</th>`).join('') +
+      '<th style="width:190px">Actions</th>' +
+      '<th></th>';
+
+    const tbody = document.getElementById('lookup-body');
+
+    // แถว "เพิ่มใหม่" — อยู่บนสุดของตารางเสมอ (แถวเดียวกับ header ด้านบนพอดี
+    // เพราะเป็น <tr> จริงในตารางเดียวกัน ไม่ใช่ div แยกแบบเดิม) ช่อง ID โชว์
+    // "ใหม่" เฉยๆ เพราะยังไม่มี id จนกว่าจะกด Add สำเร็จ
+    const addTr = `<tr id="lookup-add-tr" style="background: var(--surface2);">
+      <td style="color: var(--muted); font-style: italic;">ใหม่</td>
+      ${cfg.fields.map(f => `<td>${lookupFieldInputHtml(f, '', 'new')}</td>`).join('')}
+      <td class="row-actions"><div class="actions-inner"><button class="btn-add" onclick="addLookupRow()">+ Add</button></div></td>
+      <td></td>
+    </tr>`;
+
+    if (!lookupRows.length) {
+      tbody.innerHTML = addTr + `<tr class="empty-row"><td colspan="${cfg.fields.length + 3}">ยังไม่มีข้อมูล</td></tr>`;
+      bindLookupDirtyTracking();
+      return;
+    }
+
+    tbody.innerHTML = addTr + lookupRows.map(row => {
+      const rowId = row[cfg.idField];
+      const cells = cfg.fields.map(f => `<td>${lookupFieldInputHtml(f, row[f.key], rowId)}</td>`).join('');
+      return `<tr data-id="${rowId}">
+        <td><strong>${rowId}</strong></td>
+        ${cells}
+        <td class="row-actions">
+          <div class="actions-inner">
+            <button class="btn-icon" id="lk-save-${rowId}" onclick="saveLookupRow('${rowId}')">✔ Save</button>
+            <button class="btn-icon delete" onclick="deleteLookupRow('${rowId}')">🗑 Delete</button>
+          </div>
+        </td>
+        <td></td>
+      </tr>`;
+    }).join('');
+
+    bindLookupDirtyTracking();
+  }
+
+  // ทำให้ปุ่ม Save ของแถวไหนก็ตามที่ถูกแก้แล้ว "ยังไม่ได้กด Save" เปลี่ยนเป็น
+  // สีเขียวเด่น (class .dirty) — เทียบค่าปัจจุบันในช่องกับค่าดั้งเดิมจาก DB ทุกครั้ง
+  // ที่มีการพิมพ์/เลือก ถ้าแก้แล้วแก้กลับเป็นค่าเดิมเป๊ะ ปุ่มจะกลับเป็นปกติเอง
+  function bindLookupDirtyTracking() {
+    const cfg = LOOKUP_CONFIG[currentLookupKind];
+    lookupRows.forEach(row => {
+      const rowId = row[cfg.idField];
+      const saveBtn = document.getElementById(`lk-save-${rowId}`);
+      if (!saveBtn) return;
+      const check = () => {
+        const values = readLookupFields(rowId, cfg);
+        const dirty = cfg.fields.some(f => String(values[f.key] ?? '') !== String(row[f.key] ?? ''));
+        saveBtn.classList.toggle('dirty', dirty);
+      };
+      cfg.fields.forEach(f => {
+        const el = document.getElementById(`lk-${rowId}-${f.key}`);
+        if (el) { el.addEventListener('input', check); el.addEventListener('change', check); }
+      });
+    });
+  }
+
+  function readLookupFields(rowId, cfg) {
+    const values = {};
+    cfg.fields.forEach(f => {
+      const el = document.getElementById(`lk-${rowId}-${f.key}`);
+      values[f.key] = el ? el.value.trim() : '';
+    });
+    return values;
+  }
+
+  // แปลง field ที่อ่านจากฟอร์มให้ตรงกับ shape ของ payload ที่ backend endpoint
+  // ของแต่ละตารางต้องการ (ดู LookupCreate/PackageSizeCreate/PartNumberCreate
+  // ใน main.py) — ตารางแบบ "ชื่อเดียว" ทั้งหมดส่งเป็น {name: ...} เหมือนกันหมด
+  function lookupToApiBody(kind, values) {
+    if (kind === 'package_size') return values;
+    if (kind === 'part_number') {
+      const body = { ...values };
+      ['nominal_x', 'nominal_y', 'upper_tol', 'lower_tol'].forEach(k => { body[k] = Number(body[k]); });
+      return body;
+    }
+    const singleKey = LOOKUP_CONFIG[kind].fields[0].key;
+    return { name: values[singleKey] };
+  }
+
+  function lookupBasePath(cfg) { return cfg.listUrl.replace('/all', ''); }
+
+  async function refreshLookupSection() {
+    await loadLookupSupportData();
+    await loadLookupTable();
+    renderLookupTable();
+  }
+
+  async function addLookupRow() {
+    const cfg = LOOKUP_CONFIG[currentLookupKind];
+    const values = readLookupFields('new', cfg);
+    if (Object.values(values).some(v => v === '')) {
+      showToast('กรอก/เลือกข้อมูลให้ครบทุกช่องก่อน Add');
+      return;
+    }
+    try {
+      const r = await fetch(`${API}${lookupBasePath(cfg)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lookupToApiBody(currentLookupKind, values)),
+      });
+      if (!r.ok) { showToast(await errorMessage(r, `เพิ่ม ${cfg.label} ไม่สำเร็จ`)); return; }
+      showToast(`เพิ่ม ${cfg.label} สำเร็จ`);
+      await refreshLookupSection();
+    } catch (e) { console.error(e); showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูล'); }
+  }
+
+  async function saveLookupRow(rowId) {
+    const cfg = LOOKUP_CONFIG[currentLookupKind];
+    const values = readLookupFields(rowId, cfg);
+    try {
+      const r = await fetch(`${API}${lookupBasePath(cfg)}/${rowId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(lookupToApiBody(currentLookupKind, values)),
+      });
+      if (!r.ok) { showToast(await errorMessage(r, `บันทึก ${cfg.label} ไม่สำเร็จ`)); return; }
+      showToast(`บันทึก ${cfg.label} สำเร็จ`);
+      // refresh จะ re-render ทั้งตารางใหม่จากค่าล่าสุดใน DB — ปุ่ม Save ที่เคยเป็น
+      // สีเขียว (dirty) จะกลับเป็นปกติเองอัตโนมัติ เพราะค่าในช่องตรงกับ DB แล้ว
+      await refreshLookupSection();
+    } catch (e) { console.error(e); showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูล'); }
+  }
+
+  function deleteLookupRow(rowId) {
+    const cfg = LOOKUP_CONFIG[currentLookupKind];
+    showConfirm(`ลบรายการนี้ออกจากตาราง <strong>${cfg.label}</strong> ใช่ไหม?`, async () => {
+      try {
+        const r = await fetch(`${API}${lookupBasePath(cfg)}/${rowId}`, { method: 'DELETE' });
+        if (!r.ok) {
+          // backend ปฏิเสธ (409) ถ้ายังมี Part/Measurement/ตารางอื่นอ้างอิง id นี้
+          // อยู่จริง (ดู _delete_lookup ใน main.py) — โชว์เป็น popup แจ้งเตือนเด่นๆ
+          // (ไม่ใช่แค่ toast เล็กๆ มุมจอ) เพราะเป็นเหตุผลเชิงตรรกะที่ผู้ใช้ควรอ่านจริง
+          // ไม่ใช่แค่ error ทั่วไปที่ปล่อยผ่านได้
+          showAlert(await errorMessage(r, `ลบ ${cfg.label} ไม่สำเร็จ`));
+          return;
+        }
+        await refreshLookupSection();
+        await afterDelete(`ลบ ${cfg.label} สำเร็จ`);
+      } catch (e) { console.error(e); showToast('ไม่สามารถลบข้อมูลได้'); }
+    });
   }
 
   // ══════════════════════════════════════════════════════════════════════
@@ -749,38 +1164,49 @@
 
     if (!rows.length) {
       const msg = partsSearch ? 'ไม่พบ Part ที่ตรงกับคำค้นหา' : 'ยังไม่มีข้อมูล Parts';
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="13">${msg}</td></tr>`;
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="14">${msg}</td></tr>`;
       return;
     }
 
     tbody.innerHTML = rows.map(p => {
       const hl = String(p.number_alpl) === String(highlightAlpl) ? 'highlight-row' : '';
+      // recieve_date เก็บเป็น DATETIME — แสดงแค่ส่วนวันที่ (ตัดเวลาออก) ให้ตาราง
+      // อ่านง่าย ส่วนตอนแก้ในฟอร์มใช้ <input type="date"> ที่รับรูปแบบ YYYY-MM-DD
+      const recv = p.recieve_date ? String(p.recieve_date).slice(0, 10) : '';
+      // ค่า derive (read-only) — ถ้า part ยังไม่ได้ตั้ง Part Number จะเป็น null
+      // ทั้งชุด แสดงเป็น '—' ให้รู้ว่ายังไม่มีข้อมูล ไม่ใช่ error
+      const nominal = (p.nominal_x != null && p.nominal_y != null)
+        ? `${p.nominal_x} / ${p.nominal_y}` : '';
+      const tol = (p.upper_tol != null && p.lower_tol != null)
+        ? `+${p.upper_tol} / -${p.lower_tol}` : '';
       return `<tr class="${hl}" data-alpl="${p.number_alpl}">
+        <td><strong>${p.part_id ?? ''}</strong></td>
         <td><strong>${p.number_alpl}</strong></td>
-        <td>${p.part_number ?? '—'}</td>
-        <td>${p.handler ?? '—'}</td>
-        <td>${p.category ?? '—'}</td>
-        <td>${p.package_size ?? '—'}</td>
-        <td>${p.vendor ?? '—'}</td>
-        <td>${p.owner ?? '—'}</td>
-        <td class="desc-cell" title="${(p.description ?? '').replace(/"/g, '&quot;')}">${p.description ?? '—'}</td>
-        <td>${p.po_number ?? '—'}</td>
-        <td>${fmtNum(p.nominal_x)} / ${fmtNum(p.nominal_y)}</td>
-        <td>+${fmtNum(p.upper_tol)} / -${fmtNum(p.lower_tol)}</td>
-        <td>${p.template_name ?? '—'}</td>
+        <td>${p.part_number ?? ''}</td>
+        <td class="td-derived">${p.handler ?? ''}</td>
+        <td>${p.package_size ?? ''}</td>
+        <td class="td-derived">${p.template_name ?? ''}</td>
+        <td class="td-derived">${nominal}</td>
+        <td class="td-derived">${tol}</td>
+        <td>${p.vendor ?? ''}</td>
+        <td>${p.owner ?? ''}</td>
+        <td>${p.po_number ?? ''}</td>
+        <td class="desc-cell" title="${(p.description ?? '').replace(/"/g, '&quot;')}">${p.description ?? ''}</td>
+        <td>${recv}</td>
         <td class="row-actions">
+          <div class="actions-inner">
           <!-- ลบ Part ได้เมื่อ ALPL นี้ไม่มี Session/Measurement ผูกอยู่แล้วเท่านั้น —
                FK เป็น RESTRICT (ไม่มี cascade ตามที่เลือกไว้ว่า "เก็บประวัติไว้เหมือนเดิม")
                ถ้ายังมีประวัติอยู่ backend จะปฏิเสธด้วย 409 พร้อมข้อความบอกให้ไปลบ
                Measurement ที่เกี่ยวข้องก่อน (ดู confirmDeletePart) -->
           <button class="btn-icon edit" ${sessionRunning ? 'disabled title="กำลังวัดอยู่ ไม่สามารถแก้ไขได้"' : ''} onclick="openPartModal('edit', '${p.number_alpl}')">✎ Edit</button>
           <button class="btn-icon delete" ${sessionRunning ? 'disabled title="กำลังวัดอยู่ ไม่สามารถลบได้"' : ''} onclick="confirmDeletePart('${p.number_alpl}')">🗑</button>
+          </div>
         </td>
       </tr>`;
     }).join('');
   }
 
-  function fmtNum(n) { return n == null ? '—' : n; }
 
   function openPartModal(mode, numberAlpl = null) {
     // numberAlpl จาก onclick เป็น string เสมอ แต่ partsData.number_alpl เป็น number
@@ -808,14 +1234,16 @@
         <div class="field-error" id="err-f-number_alpl">${mode === 'edit' ? '<span class="field-locked-note">แก้ ALPL ได้ — ระวัง: ถ้า ALPL นี้มีประวัติ session/measurement ผูกอยู่แล้ว การเปลี่ยนจะถูก DB ปฏิเสธ (FK constraint)</span>' : ''}</div>
       </div>
       <div class="form-group">
-        <label for="f-part_number">Part Number ${req}</label>
-        <input type="text" id="f-part_number" value="${v('part_number')}" />
-        <div class="field-error" id="err-f-part_number"></div>
+        <label for="f-package_size">Package Size ${req}</label>
+        <input type="text" id="f-package_size" list="package-size-datalist" value="${v('package_size')}" placeholder="เลือก Package Size ก่อนถึงจะเลือก Part Number ได้" />
+        <div class="field-error" id="err-f-package_size"></div>
       </div>
       <div class="form-group">
-        <label for="f-handler">Handler ${req}</label>
-        <select id="f-handler">${buildOptions(handlerOptions, v('handler'))}</select>
-        <div class="field-error" id="err-f-handler"></div>
+        <label for="f-part_number">Part Number ${req}</label>
+        <select id="f-part_number" disabled>
+          <option value="">-- เลือก Package Size ก่อน --</option>
+        </select>
+        <div class="field-error" id="err-f-part_number"><span class="field-locked-note">Handler/Nominal/Tolerance/Template ผูกมากับ Part Number ที่เลือกอัตโนมัติ — ไม่ต้องกรอกแยก</span></div>
       </div>
       <div class="form-group">
         <label for="f-vendor">Vendor ${req}</label>
@@ -833,21 +1261,28 @@
         <div class="field-error" id="err-f-po_number"></div>
       </div>
       <div class="form-group">
-        <label for="f-category">Category ${req}</label>
-        <select id="f-category">${buildOptions(categoryOptions, v('category'))}</select>
-        <div class="field-error" id="err-f-category"></div>
-      </div>
-      <div class="form-group">
-        <label for="f-package_size">Package Size ${req}</label>
-        <input type="text" id="f-package_size" list="package-size-datalist" value="${v('package_size')}" placeholder="เลือก package size — map nominal/tolerance/template ให้อัตโนมัติ" />
-        <div class="field-error" id="err-f-package_size"></div>
-      </div>
-      <div class="form-group">
         <label for="f-owner">Owner ${req}</label>
         <select id="f-owner">${buildOptions(ownerOptions, v('owner'))}</select>
         <div class="field-error" id="err-f-owner"></div>
       </div>
+      <div class="form-group">
+        <label for="f-recieve_date">Receive Date</label>
+        <input type="date" id="f-recieve_date" value="${String(v('recieve_date') || '').slice(0, 10)}" />
+        <div class="field-error" id="err-f-recieve_date"><span class="field-locked-note">เว้นว่างได้ (จะถูกบันทึกเป็นค่าว่าง)</span></div>
+      </div>
+      <div class="form-group span-2">
+        <label>🔒 ค่าที่ผูกมากับ Part Number (แก้ที่นี่ไม่ได้)</label>
+        <div id="derived-preview" style="display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:0.6rem; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:0.6rem 0.75rem; font-size:0.85rem;"></div>
+        <div class="field-locked-note">ต้องการแก้ค่าพวกนี้ ให้ไปแก้ที่ตาราง Part Number ในหัวข้อ Lookup Tables ด้านล่าง</div>
+      </div>
     `;
+    // เปิดใช้งาน cascade Package Size → Part Number — โหลด option ทันทีถ้ามี
+    // package_size อยู่แล้ว (โหมด Edit) แล้ว mark ค่า part_number เดิมไว้
+    document.getElementById('f-package_size').addEventListener('input', schedulePartNumberUpdateEdit);
+    // เปลี่ยน Part Number แล้วให้กล่องค่า read-only อัปเดตตามทันที
+    document.getElementById('f-part_number').addEventListener('change', updateDerivedPreview);
+    updatePartNumberOptionsEdit(v('part_number'));
+    updateDerivedPreview();
     openEditModal();
   }
 
@@ -874,18 +1309,21 @@
     // ว่างได้หมด (ตามที่เลือกไว้ว่า Edit บังคับแค่ ALPL) ส่วน Add ยังบังคับกรอก
     // ครบทุก field เหมือนเดิม
     if (editContext.mode === 'add') {
-      if (!partNumber) { setFieldError('part_number', 'กรอก Part Number'); hasError = true; }
-      if (!val('handler'))     { setFieldError('handler', 'เลือก Handler'); hasError = true; }
+      if (!val('package_size')) {
+        // package_size เป็นตัวกำหนด catalog ของ Part Number ที่เลือกได้ (ผูก
+        // handler/nominal/tolerance/template ของตัวเองไว้แล้ว) จึงบังคับกรอกก่อนเสมอ
+        setFieldError('package_size', 'กรอก Package Size ก่อนถึงจะเลือก Part Number ได้');
+        hasError = true;
+      }
+      if (!partNumber) {
+        // Part Number เป็นตัวกำหนด Handler/Nominal/Tolerance/Template ให้อัตโนมัติ
+        // ทั้งหมด (ผ่าน part_number catalog) จึงบังคับเลือกเสมอตอน Add
+        setFieldError('part_number', 'เลือก Part Number');
+        hasError = true;
+      }
       if (!val('vendor'))      { setFieldError('vendor', 'เลือก Vendor'); hasError = true; }
       if (!val('description')) { setFieldError('description', 'กรอก Description'); hasError = true; }
       if (!val('po_number'))   { setFieldError('po_number', 'กรอก PO Number'); hasError = true; }
-      if (!val('category'))    { setFieldError('category', 'เลือก Category'); hasError = true; }
-      if (!val('package_size')) {
-        // package_size เป็นตัวกำหนด nominal/tolerance/template ของ part ทั้งหมด
-        // (ผ่าน package_size lookup table) จึงบังคับกรอกเสมอตอน Add
-        setFieldError('package_size', 'กรอก Package Size (จะ map nominal/tolerance/template ให้อัตโนมัติ)');
-        hasError = true;
-      }
       if (!val('owner'))       { setFieldError('owner', 'เลือก Owner'); hasError = true; }
     }
     if (hasError) return;
@@ -893,13 +1331,12 @@
     const record = {
       number_alpl:   nAlpl,
       part_number:   partNumber,
-      handler:       val('handler') || null,
       vendor:        val('vendor') || null,
       description:   val('description') || null,
       po_number:     num('po_number'),
-      category:      val('category') || null,
       package_size:  val('package_size') || null,
       owner:         val('owner') || null,
+      recieve_date:  val('recieve_date') || null,
     };
 
     // ถ้าเป็นโหมด Edit และไม่มี field ไหนเปลี่ยนจากค่าเดิมเลย ให้ปิด modal เฉยๆ
@@ -946,22 +1383,17 @@
   }
 
   function confirmDeletePart(numberAlpl) {
-    // เตือนไว้เสมอทุกครั้ง (ไม่ขึ้นกับว่ามี measurement อยู่ในหน้าที่โหลดไว้ตอนนี้
-    // หรือไม่ — measurementsData เป็นแค่หน้าปัจจุบัน เชื่อไม่ได้ 100%) เพราะกด
-    // ยืนยันแล้ว backend จะลบ Session/Measurement ของ ALPL นี้ "ทั้งหมด" จริงๆ
-    // ก่อนลบ Part เสมอ (cascade=true) — กู้คืนไม่ได้ ต้องบอกผู้ใช้ให้ชัดก่อนกด
-    const warn = ` <span style="color:var(--ng)">⚠ การลบ Part นี้จะลบ Session/Measurement (ข้อมูลการวัด) ทั้งหมดของ ALPL นี้ไปด้วย — กู้คืนไม่ได้</span>`;
-    showConfirm(`ลบ Part <strong>ALPL ${numberAlpl}</strong> ออกจากตารางใช่ไหม?${warn}`, async () => {
+    // ลบ Part ได้ต่อเมื่อ ALPL นี้ไม่มี Measurement เหลืออยู่เลยเท่านั้น — ถ้ายังมี
+    // backend จะปฏิเสธด้วย 409 พร้อมบอกจำนวนที่ติดอยู่ (ไม่มีโหมด cascade ที่ลบ
+    // ข้อมูลการวัดตามไปด้วยอีกแล้ว) เราโชว์ข้อความนั้นเป็น popup เตือนให้เห็นชัด
+    showConfirm(`ลบ Part <strong>ALPL ${numberAlpl}</strong> ออกจากตารางใช่ไหม?`, async () => {
       try {
-        // cascade=true: backend จะลบ measurements แล้ว sessions ของ ALPL นี้ก่อน
-        // (ทั้งหมด ไม่ใช่แค่หน้าที่โหลดอยู่) แล้วค่อยลบ parts เป็น transaction เดียว
-        const r = await fetch(`${API}/api/parts/${numberAlpl}?cascade=true`, { method: 'DELETE' });
+        const r = await fetch(`${API}/api/parts/${numberAlpl}`, { method: 'DELETE' });
         // เช็ค response.ok ก่อนเสมอ (fetch ไม่ throw เมื่อ status ไม่ใช่ 2xx)
-        if (!r.ok) { showToast(await errorMessage(r, 'ลบ Part ไม่สำเร็จ')); return; }
+        if (!r.ok) { showAlert(await errorMessage(r, 'ลบ Part ไม่สำเร็จ')); return; }
         await reloadPartsAfterMutation();   // refetch หน้าปัจจุบัน + ถอยหน้าถ้าหน้านี้ว่าง
-        await reloadMeasAfterMutation();    // measurement ของ ALPL นี้ถูกลบไปด้วย รีเฟรชตารางนี้ด้วย
         closeEditModal();
-        showToast(`ลบ ALPL ${numberAlpl} พร้อมประวัติการวัดทั้งหมดสำเร็จ`);
+        await afterDelete(`ลบ ALPL ${numberAlpl} สำเร็จ`);
       } catch (e) {
         console.error(e);
         showToast('ไม่สามารถลบข้อมูลได้');
@@ -972,6 +1404,26 @@
   // ══════════════════════════════════════════════════════════════════════
   // ── Measurements table ──────────────────────────────────────────────
   // ══════════════════════════════════════════════════════════════════════
+
+  // เช็คว่าค่าที่วัดได้ของ "แกนเดียว" อยู่ในสเปคไหม — คืน true/false/null
+  // (null = ไม่มี nominal/tolerance เช่น part ยังไม่ได้ตั้ง Part Number)
+  // tolerance ใช้ค่าเดียวร่วมกันทั้งแกน X/Y ตาม schema ของ part_number
+  // EPS: ค่าที่ตกขอบ tolerance พอดีต้องถือว่าผ่าน — เทียบทศนิยมตรงๆ จะได้ NG
+  // เพราะ 3.02 - 0.01 ในเลขฐานสองได้ 3.0100000000000002 (มากกว่า 3.010)
+  // ต้องใช้ค่าเดียวกับ _TOL_EPS ฝั่ง backend ไม่งั้นสีในตารางจะไม่ตรงกับ Result
+  function axisOk(v, nominal, upperTol, lowerTol) {
+    if (v == null || nominal == null || upperTol == null || lowerTol == null) return null;
+    return (nominal - lowerTol - TOL_EPS) <= v && v <= (nominal + upperTol + TOL_EPS);
+  }
+
+  // ค่าที่วัดได้ 1 ช่องในตาราง — ระบายสีเขียว/แดงตามว่าอยู่ในสเปคของแกนนั้นไหม
+  function valueCell(v, nominal, upperTol, lowerTol) {
+    if (v == null) return '';
+    const ok = axisOk(v, nominal, upperTol, lowerTol);
+    const txt = v.toFixed(3);
+    if (ok == null) return txt;
+    return `<span class="${ok ? 'val-ok' : 'val-ng'}" title="รับได้ ${(nominal - lowerTol).toFixed(3)} – ${(nominal + upperTol).toFixed(3)}">${txt}</span>`;
+  }
 
   function renderMeasTable(highlightId = null) {
     // measurementsData เป็น "หน้าปัจจุบัน" ที่ backend กรอง (number_alpl/date) + แบ่งหน้า
@@ -985,27 +1437,31 @@
 
     if (!rows.length) {
       const msg = (measSearch || measDate) ? 'ไม่พบ Measurement ที่ตรงกับตัวกรอง' : 'ยังไม่มีข้อมูล Measurements';
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="9">${msg}</td></tr>`;
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${msg}</td></tr>`;
       return;
     }
 
     tbody.innerHTML = rows.map(m => {
-      const res = m.result || '—';
+      const res = m.result || '';
       const cls = res === 'OK' ? 'ok' : res === 'NG' ? 'ng' : '';
-      const ts  = m.timestamp ? new Date(m.timestamp).toLocaleString() : '—';
+      const ts  = m.timestamp ? new Date(m.timestamp).toLocaleString() : '';
       const hl  = String(m.measurement_id) === String(highlightId) ? 'highlight-row' : '';
       return `<tr class="${hl}" data-id="${m.measurement_id}">
-        <td>${m.measurement_id}</td>
-        <td>${m.session_id ?? '—'}</td>
+        <td class="td-derived">${m.measurement_id}</td>
+        <td class="td-derived">${m.session_id ?? ''}</td>
         <td><strong>${m.number_alpl}</strong></td>
-        <td>${m.value_x != null ? m.value_x.toFixed(3) : '—'}</td>
-        <td>${m.value_y != null ? m.value_y.toFixed(3) : '—'}</td>
-        <td><span class="result-badge ${cls}">${res}</span></td>
-        <td>${m.note ?? '—'}</td>
-        <td>${ts}</td>
+        <td class="td-derived">${valueCell(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol)}</td>
+        <td class="td-derived">${valueCell(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol)}</td>
+        <td class="td-derived"><span class="result-badge ${cls}">${res}</span></td>
+        <td class="td-derived">${m.note ?? ''}</td>
+        <td>${m.operator_name ?? ''}</td>
+        <td class="td-derived">${m.measure_type ?? ''}</td>
+        <td class="td-derived">${ts}</td>
         <td class="row-actions">
-          <button class="btn-icon edit" ${sessionRunning ? 'disabled title="กำลังวัดอยู่ ไม่สามารถแก้ไขได้"' : ''} onclick="openMeasModal('edit', '${m.measurement_id}')">✎ Edit</button>
-          <button class="btn-icon delete" ${sessionRunning ? 'disabled title="กำลังวัดอยู่ ไม่สามารถลบได้"' : ''} onclick="confirmDeleteMeas('${m.measurement_id}')">🗑</button>
+          <div class="actions-inner">
+            <button class="btn-icon edit" ${sessionRunning ? 'disabled title="กำลังวัดอยู่ ไม่สามารถแก้ไขได้"' : ''} onclick="openMeasModal('edit', '${m.measurement_id}')">✎ Edit</button>
+            <button class="btn-icon delete" ${sessionRunning ? 'disabled title="กำลังวัดอยู่ ไม่สามารถลบได้"' : ''} onclick="confirmDeleteMeas('${m.measurement_id}')">🗑</button>
+          </div>
         </td>
       </tr>`;
     }).join('');
@@ -1043,6 +1499,23 @@
         <div class="field-error" id="err-f-value_y"></div>
       </div>
       `}
+      ${isEdit ? `
+      <div class="form-group">
+        <label for="f-operator">Operator <span class="req">*</span></label>
+        <select id="f-operator">${buildOptions(operatorOptions, v('operator_name'))}</select>
+        <div class="field-error" id="err-f-operator"></div>
+      </div>
+      <div class="form-group span-2">
+        <label>🔒 ข้อมูลของรายการนี้ (แก้ไม่ได้)</label>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(110px,1fr)); gap:0.6rem; background:var(--surface2); border:1px solid var(--border); border-radius:var(--radius); padding:0.6rem 0.75rem; font-size:0.85rem;">
+          <div><div style="font-size:0.7rem;color:var(--muted);font-weight:600">Value X</div><div>${v('value_x')}</div></div>
+          <div><div style="font-size:0.7rem;color:var(--muted);font-weight:600">Value Y</div><div>${v('value_y')}</div></div>
+          <div><div style="font-size:0.7rem;color:var(--muted);font-weight:600">Note</div><div>${v('note') || '—'}</div></div>
+          <div><div style="font-size:0.7rem;color:var(--muted);font-weight:600">Measure Type</div><div>${v('measure_type') || '—'}</div></div>
+        </div>
+        <div class="field-locked-note">ผลการวัดจริงจากเครื่องกับข้อมูลของ session แก้ย้อนหลังไม่ได้ — Result (OK/NG) จะถูกคำนวณใหม่อัตโนมัติจาก tolerance ของ ALPL ที่เลือก</div>
+      </div>
+      ` : `
       <div class="form-group span-2">
         <label for="f-note">Note</label>
         <textarea id="f-note">${v('note') ?? ''}</textarea>
@@ -1051,6 +1524,7 @@
       <div class="form-group span-2">
         <div class="field-locked-note">Result (OK/NG) คำนวณอัตโนมัติจาก Value X/Y เทียบกับ tolerance ของ ALPL — ไม่ต้องเลือกเอง</div>
       </div>
+      `}
     `;
     openEditModal();
   }
@@ -1077,38 +1551,37 @@
       sessionId = existing.session_id;
     }
 
-    // Value X/Y แก้ไม่ได้แล้วตอน Edit (เอาช่องออกจากฟอร์มไปเลย — ดู
-    // openMeasModal) เหลือแก้ได้แค่ ALPL/Note เท่านั้น ค่า value_x/value_y เดิม
-    // จะไม่ถูกแตะต้องเลย (ไม่ส่งไปใน payload — backend ใช้ whitelist อยู่แล้ว
-    // ไม่ส่ง field ไหนก็แค่ไม่อัปเดต field นั้น) โหมด Add ยังกรอก value_x/y ได้
-    // ตามปกติ (แม้ตอนนี้จะไม่มีปุ่มเปิดโหมด Add จาก UI แล้วก็ตาม)
-    let valueXRaw, valueYRaw;
+    // ตอน Edit แก้ได้เฉพาะ ALPL เท่านั้น (ช่อง Value X/Y และ Note ถูกเอาออกจาก
+    // ฟอร์มไปแล้ว — ดู openMeasModal) ค่าเดิมของ field พวกนั้นจะไม่ถูกแตะเลย
+    // เพราะไม่ได้ส่งไปใน payload (backend ใช้ whitelist อยู่แล้ว ไม่ส่ง field ไหน
+    // ก็แค่ไม่อัปเดต field นั้น) — โหมด Add ยังกรอก value_x/y + note ได้ตามปกติ
+    let valueXRaw, valueYRaw, note = null, operator = null;
     if (!isEdit) {
       valueXRaw = val('value_x'); valueYRaw = val('value_y');
+      note = val('note') || null;
       if (valueXRaw === '' || isNaN(Number(valueXRaw))) { setFieldError('value_x', 'กรอก Value X เป็นตัวเลข'); hasError = true; }
       if (valueYRaw === '' || isNaN(Number(valueYRaw))) { setFieldError('value_y', 'กรอก Value Y เป็นตัวเลข'); hasError = true; }
+    } else {
+      // operator_id ใน DB เป็น NOT NULL — เว้นว่างไม่ได้
+      operator = val('operator');
+      if (!operator) { setFieldError('operator', 'เลือก Operator'); hasError = true; }
     }
     if (hasError) return;
 
-    const note = val('note') || null;
-
     // ไม่ส่ง result แล้ว — backend คำนวณ OK/NG ใหม่เองเสมอจาก value_x/value_y/number_alpl
-    // เทียบกับ tolerance ของ package_size (ดู update_measurement / create_measurement)
+    // เทียบกับ tolerance ของ part_number (ดู update_measurement / create_measurement)
     const payload = isEdit
-      ? { session_id: sessionId, number_alpl: numberAlpl, note: note }
+      ? { session_id: sessionId, number_alpl: numberAlpl, operator: operator }
       : { session_id: sessionId, number_alpl: numberAlpl, value_x: Number(valueXRaw), value_y: Number(valueYRaw), note: note };
 
-    // ถ้าเป็นโหมด Edit และไม่มี field ไหนเปลี่ยนจากค่าเดิมเลย ให้ปิด modal เฉยๆ
-    // ไม่ต้องยิง API (เทียบเฉพาะ field ที่แก้ได้จริงในฟอร์ม — Edit เหลือแค่
-    // number_alpl/note เพราะ value_x/y แก้ไม่ได้แล้ว) — กัน toast
-    // "Measurement not found" หลอกๆ ตอน Save ทั้งที่ไม่ได้แก้อะไร
+    // ถ้าเป็นโหมด Edit และไม่มี field ที่แก้ได้ (ALPL/Operator) เปลี่ยนเลย ให้ปิด
+    // modal เฉยๆ ไม่ต้องยิง API — กัน toast "Measurement not found" หลอกๆ ตอน
+    // Save ทั้งที่ไม่ได้แก้อะไร
     if (isEdit && editContext.original) {
       const orig = editContext.original;
-      const editableFields = ['number_alpl', 'note'];
-      const changed = editableFields.some(
-        k => String(orig[k] ?? null) !== String(payload[k] ?? null)
-      );
-      if (!changed) {
+      const alplSame     = String(orig.number_alpl ?? null)   === String(payload.number_alpl ?? null);
+      const operatorSame = String(orig.operator_name ?? null) === String(payload.operator ?? null);
+      if (alplSame && operatorSame) {
         closeEditModal();
         return;
       }
@@ -1150,7 +1623,7 @@
         await fetch(`${API}/api/measurements/${measurementId}`, { method: 'DELETE' });
         await reloadMeasAfterMutation();   // refetch หน้าปัจจุบัน + ถอยหน้าถ้าหน้านี้ว่าง
         closeEditModal();
-        showToast(`ลบ Measurement ID ${measurementId} สำเร็จ`);
+        await afterDelete(`ลบ Measurement ID ${measurementId} สำเร็จ`);
       } catch (e) {
         showToast('ไม่สามารถลบข้อมูลได้');
       }
@@ -1179,8 +1652,137 @@
     });
   }
 
+  // popup แจ้งเตือนเฉยๆ (ไม่มี action ต่อ) — ใช้กับกรณีลบไม่ได้เพราะยังมีตารางอื่น
+  // อ้างอิงอยู่ (ดู deleteLookupRow) ต่างจาก showConfirm ที่มีปุ่ม "ลบ" ทำ action จริง
+  // ══════════════════════════════════════════════════════════════════════════
+  // ถังขยะ — กู้คืนข้อมูลที่ลบไป
+  // ══════════════════════════════════════════════════════════════════════════
+  let trashItems = [];
+  let trashRetentionDays = 30;
+
+  async function loadTrash() {
+    try {
+      const r = await fetch(`${API}/api/deleted`);
+      if (!r.ok) throw new Error(await errText(r));
+      const d = await r.json();
+      trashItems = d.items || [];
+      trashRetentionDays = d.retention_days ?? 30;
+    } catch (e) {
+      trashItems = [];
+      console.warn('loadTrash:', e);
+    }
+  }
+
+  function renderTrashTable() {
+    const tbody = document.getElementById('trash-body');
+    document.getElementById('trash-count').textContent =
+      trashItems.length ? `(${trashItems.length})` : '';
+    document.getElementById('trash-note').textContent =
+      `ข้อมูลที่ลบจะถูกเก็บไว้ที่นี่ ${trashRetentionDays} วัน กดกู้คืนได้ตลอด — เกินกำหนดจะถูกลบถาวรอัตโนมัติ`;
+
+    if (!trashItems.length) {
+      tbody.innerHTML = '<tr class="empty-row"><td colspan="4">ถังขยะว่าง — ยังไม่มีข้อมูลที่ถูกลบ</td></tr>';
+      return;
+    }
+    tbody.innerHTML = trashItems.map(it => {
+      // deleted_at เป็น "YYYY-MM-DD HH:MM:SS" อยู่แล้ว ตัดวินาทีออกให้อ่านง่าย
+      const when = (it.deleted_at || '').slice(0, 16).replace('T', ' ');
+      const img  = it.has_image ? ' <span title="มีไฟล์รูปเก็บไว้ด้วย">🖼</span>' : '';
+      return `<tr>
+        <td style="white-space:nowrap">${escapeHtml(when)}</td>
+        <td>${escapeHtml(it.kind_label)}</td>
+        <td>${escapeHtml(it.summary)}${img}</td>
+        <td class="trash-actions">
+          <button class="btn-restore" data-id="${escapeHtml(it.id)}">↩ กู้คืน</button>
+          <button class="btn-purge" data-id="${escapeHtml(it.id)}" title="ลบถาวร กู้คืนไม่ได้อีก">🗑 ลบถาวร</button>
+        </td>
+      </tr>`;
+    }).join('');
+  }
+
+  /**
+   * เรียกหลังลบสำเร็จทุกครั้ง — โหลดถังขยะใหม่ แล้วเด้ง toast พร้อมปุ่มเลิกทำ
+   *
+   * ทำไมต้องมีตัวกลาง: มี 3 จุดที่ยิง DELETE (Part / Measurement / Lookup)
+   * ถ้าต่างคนต่างเขียนโค้ดรีเฟรชเอง วันหลังเพิ่มปุ่มลบที่ 4 แล้วลืมเติม ถังขยะ
+   * จะไม่อัปเดตเฉพาะปุ่มนั้น — อาการจะสับสนมากเพราะที่อื่นทำงานปกติดี
+   *
+   * @param {string} message ข้อความบน toast
+   */
+  async function afterDelete(message) {
+    await loadTrash();
+    renderTrashTable();
+
+    // รายการที่เพิ่งลบ = ตัวบนสุดของถังขยะ (API เรียงจากลบล่าสุดก่อน)
+    const latest = trashItems[0];
+    showToast(message, latest ? {
+      action: { label: '↩ เลิกทำ', onClick: () => restoreTrashItem(latest.id) },
+    } : undefined);
+  }
+
+  async function restoreTrashItem(id) {
+    try {
+      const r = await fetch(`${API}/api/deleted/restore`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!r.ok) throw new Error(await errText(r));
+      showToast('กู้คืนข้อมูลเรียบร้อยแล้ว');
+      // กู้คืนแล้วข้อมูลกลับเข้าตารางหลัก — ต้องโหลดใหม่ทั้งหมด ไม่ใช่แค่ถังขยะ
+      await Promise.all([loadParts(), loadMeasurements(), loadLookupTable(), loadTrash()]);
+      renderPartsTable(); renderMeasTable(); renderLookupTable(); renderTrashTable();
+    } catch (e) {
+      showAlert(escapeHtml(e.message));
+    }
+  }
+
+  /** ลบรายการในถังขยะทิ้งถาวร — ไม่แตะตารางหลัก แค่ทิ้งตัวสำรอง */
+  async function purgeTrashItem(id) {
+    try {
+      const r = await fetch(`${API}/api/deleted/remove`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!r.ok) throw new Error(await errText(r));
+      await loadTrash();
+      renderTrashTable();
+      // ตั้งใจไม่ใส่ปุ่ม "เลิกทำ" ใน toast นี้ — ของถูกลบถาวรไปแล้วจริงๆ
+      // ถ้ามีปุ่มจะทำให้เข้าใจผิดว่ายังย้อนได้
+      showToast('ลบถาวรเรียบร้อยแล้ว');
+    } catch (e) {
+      showAlert(escapeHtml(e.message));
+    }
+  }
+
+  function showAlert(html) {
+    document.getElementById('alert-text').innerHTML = html;
+    document.getElementById('alert-modal').classList.add('open');
+  }
+  function closeAlert() {
+    document.getElementById('alert-modal').classList.remove('open');
+  }
+
   let confirmCallback = null;
-  function showConfirm(html, onConfirm) {
+  /**
+   * popup ยืนยันก่อนทำ action ที่ย้อนไม่ได้
+   *
+   * @param {string}   html      ข้อความ (ใส่ HTML ได้ — ผู้เรียกต้อง escape เอง)
+   * @param {Function} onConfirm ทำอะไรเมื่อกดยืนยัน
+   * @param {object}   [opts]    { label, danger }
+   *        label  — คำบนปุ่มยืนยัน (default '🗑 Delete')
+   *        danger — true = ปุ่มแดง (default) · false = ปุ่มเขียว สำหรับ action
+   *                 ที่ไม่ได้ทำลายอะไร เช่น "กู้คืน"
+   *
+   * ⚠ เดิม hardcode ปุ่มเป็น "🗑 Delete" ตายตัว พอเอามาใช้กับ popup กู้คืนแล้ว
+   *   ขึ้นว่า "Delete" ทั้งที่กำลังจะกู้ข้อมูลกลับมา — สื่อผิดจนน่ากลัวว่าจะกดผิด
+   */
+  function showConfirm(html, onConfirm, opts = {}) {
+    const { label = '🗑 Delete', danger = true } = opts;
+    const okBtn = document.getElementById('confirm-ok');
+    okBtn.textContent = label;
+    okBtn.className = danger ? 'btn-delete-inline' : 'btn-confirm-safe';
     document.getElementById('confirm-text').innerHTML = html;
     confirmCallback = onConfirm;
     document.getElementById('confirm-modal').classList.add('open');
@@ -1191,13 +1793,6 @@
   }
 
   let toastTimer = null;
-  function showToast(msg) {
-    const el = document.getElementById('toast');
-    el.textContent = msg;
-    el.classList.add('show');
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.remove('show'), 2600);
-  }
 
   // อ่านข้อความ error จาก response ของ FastAPI (มักอยู่ใน {detail: ...}) มาแสดงใน toast
   // ถ้า parse ไม่ได้/ไม่มี detail ใช้ fallback + HTTP status แทน เพื่อไม่ให้ fail แบบเงียบๆ
@@ -1209,10 +1804,35 @@
     return `${fallback} (HTTP ${r.status})`;
   }
 
+
   function bindGlobalHandlers() {
     // ── Parts search: ยิงไปกรองที่ backend (server-side) + debounce ~300ms กัน
     //    fetch รัวเกินไปตอนผู้ใช้กำลังพิมพ์ และ reset กลับไปหน้า 1 ทุกครั้งที่คำค้นเปลี่ยน
     //    (เพื่อให้ผลลัพธ์เริ่มจากหน้าแรกเสมอ ไม่ค้างอยู่ offset ของคำค้นก่อนหน้า)
+    // ── ถังขยะ ─────────────────────────────────────────────────────────────
+    // ผูกที่ tbody แล้วใช้ event delegation — ปุ่มถูกสร้างใหม่ทุกครั้งที่
+    // renderTrashTable() ถ้าผูกที่ตัวปุ่มตรงๆ จะหลุดหลัง render รอบถัดไป
+    document.getElementById('trash-body').addEventListener('click', (e) => {
+      const btn = e.target.closest('.btn-restore, .btn-purge');
+      if (!btn) return;
+      const item = trashItems.find(x => x.id === btn.dataset.id);
+      const what = `<strong>${escapeHtml(item?.kind_label || '')}</strong><br>` +
+                   `${escapeHtml(item?.summary || '')}`;
+
+      if (btn.classList.contains('btn-restore')) {
+        showConfirm(`กู้คืน ${what}<br><br>ข้อมูลจะกลับเข้าตารางเดิม`,
+                    () => restoreTrashItem(btn.dataset.id),
+                    { label: '↩ กู้คืน', danger: false });
+      } else {
+        // ถ้อยคำต้องหนักกว่าตอนกู้คืน เพราะขั้นนี้ย้อนกลับไม่ได้แล้วจริงๆ
+        showConfirm(
+          `⚠ ลบถาวร ${what}<br><br>` +
+          `<strong>การลบนี้กู้คืนไม่ได้อีก</strong> — ทั้งข้อมูลและไฟล์รูปจะหายถาวร`,
+          () => purgeTrashItem(btn.dataset.id),
+          { label: '🗑 ลบถาวร' }
+        );
+      }
+    });
     document.getElementById('parts-search').addEventListener('input', (e) => {
       clearTimeout(partsSearchTimer);
       partsSearchTimer = setTimeout(async () => {
@@ -1289,6 +1909,13 @@
 
     document.getElementById('btn-add-part').onclick = () => openPartModal('add');
 
+    // ── Lookup Tables: เปลี่ยนตารางที่กำลังจัดการ ────────────────────────────
+    document.getElementById('lookup-table-select').addEventListener('change', async (e) => {
+      currentLookupKind = e.target.value;
+      await loadLookupTable();
+      renderLookupTable();
+    });
+
     document.getElementById('edit-form').addEventListener('submit', ev => {
       ev.preventDefault();
       if (editContext.table === 'parts') savePart();
@@ -1301,6 +1928,9 @@
     document.getElementById('confirm-cancel').onclick = closeConfirm;
     document.getElementById('confirm-ok').onclick = () => { if (confirmCallback) confirmCallback(); closeConfirm(); };
     document.getElementById('confirm-modal').onclick = e => { if (e.target.id === 'confirm-modal') closeConfirm(); };
+
+    document.getElementById('alert-ok').onclick = closeAlert;
+    document.getElementById('alert-modal').onclick = e => { if (e.target.id === 'alert-modal') closeAlert(); };
   }
 </script>
 </body>

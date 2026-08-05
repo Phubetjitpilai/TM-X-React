@@ -7,3 +7,5 @@ python-multipart
 sse-starlette
 pandas
 httpx
+Pillow
+openpyxl

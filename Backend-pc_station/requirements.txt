@@ -1,7 +1,14 @@
-fastapi
-uvicorn
-pyserial
-httpx
-pydantic
-python-dotenv
-pyftpdlib
+# Dependency ของสคริปต์ฝั่งหน้างาน (send_command.py / Recieve_tm-x.py / mockup.py)
+#
+#   pip install -r requirements.txt
+#
+# ทั้ง 2 สคริปต์ของจริงใช้ชุดนี้ร่วมกัน ยกเว้น pyftpdlib ที่ Recieve_tm-x.py
+# ใช้ตัวเดียว — ลงทั้งชุดไปเลยง่ายกว่าแยกไฟล์ เพราะตอนเทสต์บนแล็ปท็อปเครื่องเดียว
+# ต้องรันทั้งสองตัวพร้อมกันอยู่แล้ว
+
+httpx            # ยิง HTTP ไป Backend (POST measurement, heartbeat, ถาม session)
+uvicorn          # ASGI server ของ /command (send_command.py, mockup.py)
+fastapi          # รับ POST /command จาก Backend
+pydantic         # validate body ของ /command
+python-dotenv    # อ่านค่าจาก ../.env
+pyftpdlib        # FTP server รอรับค่า+รูปจาก TM-X (Recieve_tm-x.py เท่านั้น)

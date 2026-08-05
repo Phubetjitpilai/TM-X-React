@@ -9,9 +9,12 @@ import json
 import logging
 import os
 import re
+import secrets
 import shutil
 from contextlib import asynccontextmanager
-from io import StringIO
+from datetime import date, datetime, timedelta
+from decimal import Decimal
+from io import BytesIO, StringIO
 from typing import Any, Dict, List, Optional
 
 import httpx
@@ -20,10 +23,11 @@ import pymysql
 import pymysql.cursors
 from pymysql.constants import CLIENT
 from dotenv import load_dotenv
-from fastapi import Body, FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
@@ -54,20 +58,198 @@ DB_CONFIG = dict(
 # POST /api/measurements/{id}/image-upload ด้านล่าง):
 #   Agent (Pi) รับภาพจาก TM-X ผ่าน FTP ของตัวเองเก็บไว้ที่ Store_image_temporary
 #   ก่อน แล้วอัปโหลดไฟล์จริง (multipart) มาที่ endpoint นี้ผ่าน HTTP — backend
-#   เป็นคนตัดสินใจ path ปลายทางเอง: ALPL_IMAGE_DIR/<package_size>/<filename>
-#   (ไม่ใช่ Agent ส่ง path ตรงๆ มาแบบเดิมสมัย MinIO เพราะ Agent อยู่คนละเครื่อง
-#   กับ backend แล้ว path ฝั่ง Agent ไม่มีความหมายกับ backend เลย)
-ALPL_IMAGE_DIR = os.getenv(
-    "ALPL_IMAGE_DIR",
-    os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ALPL")),
+#   เป็นคนตัดสินใจ path ปลายทางเอง: ALPL_IMAGE_DIR/<วันที่ DD-MM-YYYY (พ.ศ.)>/
+#   <number_alpl>_<วันที่ DD-MM-YYYY (พ.ศ.)>.jpg (เปลี่ยนจากเดิมที่แยกโฟลเดอร์ตาม
+#   package_size มาเป็นแยกตามวันที่วัดแทน ตามที่ตกลงกันไว้ — ดู
+#   upload_measurement_image ด้านล่าง) ไฟล์ต้นทางจาก TM-X (มักเป็น .bmp) ถูก
+#   แปลงเป็น .jpg เสมอก่อนเซฟ (ไม่ใช่ Agent ส่ง path ตรงๆ มาแบบเดิมสมัย MinIO
+#   เพราะ Agent อยู่คนละเครื่องกับ backend แล้ว path ฝั่ง Agent ไม่มีความหมายกับ
+#   backend เลย)
+_PROJECT_ROOT = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 )
 
+ALPL_IMAGE_DIR = os.getenv("ALPL_IMAGE_DIR", os.path.join(_PROJECT_ROOT, "image_ALPL"))
+# ⚠ ค่าใน .env เป็น path สัมพัทธ์ ("./image_ALPL") ซึ่งถ้าปล่อยไว้จะอิงกับ
+#   "โฟลเดอร์ที่สั่งรัน uvicorn" ไม่ใช่รากโปรเจกต์ — สั่ง `cd Backend-server`
+#   ก่อนรันตามคู่มือ รูปจะไปลงที่ Backend-server/image_ALPL/ แทน แล้วหน้าเว็บ
+#   หารูปไม่เจอเพราะ static mount ชี้คนละที่ (เคยเกิดกับ TEMP_IMAGE_DIR มาแล้ว)
+if not os.path.isabs(ALPL_IMAGE_DIR):
+    ALPL_IMAGE_DIR = os.path.abspath(os.path.join(_PROJECT_ROOT, ALPL_IMAGE_DIR))
 
-def _safe_folder_name(name: str) -> str:
-    """กันชื่อ package_size ที่อาจมีอักขระใช้เป็นชื่อโฟลเดอร์ไม่ได้ (/, \\, :, ฯลฯ)
-    หรือเป็นค่าว่าง/None — แทนที่ด้วย "_" กัน path traversal และกัน mkdir พัง"""
-    cleaned = re.sub(r'[\\/:*?"<>|]', "_", (name or "").strip())
-    return cleaned or "unknown_package"
+
+# ระยะเผื่อสำหรับเทียบทศนิยม — ค่าที่ตกขอบ tolerance พอดี (เช่น nominal 3.02
+# lower_tol 0.01 แล้ววัดได้ 3.010 เป๊ะ) ต้องถือว่า "ผ่าน" แต่ถ้าเทียบตรงๆ จะได้ NG
+# เพราะ 3.02 - 0.01 ในเลขทศนิยมฐานสองได้ 3.0100000000000002 (มากกว่า 3.010)
+# ซ้ำร้ายคอลัมน์พวกนี้เป็น FLOAT (single precision) ค่าที่อ่านกลับจาก DB จึงคลาด
+# จากค่าที่ตั้งไว้อีกชั้น (3.02 → 3.0199999809265137) — 1e-6 เล็กกว่าความละเอียด
+# ของการวัดจริง (ทศนิยม 3 ตำแหน่ง) มาก จึงไม่ทำให้ชิ้นที่หลุดสเปคจริงกลายเป็น OK
+_TOL_EPS = 1e-6
+
+
+def _within_tolerance(value: float, nominal: float, upper_tol: float, lower_tol: float) -> bool:
+    """เช็คว่าค่าที่วัดได้ของแกนหนึ่งอยู่ในช่วง nominal -lower_tol .. +upper_tol ไหม
+    (นับค่าที่ตกขอบพอดีว่าผ่าน — ดู _TOL_EPS)
+    """
+    return (nominal - lower_tol - _TOL_EPS) <= value <= (nominal + upper_tol + _TOL_EPS)
+
+
+def _thai_date_str(dt: Optional[datetime] = None) -> str:
+    """คืนวันที่รูปแบบ DD-MM-YYYY โดยปีเป็น พ.ศ. (ค.ศ. + 543) เช่น 22-07-2569
+    ใช้ตั้งชื่อโฟลเดอร์/ไฟล์รูปภาพแบบแยกตามวันที่ (ดู upload_measurement_image)
+    ค่า default (dt=None) ใช้เวลาปัจจุบันของเครื่องที่รัน backend ณ ตอนที่รูป
+    ถูกอัปโหลดเข้ามา (ไม่ใช่เวลาที่วัด — สองอย่างนี้ในทางปฏิบัติเป็นเวลาเดียวกัน
+    เพราะ Agent อัปโหลดรูปทันทีหลัง trigger แต่ละชิ้น)
+    """
+    dt = dt or datetime.now()
+    return f"{dt.day:02d}-{dt.month:02d}-{dt.year + 543}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ถังขยะ (Deleted) — สำรองข้อมูลก่อนลบ เพื่อให้กู้คืนได้
+# ══════════════════════════════════════════════════════════════════════════════
+# ทำไมเลือกวิธีนี้แทน soft delete (เพิ่มคอลัมน์ deleted_at):
+#   มี 12 จุดในไฟล์นี้ที่ query ตาราง measurements — soft delete ต้องเติม
+#   "WHERE deleted_at IS NULL" ให้ครบทุกจุด ลืมจุดเดียว = ข้อมูลที่ลบไปแล้ว
+#   โผล่กลับมาในรายงาน/export เงียบๆ โดยไม่มีอะไรเตือน (เคยเจอบั๊กแบบนี้มาแล้ว
+#   ตอน latest_only ที่ลืม WHERE ใน subquery)
+#   วิธีนี้แค่ "แทรกขั้นตอนอ่านข้อมูลไปเก็บก่อนลบ" — ตรรกะเดิมไม่ถูกแตะเลย
+#
+# โครงสร้างที่เก็บ:
+#   Deleted/<DD-MM-YYYY พ.ศ. ของวันที่ลบ>/<kind>_<id>.json
+#   + ไฟล์รูป (ถ้ามี) วางคู่กันในโฟลเดอร์เดียวกัน
+# แยกตาม "วันที่ลบ" ไม่ใช่วันที่วัด เพื่อให้ตัวลบอัตโนมัติลบทั้งโฟลเดอร์ได้เลย
+DELETED_DIR = os.getenv("DELETED_DIR", os.path.join(_PROJECT_ROOT, "Deleted"))
+if not os.path.isabs(DELETED_DIR):
+    DELETED_DIR = os.path.abspath(os.path.join(_PROJECT_ROOT, DELETED_DIR))
+
+# เก็บของในถังขยะกี่วันก่อนลบทิ้งถาวร
+DELETED_RETENTION_DAYS = int(os.getenv("DELETED_RETENTION_DAYS", 30))
+
+
+def _json_safe(value):
+    """แปลงค่าจาก DB ให้ json.dumps ได้ — datetime/date/Decimal ไม่ใช่ชนิดมาตรฐาน"""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat(sep=" ")
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, timedelta):
+        return str(value)
+    return value
+
+
+def _archive_before_delete(
+    kind: str,
+    table: str,
+    pk: Dict[str, Any],
+    row: Dict[str, Any],
+    related: Optional[Dict[str, List[Dict]]] = None,
+    image_path: Optional[str] = None,
+) -> Optional[str]:
+    """เก็บข้อมูลที่กำลังจะถูกลบไว้ใน Deleted/ — คืนชื่อไฟล์ JSON ที่สร้าง
+
+    ⚠ ต้องเรียก "ก่อน" คำสั่ง DELETE เสมอ เพราะต้องอ่านค่าจากแถวที่ยังอยู่
+    ⚠ ห้ามโยน exception ออกไป — ถ้าสำรองไม่สำเร็จก็ยังต้องยอมให้ลบต่อได้
+      (ผู้ใช้สั่งลบแล้ว การไปขวางเพราะเขียนไฟล์สำรองไม่ได้จะงงกว่า) แต่ต้อง
+      log ไว้ให้เห็นชัดว่ารอบนี้ไม่มีตัวสำรอง
+
+    kind ใช้เป็นทั้งชื่อไฟล์และตัวบอกประเภทตอนกู้คืน:
+      measurement | part | operator | owner | vendor | handler |
+      template | package_size | part_number
+    """
+    try:
+        day_dir = os.path.join(DELETED_DIR, _thai_date_str())
+        os.makedirs(day_dir, exist_ok=True)
+
+        pk_value = "_".join(str(v) for v in pk.values())
+        stem = f"{kind}_{pk_value}"
+
+        # ── ย้ายไฟล์รูปมาเก็บคู่กับ JSON (ไม่ลบทิ้ง) ────────────────────────
+        image_file = None
+        if image_path and "://" not in image_path:
+            src = os.path.realpath(os.path.join(ALPL_IMAGE_DIR, image_path))
+            base = os.path.realpath(ALPL_IMAGE_DIR)
+            # กัน path ที่หลุดออกนอกโฟลเดอร์รูป (ค่าใน DB อาจถูกแก้มาก่อน)
+            if (src == base or src.startswith(base + os.sep)) and os.path.isfile(src):
+                image_file = f"{stem}_{os.path.basename(image_path)}"
+                try:
+                    shutil.move(src, os.path.join(day_dir, image_file))
+                except OSError as exc:
+                    log.warning("ย้ายไฟล์รูปเข้าถังขยะไม่สำเร็จ (%s): %s", image_path, exc)
+                    image_file = None
+
+        payload = {
+            "deleted_at": datetime.now().isoformat(sep=" ", timespec="seconds"),
+            "kind":       kind,
+            "table":      table,
+            "pk":         {k: _json_safe(v) for k, v in pk.items()},
+            "row":        {k: _json_safe(v) for k, v in row.items()},
+            "related":    {
+                t: [{k: _json_safe(v) for k, v in r.items()} for r in rows]
+                for t, rows in (related or {}).items()
+            },
+            "image_file": image_file,
+        }
+
+        # กันชื่อชนกันถ้าลบ id เดิมซ้ำในวันเดียวกัน (ลบ → กู้ → ลบอีก)
+        json_name = f"{stem}.json"
+        n = 2
+        while os.path.exists(os.path.join(day_dir, json_name)):
+            json_name = f"{stem}({n}).json"
+            n += 1
+
+        with open(os.path.join(day_dir, json_name), "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        log.info("เก็บเข้าถังขยะแล้ว: %s/%s", _thai_date_str(), json_name)
+        return json_name
+    except Exception as exc:
+        log.error("สำรองข้อมูลก่อนลบไม่สำเร็จ (%s %s): %s — ลบต่อโดยไม่มีตัวสำรอง", kind, pk, exc)
+        return None
+
+
+def _fetch_one(cur, sql: str, params) -> Optional[Dict[str, Any]]:
+    cur.execute(sql, params)
+    return cur.fetchone()
+
+
+def _delete_image_file(image_path: Optional[str]) -> bool:
+    """ลบไฟล์รูปที่ image_path (path สัมพัทธ์ต่อ ALPL_IMAGE_DIR) ชี้อยู่
+
+    คืน True เฉพาะตอนลบได้จริง และ **ไม่ throw ไม่ว่ากรณีไหน** เพราะทุกจุดที่
+    เรียกใช้ถือว่า "ลบไฟล์ไม่ได้" ไม่ใช่เหตุให้ request ทั้งก้อนพัง (แถวใน DB
+    ถูกลบ/อัปเดตไปแล้ว จะ rollback เพราะไฟล์ค้างไม่คุ้ม)
+
+    กันไว้ 2 กรณีที่ห้ามแตะไฟล์เด็ดขาด:
+      1. **ค่าที่เป็น URL เต็ม** — ข้อมูลตกค้างจากยุค MinIO ที่เก็บทั้ง URL ลง
+         คอลัมน์นี้ (เจอจริงในแถว measurement_id=10:
+         "http://172.20.10.4:8080/images/test.png") ไม่ใช่ path บนดิสก์เครื่องนี้
+         ถ้าเอาไป join กับ ALPL_IMAGE_DIR จะได้ path มั่วๆ ที่ไม่ควรไปยุ่งด้วย
+      2. **path ที่หลุดออกนอก ALPL_IMAGE_DIR** — ถ้าค่าใน DB มี ".." ปนมา
+         (พลาดเองหรือถูกยัดมา) ต้องไม่ทำให้ลบไฟล์นอกโฟลเดอร์รูปได้
+    """
+    if not image_path:
+        return False
+
+    if "://" in image_path:
+        log.warning(
+            "ข้ามการลบไฟล์รูป: image_path เป็น URL ไม่ใช่ path บนดิสก์ (%s)", image_path
+        )
+        return False
+
+    base = os.path.realpath(ALPL_IMAGE_DIR)
+    target = os.path.realpath(os.path.join(base, image_path))
+    if target != base and not target.startswith(base + os.sep):
+        log.warning(
+            "ข้ามการลบไฟล์รูป: path หลุดออกนอก ALPL_IMAGE_DIR (%s)", image_path
+        )
+        return False
+
+    try:
+        os.remove(target)
+        return True
+    except OSError:
+        return False  # ไฟล์อาจถูกลบไปแล้ว/หาไม่เจอ — ไม่ใช่เรื่องผิดปกติ
 
 # AGENT_HOST: เดิม hardcode เป็น "localhost" ตรงๆ (สมมติว่า Agent รันอยู่เครื่อง
 # เดียวกับ Backend เสมอ) — ตอนนี้ Agent อาจย้ายไปรันบนเครื่องแยก (เช่น Raspberry
@@ -90,6 +272,22 @@ HEARTBEAT_TIMEOUT  = int(os.getenv("HEARTBEAT_TIMEOUT", 15))
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Server] %(message)s")
 log = logging.getLogger(__name__)
 
+# ── CORS ────────────────────────────────────────────────────────────────────
+# ค่าเริ่มต้นเป็น "*" โดยตั้งใจ — เคยลองบีบให้เหลือเฉพาะ localhost แล้วพัง:
+# เปิดหน้าเว็บผ่าน IP ของเครื่องในวง (เช่น http://192.168.1.50:8000) จะกลายเป็น
+# cross-origin ทันที แล้ว SSE ถูกบล็อก ป้ายสถานะค้างที่ Offline ตลอดโดยไม่มี
+# error อะไรให้เห็นนอกจาก console ของเบราว์เซอร์
+#
+# และต้องเข้าใจให้ตรงกันว่า CORS ไม่ใช่ระบบความปลอดภัยของ API — มันกันได้แค่
+# JavaScript ในเบราว์เซอร์ ส่วน curl/Postman/สคริปต์ใดๆ ไม่สนใจ CORS เลย
+# ช่องโหว่จริงของระบบนี้คือ "ไม่มี auth" ซึ่งต้องแก้ด้วยการทำ auth ไม่ใช่บีบ CORS
+#
+# ตั้ง CORS_ORIGINS ใน .env เป็นรายการคั่นด้วยคอมมาได้ถ้าอยากจำกัดจริงๆ เช่น
+#   CORS_ORIGINS=http://localhost:8000,http://192.168.1.50:8000
+CORS_ORIGINS = [
+    o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()
+]
+
 # ── SSE broadcast queue ──────────────────────────────────────────────────────
 subscribers: List[asyncio.Queue] = []
 
@@ -100,8 +298,11 @@ subscribers: List[asyncio.Queue] = []
 # (ที่เราใส่เป็น ALPL ตัวแรกในคิวไปแทน) — ถ้า server restart กลางที่ session
 # กำลัง running อยู่ คิวนี้จะหาย (ยอมรับความเสี่ยงนี้ได้ตามที่คุยกันไว้)
 #
-# โครงสร้าง: { session_id: {"entry_mode": "IPM"|"New"|"Rework", "queue": [1011, 1002, ...],
+# โครงสร้าง: { session_id: {"entry_mode": "IPM"|"New", "queue": [1011, 1002, ...],
 #                            "position": 0} }
+# หมายเหตุ: entry_mode มีแค่ 2 ค่า (ไม่มี "Rework") เพราะโหมด Rework ที่เลือก
+# จากหน้าเว็บถูก map เป็น entry_mode='New' + note='Rework' ตั้งแต่ start_session
+# แล้ว (ดู start_session) — ค่านี้ถูกเอาไปใส่คอลัมน์ measurements.measure_type ตรงๆ
 session_queues: Dict[int, Dict[str, Any]] = {}
 
 
@@ -163,7 +364,7 @@ async def _reload_session_queues() -> None:
             with db.cursor() as cur:
                 cur.execute(
                     "SELECT session_id, queue_state FROM sessions "
-                    "WHERE state = 'running' AND queue_state IS NOT NULL"
+                    "WHERE state IN ('running', 'paused') AND queue_state IS NOT NULL"
                 )
                 rows = cur.fetchall()
         finally:
@@ -223,6 +424,7 @@ async def heartbeat_checker() -> None:
 
         for sid in timed_out:
             session_queues.pop(sid, None)
+            measure_timeouts.pop(sid, None)  # คำถามค้างของ session ที่ตายไปแล้ว ไม่มีใครตอบได้อีก
             log.warning("Session %s: ไม่ได้ heartbeat เกิน %ss — mark เป็น 'timeout'", sid, HEARTBEAT_TIMEOUT)
             await push_event("session_timeout", {"session_id": sid})
 
@@ -237,14 +439,29 @@ async def lifespan(app: FastAPI):
     ให้ครบก่อนรับ request
     """
     asyncio.create_task(heartbeat_checker())     # fire-and-forget, never blocks
+    asyncio.create_task(_deleted_purge_loop())   # ล้างถังขยะที่เกินอายุ
     await _reload_session_queues()               # ต้องเสร็จก่อนรับ request
     yield
+
+
+async def _deleted_purge_loop():
+    """ล้างถังขยะที่เกินอายุ — ทำทันทีตอนเริ่ม แล้ววนซ้ำวันละครั้ง
+
+    ทำตอนเริ่มด้วยเพราะเครื่องหน้างานมักถูกปิดกลางคืน ถ้ารอครบ 24 ชั่วโมงอย่างเดียว
+    อาจไม่มีวันได้ทำเลย
+    """
+    while True:
+        try:
+            _purge_old_deleted()
+        except Exception as exc:
+            log.warning("ล้างถังขยะไม่สำเร็จ: %s", exc)
+        await asyncio.sleep(24 * 60 * 60)
 
 
 app = FastAPI(title="TM-X Backend Server", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -301,9 +518,12 @@ async def get_session_state():
     db = get_db()
     try:
         with db.cursor() as cur:
+            # queue_state แนบไปด้วย — frontend ใช้วาดแถบคิว ALPL ใน Live Telemetry
+            # (ต้องได้คิวเต็มไม่ใช่แค่ ALPL ตัวแรก) และทำให้แถบนี้รอดการ refresh
+            # หน้าเว็บกลาง session ด้วย เพราะอ่านคิวกลับจาก DB ได้ตรงๆ
             cur.execute(
                 "SELECT session_id, number_alpl, state, target_count, measured_count, "
-                "last_seen, started_at, ended_at "
+                "queue_state, last_seen, started_at, ended_at "
                 "FROM sessions ORDER BY session_id DESC LIMIT 1"
             )
             row = cur.fetchone()
@@ -326,26 +546,66 @@ def _get_template_name_for_ipm(cur, first_alpl: int) -> str:
     template_name ส่งมาด้วย ต่างจาก New ที่ frontend ส่ง template_name มาใน
     ก้อน JSON เลย ไม่ต้อง query
 
-    schema ใหม่: template_name ไม่ได้อยู่ใน `parts` ตรงๆ อีกต่อไป — ย้ายไปอยู่
-    ใน `package_size` (1 package_size ผูกกับ 1 template_name) จึงต้อง join
-    ผ่าน package_size_id ของ part นั้น
+    schema: template_name ไม่ได้อยู่ใน `parts_specifications` ตรงๆ — ต้อง join
+    ผ่าน part_number_id -> package_size_id -> template_id เป็นทอดๆ
+    (parts_specifications.part_number_id -> part_number.package_size_id ->
+    package_size.template_id -> template.template_name)
 
-    ใช้ ALPL ตัวแรกในคิวเป็นตัวหา เพราะ IPM ต้องมี parts row อยู่แล้วทุกตัว
-    (ลงทะเบียนไว้ก่อนหน้านี้) — ถ้าหาไม่เจอ แปลว่า frontend เช็คตกหรือมีคน
-    ลบ part ออกไปหลัง frontend เช็คผ่าน ให้ raise error ชัดๆ ไปเลย ไม่เดา
+    ใช้ ALPL ตัวแรกในคิวเป็นตัวหา เพราะ IPM ต้องมี parts_specifications row
+    อยู่แล้วทุกตัว (ลงทะเบียนไว้ก่อนหน้านี้) พร้อม part_number_id ที่ตั้งไว้แล้ว
+    — ถ้าหาไม่เจอ แปลว่า frontend เช็คตกหรือมีคนลบ part/ยังไม่ได้ตั้ง part_number
+    ให้ part นี้ ให้ raise error ชัดๆ ไปเลย ไม่เดา
     """
+    # ใช้ LEFT JOIN แทน INNER JOIN เพื่อ "วินิจฉัย" ได้ว่าสายพังตรงข้อไหน
+    # ของเดิมใช้ INNER JOIN แล้วได้ 0 แถว จึงบอกได้แค่ว่า "ยังไม่ได้ตั้ง part_number"
+    # ซึ่งชี้ผิดจุดบ่อย เพราะจริงๆ อาจตั้ง Part Number ไว้แล้วแต่ Package Size
+    # ของมันยังไม่ได้ผูก Template — ผู้ใช้ก็จะวนแก้ที่ Part Number ซ้ำๆ ไม่จบ
     cur.execute(
-        "SELECT ps.template_name FROM parts p "
-        "JOIN package_size ps ON p.package_size_id = ps.package_size_id "
+        "SELECT p.part_number_id, pn.part_number_name, pn.package_size_id, "
+        "       ps.package_size, ps.template_id, t.template_name "
+        "FROM parts_specifications p "
+        "LEFT JOIN part_number pn  ON p.part_number_id  = pn.part_number_id "
+        "LEFT JOIN package_size ps ON pn.package_size_id = ps.package_size_id "
+        "LEFT JOIN template t      ON ps.template_id     = t.template_id "
         "WHERE p.number_alpl = %s",
         (first_alpl,),
     )
     row = cur.fetchone()
-    if not row:
+
+    head = f"เริ่มวัด ALPL {first_alpl} ไม่ได้ —"
+    if row is None:
+        raise HTTPException(404, f"{head} ยังไม่ได้ลงทะเบียน ALPL นี้ในตาราง Parts")
+    if row["part_number_id"] is None:
+        raise HTTPException(404, f"{head} ยังไม่ได้ตั้ง Part Number ให้ ALPL นี้ (แก้ที่หน้า Edit › Parts)")
+    if row["part_number_name"] is None:
         raise HTTPException(
             404,
-            f"ALPL {first_alpl} ยังไม่ได้ลงทะเบียนชิ้นงานนี้ หรือยังไม่ได้ตั้ง package_size "
-            f"ให้ part นี้ (หา template_name ไม่เจอ)",
+            f"{head} Part Number ที่ผูกไว้ถูกลบไปแล้ว (part_number_id = {row['part_number_id']}) "
+            f"— เลือก Part Number ใหม่ให้ ALPL นี้ที่หน้า Edit › Parts",
+        )
+    if row["package_size_id"] is None:
+        raise HTTPException(
+            404,
+            f"{head} Part Number \"{row['part_number_name']}\" ยังไม่ได้ผูก Package Size "
+            f"(แก้ที่หน้า Edit › Lookup Tables › Part Number)",
+        )
+    if row["package_size"] is None:
+        raise HTTPException(
+            404,
+            f"{head} Package Size ที่ Part Number \"{row['part_number_name']}\" ผูกไว้ถูกลบไปแล้ว "
+            f"(package_size_id = {row['package_size_id']})",
+        )
+    if row["template_id"] is None:
+        raise HTTPException(
+            404,
+            f"{head} Package Size \"{row['package_size']}\" ยังไม่ได้ตั้ง Template ของเครื่อง TM-X "
+            f"(แก้ที่หน้า Edit › Lookup Tables › Package Size) — ไม่เกี่ยวกับ Part Number",
+        )
+    if row["template_name"] is None:
+        raise HTTPException(
+            404,
+            f"{head} Template ที่ Package Size \"{row['package_size']}\" ผูกไว้ถูกลบไปแล้ว "
+            f"(template_id = {row['template_id']})",
         )
     return row["template_name"]
 
@@ -470,7 +730,9 @@ async def start_session(request: Request):
         try:
             with db.cursor() as cur:
                 # Button Guard — กันรัน 2 session ซ้อนกัน (เหมือนของเดิมก่อนหน้านี้)
-                cur.execute("SELECT session_id FROM sessions WHERE state = 'running'")
+                # นับ 'paused' เป็น session ที่ยังไม่จบด้วย ไม่งั้นตอนพักค้างไว้จะ
+                # เริ่ม session ใหม่ซ้อนได้ แล้ว session เก่าค้างเป็น paused ตลอดกาล
+                cur.execute("SELECT session_id FROM sessions WHERE state IN ('running', 'paused')")
                 if cur.fetchone():
                     raise HTTPException(400, "A session is already running")
 
@@ -502,7 +764,7 @@ async def start_session(request: Request):
                     # ประวัติเดิมของตัวเองไม่เหมือนกัน จะ share config เดียวไม่ได้)
                     if len(alpl_queue) != 1:
                         raise HTTPException(400, "Rework รองรับทีละ 1 ALPL เท่านั้น")
-                    cur.execute("SELECT 1 FROM parts WHERE number_alpl = %s", (first_alpl,))
+                    cur.execute("SELECT 1 FROM parts_specifications WHERE number_alpl = %s", (first_alpl,))
                     if not cur.fetchone():
                         raise HTTPException(
                             404,
@@ -533,15 +795,24 @@ async def start_session(request: Request):
 
         # 3) เก็บคิวไว้ใน memory ผูกกับ session_id นี้ (หลัง insert สำเร็จแล้ว
         # ค่อยผูก กัน insert fail แล้วมี state ค้างอยู่ใน session_queues)
-        # operator/note มาจาก field "Operator"/"Note" ใน payload — ใช้ได้ทั้ง
-        # IPM และ New (สำหรับ New เป็น note ของ "การวัดรอบนี้" ไม่ใช่ของตัว
-        # part เพราะ parts table ไม่มี column note เลย)
+        #
+        # **การ map โหมดที่เลือกหน้าเว็บ → ค่าที่บันทึกลง measurements**
+        # (ตามที่ตกลงกันไว้ — Rework ไม่ใช่ measure_type ของตัวเอง แต่ถือเป็น
+        # การวัดแบบ New ที่มีหมายเหตุกำกับว่าเป็นงาน Rework):
+        #   หน้าเว็บเลือก "Rework" → measure_type = 'New',  note = 'Rework'
+        #   หน้าเว็บเลือก "New"    → measure_type = 'New',  note = NULL
+        #   หน้าเว็บเลือก "IPM"    → measure_type = 'IPM',  note = NULL
+        # entry_mode ตรงนี้คือค่าที่ create_measurement จะเอาไปใส่คอลัมน์
+        # measure_type ตรงๆ (ดู create_measurement) จึงต้อง map ที่นี่ให้เรียบร้อย
+        entry_mode = "New" if measure_type in ("New", "Rework") else "IPM"
+        entry_note = "Rework" if measure_type == "Rework" else None
+
         queue_state = {
-            "entry_mode": measure_type,
+            "entry_mode": entry_mode,
             "queue": alpl_queue,
             "position": 0,
             "operator": data.get("Operator"),
-            "note": data.get("Note"),
+            "note": entry_note,
             # เก็บ config เดิมของ New ไว้ (part_number/handler/vendor/
             # package_size/owner ฯลฯ) ให้ create_measurement เอาไป insert Part
             # ตัวถัดๆไปในคิวแบบ lazy ทีละตัวตอนวัดจริง — None ถ้าเป็น IPM/Rework
@@ -550,6 +821,7 @@ async def start_session(request: Request):
             "new_part_config": data if measure_type == "New" else None,
         }
         session_queues[session_id] = queue_state
+        measure_timeouts.pop(session_id, None)  # session ใหม่ต้องไม่มีคำถามค้างจากรอบก่อน
 
         # เขียนสำเนา queue_state ลง DB ด้วย (คอลัมน์ sessions.queue_state) — ถ้า
         # backend restart กลาง session นี้ จะโหลดกลับเข้า memory ได้ตอน boot
@@ -609,7 +881,166 @@ async def stop_session(req: StopSessionRequest):
                 log.warning("Agent stop notify failed: %s", exc)
 
         session_queues.pop(req.session_id, None)  # กดหยุดเองก่อนคิวหมด ก็เคลียร์ memory ทิ้งด้วย
+        measure_timeouts.pop(req.session_id, None)  # กันคำถามค้างจาก session ที่จบไปแล้ว
         await push_event("session_stopped", {"session_id": req.session_id})
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Measure timeout — Pi ไม่ได้รับค่าการวัดกลับมา
+# ══════════════════════════════════════════════════════════════════════════════
+# ที่มา: send_command.py ส่ง T1 แล้ว "รอยืนยัน" ว่าค่าถูกบันทึกจริงไหม โดยดูว่า
+# sessions.measured_count ขยับขึ้นหรือเปล่า (poll /api/session/state) ถ้าครบเวลา
+# แล้วยังไม่ขยับ แปลว่าอย่างใดอย่างหนึ่ง:
+#   - TM-X วัดไม่ติด (ส่ง -9999.999 มา ซึ่ง Recieve_tm-x.py ข้ามไม่บันทึก) —
+#     จากข้อมูลจริงหน้างานเจอบ่อยมาก (8 ครั้งติดแค่ 1)
+#   - FTP มาช้าเกินเวลาที่รอ หรือ Recieve_tm-x.py ไม่ได้รัน/ล่ม
+# Pi แยกสองกรณีนี้ไม่ออก จึงโยนให้คนตัดสินใจแทน: แจ้งขึ้นหน้าเว็บว่าไม่ได้รับค่า
+# แล้วถามว่าจะวัดต่อหรือหยุด
+#
+# ทำไมเก็บใน memory ไม่ลง DB: เป็นคำถามที่มีอายุแค่ไม่กี่วินาที ผูกกับ session ที่
+# กำลัง running อยู่เท่านั้น ถ้า backend restart กลางคัน Pi จะ poll ไม่เจอแล้ว
+# หลุด loop ไปเอง (ดู wait_for_decision ใน send_command.py) — เหมือน session_queues
+# ที่ยอมรับข้อจำกัดเดียวกันอยู่แล้ว
+measure_timeouts: dict[int, dict] = {}
+
+
+class MeasureTimeoutRequest(BaseModel):
+    session_id: int
+    piece: int | None = None
+    target: int | None = None
+
+
+class MeasureTimeoutResolve(BaseModel):
+    action: str  # "continue" | "stop"
+
+
+@app.post("/api/measure-timeout")
+async def report_measure_timeout(req: MeasureTimeoutRequest):
+    """Pi แจ้งว่ารอค่าการวัดชิ้นนี้จนหมดเวลาแล้วยังไม่มาถึง
+
+    บันทึกคำถามค้างไว้ใน memory แล้ว broadcast ให้หน้าเว็บเด้ง modal ถามผู้ใช้
+    ตัว Pi จะ poll GET /api/measure-timeout/{session_id} รอคำตอบต่อเอง
+    """
+    measure_timeouts[req.session_id] = {
+        "piece":    req.piece,
+        "target":   req.target,
+        "decision": None,
+    }
+    await push_event(
+        "measure_timeout",
+        {"session_id": req.session_id, "piece": req.piece, "target": req.target},
+    )
+    log.warning(
+        "Measure timeout: session=%s piece=%s — รอผู้ใช้ตัดสินใจ", req.session_id, req.piece
+    )
+    return {"ok": True}
+
+
+@app.get("/api/measure-timeout/{session_id}")
+async def get_measure_timeout(session_id: int):
+    """Pi poll ตรงนี้รอคำตอบจากผู้ใช้
+
+    decision = None แปลว่ายังไม่มีใครตอบ · "continue" = วัดต่อ · "stop" = หยุด
+    ถ้าไม่มี entry เลย (เช่น backend restart หรือ session จบไปแล้ว) คืน
+    decision="stop" เพื่อให้ Pi หลุด loop ไม่ค้างรอตลอดกาล
+    """
+    pending = measure_timeouts.get(session_id)
+    if pending is None:
+        return {"decision": "stop", "reason": "ไม่พบคำถามค้างของ session นี้"}
+    return {"decision": pending["decision"]}
+
+
+@app.post("/api/measure-timeout/{session_id}/resolve")
+async def resolve_measure_timeout(session_id: int, body: MeasureTimeoutResolve):
+    """หน้าเว็บส่งคำตอบของผู้ใช้กลับมา
+
+    หมายเหตุ: เคส "stop" ตรงนี้ทำแค่บอก Pi ให้เลิกรอ — ตัวการหยุด session จริง
+    (อัปเดต DB, เคลียร์คิว, แจ้ง Agent, broadcast) ยังเป็นหน้าที่ของ
+    POST /api/session/stop เหมือนเดิม ซึ่งหน้าเว็บจะเรียกต่อเองทันที
+    ตั้งใจไม่รวมสองอย่างเข้าด้วยกัน เพื่อให้เส้นทางการหยุด session มีทางเดียว
+    ตลอดทั้งระบบ (กดปุ่ม Stop กับตอบว่าหยุด เดินโค้ดชุดเดียวกันเป๊ะ)
+    """
+    if body.action not in ("continue", "stop"):
+        raise HTTPException(400, "action ต้องเป็น 'continue' หรือ 'stop' เท่านั้น")
+
+    pending = measure_timeouts.get(session_id)
+    if pending is None:
+        raise HTTPException(404, "ไม่พบคำถามค้างของ session นี้ (อาจหมดอายุไปแล้ว)")
+
+    pending["decision"] = body.action
+    log.info("Measure timeout: session=%s ผู้ใช้เลือก %s", session_id, body.action)
+    return {"ok": True, "action": body.action}
+
+
+async def _notify_agent(action: str) -> None:
+    """แจ้ง Agent ด้วย action ง่ายๆ ที่ไม่มี payload อื่น (pause/resume/stop)
+
+    ครอบ try/except เหมือน _notify_agent_start — ถ้า Agent ไม่ตอบ ไม่ควรทำให้
+    คำสั่งฝั่งเว็บล้มเหลวตามไปด้วย (DB อัปเดตไปแล้ว) แค่ log ไว้พอ
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(f"{AGENT_BASE_URL}/command", json={"action": action}, timeout=10)
+    except Exception as exc:
+        log.warning("Agent %s notify failed: %s", action, exc)
+
+
+@app.post("/api/session/pause")
+async def pause_session(req: StopSessionRequest):
+    """พัก session ชั่วคราว (running → paused)
+
+    ต่างจาก stop ตรงที่ session ยังมีชีวิตอยู่: คิว ALPL ใน session_queues ยัง
+    อยู่ครบ ตำแหน่งปัจจุบันไม่ถูกรีเซ็ต กด Start อีกทีก็วัดต่อจากตัวเดิมได้เลย
+    Agent จะหยุดรอที่ชิ้นถัดไปโดยไม่ trigger การวัดใหม่จนกว่าจะได้ resume
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT state FROM sessions WHERE session_id = %s", (req.session_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Session not found")
+            if row["state"] != "running":
+                raise HTTPException(400, f"พัก session ไม่ได้ — สถานะปัจจุบันคือ '{row['state']}'")
+            cur.execute(
+                "UPDATE sessions SET state = 'paused' WHERE session_id = %s", (req.session_id,)
+            )
+
+        await _notify_agent("pause")
+        await push_event("session_paused", {"session_id": req.session_id})
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/session/resume")
+async def resume_session(req: StopSessionRequest):
+    """สั่งวัดต่อจากที่พักไว้ (paused → running)
+
+    อัปเดต last_seen = NOW() ไปพร้อมกันด้วย — สำคัญมาก เพราะถ้าพักไว้นานกว่า
+    HEARTBEAT_TIMEOUT แล้ว last_seen ยังค้างเป็นเวลาเดิม พอกลับมา running
+    heartbeat_checker จะเห็นว่า "เงียบเกินกำหนด" แล้ว mark เป็น timeout ทันที
+    ทั้งที่ Agent ยังทำงานปกติ
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT state FROM sessions WHERE session_id = %s", (req.session_id,))
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(404, "Session not found")
+            if row["state"] != "paused":
+                raise HTTPException(400, f"สั่งวัดต่อไม่ได้ — สถานะปัจจุบันคือ '{row['state']}'")
+            cur.execute(
+                "UPDATE sessions SET state = 'running', last_seen = NOW() WHERE session_id = %s",
+                (req.session_id,),
+            )
+
+        await _notify_agent("resume")
+        await push_event("session_resumed", {"session_id": req.session_id})
         return {"ok": True}
     finally:
         db.close()
@@ -627,7 +1058,7 @@ async def heartbeat(req: HeartbeatRequest):
     ถ้าไม่มี session_id (Agent ยัง idle ไม่มีงานอยู่) แค่ตอบ ok เฉยๆ ไม่ต้องแตะ DB
     ถ้ามี session_id จะอัปเดต sessions.last_seen = NOW() ให้ heartbeat_checker()
     เอาไปเทียบว่า session นี้ยังมี Agent ส่งสัญญาณชีพอยู่ไหม — เงื่อนไข
-    `state = 'running'` กันไม่ให้ heartbeat ที่มาช้า/ค้างจาก session เก่าที่จบไป
+    `state IN ('running','paused')` กันไม่ให้ heartbeat ที่มาช้า/ค้างจาก session เก่าที่จบไป
     แล้วไปอัปเดต last_seen ของ session ผิดตัว
     """
     if req.session_id is None:
@@ -635,8 +1066,13 @@ async def heartbeat(req: HeartbeatRequest):
     db = get_db()
     try:
         with db.cursor() as cur:
+            # รับ heartbeat ตอน 'paused' ด้วย — Agent ยังมีชีวิตอยู่ระหว่างพัก
+            # ถ้าไม่อัปเดต last_seen ช่วงนี้ พอ resume กลับมาจะโดน mark timeout
+            # ทันทีเพราะ last_seen ค้างเป็นเวลาก่อนพัก (heartbeat_checker ไม่แตะ
+            # session ที่ paused อยู่แล้ว จึงไม่มีผลข้างเคียงอะไร)
             cur.execute(
-                "UPDATE sessions SET last_seen = NOW() WHERE session_id = %s AND state = 'running'",
+                "UPDATE sessions SET last_seen = NOW() "
+                "WHERE session_id = %s AND state IN ('running', 'paused')",
                 (req.session_id,),
             )
     finally:
@@ -697,17 +1133,87 @@ async def list_handlers():
 
 @app.get("/api/package-sizes")
 async def list_package_sizes():
-    """คืนรายการ package_size ทั้งหมด พร้อม nominal/tolerance/template_name —
-    ใช้เติม datalist ของช่อง Package Size ใน index.html/edit.html (nominal/tol/
-    template_name แนบมาด้วยเผื่อ frontend อยากพรีวิวค่าที่จะถูก map ให้อัตโนมัติ)
+    """คืนรายการ package_size ทั้งหมด พร้อม template_name — ใช้เติม datalist
+    ของช่อง Package Size ใน index.html/edit.html
+
+    schema: nominal/tolerance ไม่ได้อยู่ที่ package_size แล้ว — ย้ายไปอยู่ที่
+    part_number (1 part_number ผูก 1 ชุด nominal/tolerance ของตัวเอง เพราะ
+    part_number เดียวกันอาจมี tolerance ต่างกันได้แม้ package_size เดียวกัน)
+    ดู GET /api/part-numbers สำหรับรายละเอียดพวกนี้แทน
     """
     db = get_db()
     try:
         with db.cursor() as cur:
             cur.execute(
-                "SELECT package_size_id, package_size, nominal_x, nominal_y, "
-                "upper_tol, lower_tol, template_name "
-                "FROM package_size ORDER BY package_size"
+                "SELECT ps.package_size_id, ps.package_size, t.template_name "
+                "FROM package_size ps "
+                "LEFT JOIN template t ON ps.template_id = t.template_id "
+                "ORDER BY ps.package_size"
+            )
+            return cur.fetchall()
+    finally:
+        db.close()
+
+
+@app.get("/api/part-numbers")
+async def list_part_numbers(package_size: str = Query(..., min_length=1)):
+    """คืนรายการ part_number (จากตาราง catalog part_number ตรงๆ ไม่ใช่ derive
+    จาก parts_specifications ที่เคยลงทะเบียนแล้ว) ที่ผูกกับ package_size ที่
+    ระบุ — ใช้เป็น dropdown ของช่อง Part Number ที่ cascade จาก Package Size
+    ในฟอร์ม Part Entry (New/Rework/IPM) เป็น dropdown "ปิด" เหมือน
+    operator/vendor/handler/owner/package_size — เลือกได้เฉพาะ part_number ที่
+    มีอยู่จริงในตาราง part_number เท่านั้น ไม่มีช่องพิมพ์เพิ่มค่าใหม่ (handler
+    ของ part นั้นๆ ผูกมากับ part_number อยู่แล้ว ไม่ต้องให้ผู้ใช้เลือก Handler
+    เองอีกที)
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT pn.part_number_name FROM part_number pn "
+                "JOIN package_size ps ON pn.package_size_id = ps.package_size_id "
+                "WHERE ps.package_size = %s "
+                "ORDER BY pn.part_number_name",
+                (package_size,),
+            )
+            return [row["part_number_name"] for row in cur.fetchall()]
+    finally:
+        db.close()
+
+
+@app.get("/api/templates")
+async def list_templates():
+    """คืนรายการ template ทั้งหมด — ใช้โดย Database Editor (edit.html) ตอน
+    จัดการตาราง template (Add/Rename/Delete) และตอนสร้าง/แก้ package_size
+    (เลือก template ที่จะผูกให้)
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT template_id, template_name FROM template ORDER BY template_name")
+            return cur.fetchall()
+    finally:
+        db.close()
+
+
+@app.get("/api/part-numbers/all")
+async def list_all_part_numbers():
+    """คืนรายการ part_number ทั้งหมดพร้อมรายละเอียดครบ (package_size/handler/
+    nominal/tolerance) — ใช้โดย Database Editor (edit.html) ต่างจาก
+    GET /api/part-numbers (คืนแค่ชื่อ กรองด้วย package_size — ใช้เป็น cascading
+    dropdown ของฟอร์ม Part Entry)
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT pn.part_number_id, pn.part_number_name, ps.package_size, "
+                "h.handler_name AS handler, pn.nominal_x, pn.nominal_y, "
+                "pn.upper_tol, pn.lower_tol "
+                "FROM part_number pn "
+                "JOIN package_size ps ON pn.package_size_id = ps.package_size_id "
+                "JOIN handler h       ON pn.handler_id = h.handler_id "
+                "ORDER BY pn.part_number_name"
             )
             return cur.fetchall()
     finally:
@@ -715,31 +1221,371 @@ async def list_package_sizes():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Lookup table management (Database Editor — Add/Rename/Delete)
+# ══════════════════════════════════════════════════════════════════════════════
+# operator/owner/vendor/handler/template เป็นตารางรูปแบบเดียวกันหมด (id + ชื่อ
+# ตัวเดียว) เลยใช้ helper function ชุดเดียวกัน 3 ตัวนี้ร่วมกันได้ทั้งหมด แทนที่
+# จะเขียน insert/rename/delete แยกกันซ้ำๆ ทีละตาราง — ยังคง endpoint แยกกัน
+# ตามตารางเหมือนเดิม (ไม่ทำ dynamic routing) เพื่อให้ URL คาดเดาได้ตรงไปตรงมา
+def _create_lookup(table: str, name_col: str, name: str) -> int:
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            try:
+                cur.execute(f"INSERT INTO {table} ({name_col}) VALUES (%s)", (name,))
+            except pymysql.MySQLError as exc:
+                raise HTTPException(409, f"เพิ่มไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
+            return cur.lastrowid
+    finally:
+        db.close()
+
+
+def _rename_lookup(table: str, id_col: str, name_col: str, id_value: int, name: str) -> None:
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            try:
+                cur.execute(f"UPDATE {table} SET {name_col} = %s WHERE {id_col} = %s", (name, id_value))
+            except pymysql.MySQLError as exc:
+                raise HTTPException(409, f"แก้ไขชื่อไม่สำเร็จ (ชื่อใหม่นี้อาจมีอยู่แล้ว): {exc}")
+            if cur.rowcount == 0:
+                raise HTTPException(404, "ไม่พบข้อมูล")
+    finally:
+        db.close()
+
+
+# ชื่อตารางจริงในหน้าจอ → ชื่อที่อ่านง่ายสำหรับ error message (ผู้ใช้ไม่ควรเห็น
+# ชื่อตารางดิบๆ อย่าง "parts_specifications" ในข้อความแจ้งเตือน)
+_TABLE_DISPLAY_NAME = {
+    "parts_specifications": "Part",
+    "measurements":         "Measurement",
+    "part_number":          "Part Number",
+    "package_size":         "Package Size",
+}
+
+
+def _delete_lookup(table: str, id_col: str, id_value: int, references: List[tuple],
+                   kind: Optional[str] = None) -> None:
+    """ลบ row ของตาราง lookup — ปฏิเสธถ้ายังมีตารางอื่นอ้างอิง id นี้อยู่จริง
+    (`references` คือ list ของ (referencing_table, referencing_col)) เพื่อไม่ให้
+    Part/Measurement ที่มีอยู่แล้วกลายเป็นข้อมูลกำพร้า (orphan FK) — แนะนำให้
+    "เปลี่ยนชื่อ" (rename) แทนถ้ายังมีข้อมูลผูกอยู่ ไม่ใช่ลบทิ้งแล้วสร้างใหม่
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            for ref_table, ref_col in references:
+                cur.execute(f"SELECT 1 FROM {ref_table} WHERE {ref_col} = %s LIMIT 1", (id_value,))
+                if cur.fetchone():
+                    display_name = _TABLE_DISPLAY_NAME.get(ref_table, ref_table)
+                    raise HTTPException(
+                        409,
+                        f"ลบไม่ได้ — ยังมีข้อมูลใน {display_name} ที่อ้างอิงถึงอยู่ "
+                        f"กรุณาเปลี่ยนชื่อแทนถ้าต้องการแก้ไข",
+                    )
+            # ── สำรองก่อนลบ ── ต้องอ่านตอนแถวยังอยู่ และหลังผ่านด่านเช็ค FK แล้ว
+            # (ถ้าเช็คไม่ผ่านจะ raise 409 ไปก่อน ไม่มีอะไรถูกลบ ไม่ต้องสำรอง)
+            row = _fetch_one(cur, f"SELECT * FROM {table} WHERE {id_col} = %s", (id_value,))
+            if row is None:
+                raise HTTPException(404, "ไม่พบข้อมูล")
+            _archive_before_delete(
+                kind=kind or table, table=table, pk={id_col: id_value}, row=row
+            )
+
+            cur.execute(f"DELETE FROM {table} WHERE {id_col} = %s", (id_value,))
+            if cur.rowcount == 0:
+                raise HTTPException(404, "ไม่พบข้อมูล")
+    finally:
+        db.close()
+
+
+class LookupCreate(BaseModel):
+    name: str
+
+
+class LookupUpdate(BaseModel):
+    name: str
+
+
+@app.post("/api/operators", status_code=201)
+async def create_operator(body: LookupCreate):
+    return {"operator_id": _create_lookup("operator", "operator_name", body.name)}
+
+
+@app.patch("/api/operators/{operator_id}")
+async def rename_operator(operator_id: int, body: LookupUpdate):
+    _rename_lookup("operator", "operator_id", "operator_name", operator_id, body.name)
+    return {"ok": True}
+
+
+@app.delete("/api/operators/{operator_id}")
+async def delete_operator(operator_id: int):
+    # operator ถูกอ้างอิงจาก measurements.operator_id เท่านั้น
+    _delete_lookup("operator", "operator_id", operator_id, [("measurements", "operator_id")])
+    return {"ok": True}
+
+
+@app.post("/api/owners", status_code=201)
+async def create_owner(body: LookupCreate):
+    return {"owner_id": _create_lookup("owner", "owner_name", body.name)}
+
+
+@app.patch("/api/owners/{owner_id}")
+async def rename_owner(owner_id: int, body: LookupUpdate):
+    _rename_lookup("owner", "owner_id", "owner_name", owner_id, body.name)
+    return {"ok": True}
+
+
+@app.delete("/api/owners/{owner_id}")
+async def delete_owner(owner_id: int):
+    # owner ถูกอ้างอิงจาก parts_specifications.owner_id เท่านั้น
+    _delete_lookup("owner", "owner_id", owner_id, [("parts_specifications", "owner_id")])
+    return {"ok": True}
+
+
+@app.post("/api/vendors", status_code=201)
+async def create_vendor(body: LookupCreate):
+    return {"vendor_id": _create_lookup("vendor", "vendor_name", body.name)}
+
+
+@app.patch("/api/vendors/{vendor_id}")
+async def rename_vendor(vendor_id: int, body: LookupUpdate):
+    _rename_lookup("vendor", "vendor_id", "vendor_name", vendor_id, body.name)
+    return {"ok": True}
+
+
+@app.delete("/api/vendors/{vendor_id}")
+async def delete_vendor(vendor_id: int):
+    # vendor ถูกอ้างอิงจาก parts_specifications.vendor_id เท่านั้น
+    _delete_lookup("vendor", "vendor_id", vendor_id, [("parts_specifications", "vendor_id")])
+    return {"ok": True}
+
+
+@app.post("/api/handlers", status_code=201)
+async def create_handler(body: LookupCreate):
+    return {"handler_id": _create_lookup("handler", "handler_name", body.name)}
+
+
+@app.patch("/api/handlers/{handler_id}")
+async def rename_handler(handler_id: int, body: LookupUpdate):
+    _rename_lookup("handler", "handler_id", "handler_name", handler_id, body.name)
+    return {"ok": True}
+
+
+@app.delete("/api/handlers/{handler_id}")
+async def delete_handler(handler_id: int):
+    # handler ถูกอ้างอิงจาก part_number.handler_id เท่านั้น (parts_specifications
+    # ไม่มี handler_id ตรงๆ แล้ว — derive ผ่าน part_number)
+    _delete_lookup("handler", "handler_id", handler_id, [("part_number", "handler_id")])
+    return {"ok": True}
+
+
+@app.post("/api/templates", status_code=201)
+async def create_template(body: LookupCreate):
+    return {"template_id": _create_lookup("template", "template_name", body.name)}
+
+
+@app.patch("/api/templates/{template_id}")
+async def rename_template(template_id: int, body: LookupUpdate):
+    _rename_lookup("template", "template_id", "template_name", template_id, body.name)
+    return {"ok": True}
+
+
+@app.delete("/api/templates/{template_id}")
+async def delete_template(template_id: int):
+    # template ถูกอ้างอิงจาก package_size.template_id เท่านั้น
+    _delete_lookup("template", "template_id", template_id, [("package_size", "template_id")])
+    return {"ok": True}
+
+
+class PackageSizeCreate(BaseModel):
+    package_size:  str
+    template_name: Optional[str] = None
+
+
+class PackageSizeUpdate(BaseModel):
+    package_size:  Optional[str] = None
+    template_name: Optional[str] = None
+
+
+@app.post("/api/package-sizes", status_code=201)
+async def create_package_size(body: PackageSizeCreate):
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            template_id = _lookup_id(cur, "template", "template_id", "template_name", body.template_name)
+            try:
+                cur.execute(
+                    "INSERT INTO package_size (package_size, template_id) VALUES (%s, %s)",
+                    (body.package_size, template_id),
+                )
+            except pymysql.MySQLError as exc:
+                raise HTTPException(409, f"เพิ่ม Package Size ไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
+            return {"package_size_id": cur.lastrowid}
+    finally:
+        db.close()
+
+
+@app.patch("/api/package-sizes/{package_size_id}")
+async def update_package_size(package_size_id: int, body: PackageSizeUpdate):
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            set_parts, values = [], []
+            if body.package_size is not None:
+                set_parts.append("package_size = %s")
+                values.append(body.package_size)
+            if body.template_name is not None:
+                template_id = _lookup_id(cur, "template", "template_id", "template_name", body.template_name)
+                set_parts.append("template_id = %s")
+                values.append(template_id)
+            if not set_parts:
+                raise HTTPException(400, "No valid fields provided")
+            try:
+                cur.execute(
+                    f"UPDATE package_size SET {', '.join(set_parts)} WHERE package_size_id = %s",
+                    (*values, package_size_id),
+                )
+            except pymysql.MySQLError as exc:
+                raise HTTPException(409, f"แก้ไข Package Size ไม่สำเร็จ (ชื่อใหม่นี้อาจมีอยู่แล้ว): {exc}")
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Package Size not found")
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.delete("/api/package-sizes/{package_size_id}")
+async def delete_package_size(package_size_id: int):
+    # package_size ถูกอ้างอิงจาก part_number.package_size_id เท่านั้น
+    _delete_lookup("package_size", "package_size_id", package_size_id, [("part_number", "package_size_id")])
+    return {"ok": True}
+
+
+class PartNumberCreate(BaseModel):
+    part_number_name: str
+    package_size:     str
+    handler:          str
+    nominal_x:        float
+    nominal_y:        float
+    upper_tol:        float
+    lower_tol:        float
+
+
+class PartNumberUpdate(BaseModel):
+    part_number_name: Optional[str] = None
+    package_size:     Optional[str] = None
+    handler:          Optional[str] = None
+    nominal_x:        Optional[float] = None
+    nominal_y:        Optional[float] = None
+    upper_tol:        Optional[float] = None
+    lower_tol:        Optional[float] = None
+
+
+@app.post("/api/part-numbers", status_code=201)
+async def create_part_number(body: PartNumberCreate):
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            package_size_id = _lookup_id(cur, "package_size", "package_size_id", "package_size", body.package_size)
+            handler_id      = _lookup_id(cur, "handler",      "handler_id",      "handler_name",  body.handler)
+            if package_size_id is None or handler_id is None:
+                raise HTTPException(400, "ต้องระบุ package_size และ handler ที่มีอยู่จริงในระบบ")
+            try:
+                cur.execute(
+                    "INSERT INTO part_number "
+                    "(part_number_name, package_size_id, handler_id, nominal_x, nominal_y, upper_tol, lower_tol) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (
+                        body.part_number_name, package_size_id, handler_id,
+                        body.nominal_x, body.nominal_y, body.upper_tol, body.lower_tol,
+                    ),
+                )
+            except pymysql.MySQLError as exc:
+                raise HTTPException(409, f"เพิ่ม Part Number ไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
+            return {"part_number_id": cur.lastrowid}
+    finally:
+        db.close()
+
+
+@app.patch("/api/part-numbers/{part_number_id}")
+async def update_part_number(part_number_id: int, body: PartNumberUpdate):
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            set_parts, values = [], []
+            if body.part_number_name is not None:
+                set_parts.append("part_number_name = %s")
+                values.append(body.part_number_name)
+            if body.package_size is not None:
+                package_size_id = _lookup_id(cur, "package_size", "package_size_id", "package_size", body.package_size)
+                set_parts.append("package_size_id = %s")
+                values.append(package_size_id)
+            if body.handler is not None:
+                handler_id = _lookup_id(cur, "handler", "handler_id", "handler_name", body.handler)
+                set_parts.append("handler_id = %s")
+                values.append(handler_id)
+            for field_name in ("nominal_x", "nominal_y", "upper_tol", "lower_tol"):
+                value = getattr(body, field_name)
+                if value is not None:
+                    set_parts.append(f"{field_name} = %s")
+                    values.append(value)
+            if not set_parts:
+                raise HTTPException(400, "No valid fields provided")
+            try:
+                cur.execute(
+                    f"UPDATE part_number SET {', '.join(set_parts)} WHERE part_number_id = %s",
+                    (*values, part_number_id),
+                )
+            except pymysql.MySQLError as exc:
+                raise HTTPException(409, f"แก้ไข Part Number ไม่สำเร็จ (ชื่อใหม่นี้อาจมีอยู่แล้ว): {exc}")
+            if cur.rowcount == 0:
+                raise HTTPException(404, "Part Number not found")
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.delete("/api/part-numbers/{part_number_id}")
+async def delete_part_number(part_number_id: int):
+    # part_number ถูกอ้างอิงจาก parts_specifications.part_number_id เท่านั้น
+    _delete_lookup("part_number", "part_number_id", part_number_id, [("parts_specifications", "part_number_id")])
+    return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Parts endpoints
 # ══════════════════════════════════════════════════════════════════════════════
-# SELECT ที่ join parts กับทุกตาราง lookup ไว้ในที่เดียว — ใช้ร่วมกันทั้ง
-# list_parts และ get_part เพื่อให้ response มีทั้งชื่อ (handler/vendor/
-# owner/package_size) และรายละเอียดของ package_size (nominal/tolerance/
+# SELECT ที่ join parts_specifications กับทุกตาราง lookup ไว้ในที่เดียว — ใช้
+# ร่วมกันทั้ง list_parts และ get_part เพื่อให้ response มีทั้งชื่อ (handler/
+# vendor/owner/package_size) และรายละเอียดของ part_number (nominal/tolerance/
 # template_name) ไม่ใช่แค่ id เปล่าๆ ที่ frontend เอาไปแสดงตรงๆ ไม่ได้ รวม
 # recieve_date ด้วย — ใช้ prefill ฟอร์ม Rework (auto-fill ข้อมูลเดิมของ ALPL
 # ที่กรอกกลับเข้ามา ยกเว้น recieve_date ที่ต้องเว้นว่างให้กรอกใหม่)
+#
+# schema: handler/package_size/nominal/tolerance/template_name ทั้งหมด derive
+# มาจาก part_number_id (ไม่ได้เก็บตรงที่ parts_specifications เอง) — join ทอด
+# parts_specifications -> part_number -> handler / package_size -> template
 PARTS_SELECT = """
-    SELECT p.part_id, p.number_alpl, p.part_number, p.description, p.po_number,
+    SELECT p.part_id, p.number_alpl, pn.part_number_name AS part_number,
+           p.description, p.po_number,
            p.recieve_date   AS recieve_date,
            h.handler_name   AS handler,
            v.vendor_name    AS vendor,
            o.owner_name     AS owner,
            ps.package_size  AS package_size,
-           ps.nominal_x     AS nominal_x,
-           ps.nominal_y     AS nominal_y,
-           ps.upper_tol     AS upper_tol,
-           ps.lower_tol     AS lower_tol,
-           ps.template_name AS template_name
-    FROM parts p
-    LEFT JOIN handler h       ON p.handler_id = h.handler_id
+           pn.nominal_x     AS nominal_x,
+           pn.nominal_y     AS nominal_y,
+           pn.upper_tol     AS upper_tol,
+           pn.lower_tol     AS lower_tol,
+           t.template_name  AS template_name
+    FROM parts_specifications p
+    LEFT JOIN part_number pn  ON p.part_number_id = pn.part_number_id
+    LEFT JOIN handler h       ON pn.handler_id = h.handler_id
     LEFT JOIN vendor v        ON p.vendor_id = v.vendor_id
     LEFT JOIN owner o         ON p.owner_id = o.owner_id
-    LEFT JOIN package_size ps ON p.package_size_id = ps.package_size_id
+    LEFT JOIN package_size ps ON pn.package_size_id = ps.package_size_id
+    LEFT JOIN template t      ON ps.template_id = t.template_id
 """
 
 
@@ -773,43 +1619,50 @@ def _block_if_session_running(cur, action: str) -> None:
     Button Guard ใน start_session — เช็คแค่ "มี session running อยู่ไหม" จึง
     เทียบเท่ากับ "session ปัจจุบันกำลังวัดอยู่ไหม")
     """
-    cur.execute("SELECT 1 FROM sessions WHERE state = 'running' LIMIT 1")
+    # นับ 'paused' ด้วย — session ที่พักไว้ยังวัดต่อได้อยู่ ข้อมูลจึงยังไม่นิ่ง
+    cur.execute("SELECT 1 FROM sessions WHERE state IN ('running', 'paused') LIMIT 1")
     if cur.fetchone():
         raise HTTPException(
             409,
-            f"ไม่สามารถ{action}ข้อมูลได้ขณะนี้ — กำลังมีการวัดอยู่ (session running) "
+            f"ไม่สามารถ{action}ข้อมูลได้ขณะนี้ — กำลังมีการวัดอยู่ (session running/paused) "
             f"กรุณากด Stop ก่อนแล้วค่อยแก้ไข",
         )
 
 
 class PartCreate(BaseModel):
-    # schema ใหม่: parts ไม่เก็บ nominal/tolerance/template_name ตรงๆ อีกต่อไป —
-    # ย้ายไปอยู่ใน package_size ทั้งหมด (ดู init.sql) เลือก package_size เดียว
-    # ก็ map ค่าพวกนี้ให้อัตโนมัติ ส่วน handler/vendor/owner ตอนนี้เป็น
-    # FK ไป lookup table — frontend ส่งมาเป็น "ชื่อ" (string จาก dropdown) แล้ว
-    # backend resolve เป็น id เอง (ดู _lookup_id)
+    # schema: parts_specifications ไม่เก็บ handler/package_size/nominal/
+    # tolerance/template_name ตรงๆ เลย — ทั้งหมด derive มาจาก part_number_id
+    # ตัวเดียว (ดู init.sql: part_number ผูก package_size_id + handler_id +
+    # nominal/tolerance ของตัวเองไว้แล้ว) เลือก part_number ก็ map ค่าพวกนี้
+    # ให้อัตโนมัติหมด ไม่ต้องส่ง handler/package_size แยกมาที่ endpoint นี้อีก
+    # (frontend ยังส่ง package_size มาด้วยเพื่อใช้ cascade dropdown Part Number
+    # เฉยๆ — เป็นแค่ field ส่วนเกินที่ endpoint นี้เพิกเฉยไม่ได้ใช้)
     #
     # part_number เป็น Optional เพราะตอน IPM เจอ ALPL ที่ยังไม่เคยลงทะเบียน
     # (ดู POST /api/session/start) จะลงทะเบียน part ใหม่แบบขั้นต่ำผ่าน endpoint
-    # นี้ — มีแค่ number_alpl + package_size เท่านั้น ยังไม่รู้ part_number จริง
+    # นี้ — อาจมีแค่ number_alpl เท่านั้น ยังไม่รู้ part_number จริง (แต่ถ้าไม่รู้
+    # part_number จะหา template_name ไม่เจอตอน start_session — ต้องตั้งให้
+    # ครบก่อนถึงจะเริ่มวัดได้จริง)
     #
-    # recieve_date เป็น Optional เหมือนกัน — ถ้าไม่ส่งมา (None/ไม่มี key) จะปล่อย
-    # ให้ DEFAULT CURRENT_TIMESTAMP ของคอลัมน์ recieve_date ทำงานแทน (ดู
-    # _insert_part_row) ฟอร์ม New ส่งมาเป็น optional, ฟอร์ม Rework บังคับกรอกเสมอ
+    # vendor/owner ยังเป็น FK ไป lookup table เหมือนเดิม — frontend ส่งมาเป็น
+    # "ชื่อ" (string จาก dropdown) แล้ว backend resolve เป็น id เอง (ดู _lookup_id)
+    #
+    # recieve_date เป็น Optional — ถ้าไม่ส่งมา/ส่งค่าว่าง จะถูกบันทึกเป็น NULL
+    # ตรงๆ (เว้นว่างแล้วว่างจริง ไม่เติมวันที่ปัจจุบันให้อัตโนมัติ — ดู
+    # _insert_part_row)
     number_alpl:   int
     part_number:   Optional[str] = None
-    handler:       Optional[str] = None
     description:   Optional[str] = None
     vendor:        Optional[str] = None
     po_number:     Optional[int] = None
-    package_size:  Optional[str] = None
+    package_size:  Optional[str] = None  # ไม่ได้ใช้ resolve อะไรที่นี่ (เก็บไว้เผื่อ frontend ส่งมา)
     owner:         Optional[str] = None
     recieve_date:  Optional[str] = None
 
 
 @app.get("/api/parts")
 async def list_parts(
-    limit:  int = Query(10, ge=1),
+    limit:  int = Query(10, ge=1, le=1000),   # มีเพดาน กันยิง limit=999999 ดึงทั้งตาราง
     offset: int = Query(0, ge=0),
     search: Optional[str] = None,
 ):
@@ -834,7 +1687,7 @@ async def list_parts(
     """
     conditions, params = [], []
     if search:
-        conditions.append("(CAST(p.number_alpl AS CHAR) LIKE %s OR p.part_number LIKE %s)")
+        conditions.append("(CAST(p.number_alpl AS CHAR) LIKE %s OR pn.part_number_name LIKE %s)")
         like = f"%{search}%"
         params.extend([like, like])
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
@@ -842,7 +1695,11 @@ async def list_parts(
     db = get_db()
     try:
         with db.cursor() as cur:
-            cur.execute(f"SELECT COUNT(*) AS total FROM parts p {where}", params)
+            cur.execute(
+                f"SELECT COUNT(*) AS total FROM parts_specifications p "
+                f"LEFT JOIN part_number pn ON p.part_number_id = pn.part_number_id {where}",
+                params,
+            )
             total = cur.fetchone()["total"]
             cur.execute(
                 f"{PARTS_SELECT} {where} ORDER BY p.number_alpl LIMIT %s OFFSET %s",
@@ -871,46 +1728,47 @@ async def get_part(part_id: int):
 
 
 def _insert_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
-    """Insert 1 row ลง table `parts` โดยใช้ number_alpl ที่ระบุ + field อื่นจาก
-    `config` (dict ของ field part_number/handler/vendor/package_size/
-    owner ฯลฯ) — handler/vendor/package_size/owner รับมาเป็น "ชื่อ"
-    (ตรงกับค่าที่เลือกจาก dropdown ฝั่ง frontend) แล้ว resolve เป็น id ก่อน insert
+    """Insert 1 row ลง table `parts_specifications` โดยใช้ number_alpl ที่ระบุ
+    + field อื่นจาก `config` (dict ของ field part_number/vendor/owner ฯลฯ) —
+    part_number/vendor/owner รับมาเป็น "ชื่อ" (ตรงกับค่าที่เลือกจาก dropdown
+    ฝั่ง frontend) แล้ว resolve เป็น id ก่อน insert
+
+    หมายเหตุ: handler/package_size ไม่ได้ resolve/insert ตรงนี้แล้ว เพราะ
+    schema ใหม่ derive ค่าพวกนี้มาจาก part_number_id ทั้งหมด (part_number
+    catalog ผูก package_size_id + handler_id ของตัวเองไว้แล้ว — ดู init.sql)
 
     ใช้ร่วมกันทั้งจาก endpoint POST /api/parts ปกติ, จาก flow ของ New queue ที่
     ALPL หลายตัวใช้ config เดียวกันซ้ำ, และจากการลงทะเบียน part แบบขั้นต่ำตอน
     IPM เจอ ALPL ที่ยังไม่เคยลงทะเบียน (ดู start_session / create_measurement)
     """
-    handler_id      = _lookup_id(cur, "handler",      "handler_id",      "handler_name",  config.get("handler"))
-    vendor_id       = _lookup_id(cur, "vendor",        "vendor_id",       "vendor_name",   config.get("vendor"))
-    owner_id        = _lookup_id(cur, "owner",         "owner_id",        "owner_name",    config.get("owner"))
-    package_size_id = _lookup_id(cur, "package_size",  "package_size_id", "package_size",  config.get("package_size"))
+    part_number_id = _lookup_id(cur, "part_number", "part_number_id", "part_number_name", config.get("part_number"))
+    vendor_id      = _lookup_id(cur, "vendor",      "vendor_id",      "vendor_name",      config.get("vendor"))
+    owner_id       = _lookup_id(cur, "owner",       "owner_id",       "owner_name",       config.get("owner"))
 
+    # recieve_date: ใส่คอลัมน์นี้ใน INSERT เสมอ แม้จะเป็นค่าว่าง (จะได้ NULL) —
+    # ตั้งใจให้ "เว้นว่างแล้วว่างจริง" ไม่ใช่เติมวันที่ปัจจุบันให้อัตโนมัติ
+    # (ถ้าไม่ใส่คอลัมน์นี้เลย DEFAULT CURRENT_TIMESTAMP ของ schema จะทำงานแทน
+    # ซึ่งไม่ใช่พฤติกรรมที่ต้องการ)
     columns = [
-        "number_alpl", "part_number", "handler_id", "description",
-        "vendor_id", "po_number", "package_size_id", "owner_id",
+        "number_alpl", "part_number_id", "description",
+        "vendor_id", "po_number", "owner_id", "recieve_date",
     ]
     values: List[Any] = [
-        number_alpl, config.get("part_number"), handler_id, config.get("description"),
-        vendor_id, config.get("po_number"), package_size_id, owner_id,
+        number_alpl, part_number_id, config.get("description"),
+        vendor_id, config.get("po_number"), owner_id,
+        config.get("recieve_date") or None,
     ]
-    # recieve_date: ใส่ column นี้เฉพาะตอนที่ config มีค่ามาจริง (ช่อง Receive
-    # Date ในฟอร์ม New — optional) ถ้าไม่ส่งมา/เป็นค่าว่าง ปล่อยให้ column ไม่
-    # อยู่ใน INSERT statement เลย เพื่อให้ DEFAULT CURRENT_TIMESTAMP ของ
-    # recieve_date ทำงานแทน (ถ้า insert ค่า NULL ตรงๆ DEFAULT จะไม่ทำงาน)
-    recieve_date = config.get("recieve_date")
-    if recieve_date:
-        columns.append("recieve_date")
-        values.append(recieve_date)
 
     placeholders = ", ".join(["%s"] * len(values))
     cur.execute(
-        f"INSERT INTO parts ({', '.join(columns)}) VALUES ({placeholders})",
+        f"INSERT INTO parts_specifications ({', '.join(columns)}) VALUES ({placeholders})",
         tuple(values),
     )
 
 
 def _update_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
-    """Update 1 row ที่มีอยู่แล้วใน table `parts` (ตรงข้ามกับ _insert_part_row)
+    """Update 1 row ที่มีอยู่แล้วใน table `parts_specifications` (ตรงข้ามกับ
+    _insert_part_row)
 
     ใช้เฉพาะกรณี Rework: ALPL นี้เคยผ่าน New มาแล้ว (มี Part row อยู่จริง) แต่
     งานไม่ผ่าน ถูกส่งไป Rework แล้วส่งกลับมาวัดใหม่ — ฟอร์ม Rework auto-fill
@@ -919,19 +1777,18 @@ def _update_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
     เขียนทับ row เดิม (WHERE number_alpl = %s) แทนที่จะ insert row ใหม่ซ้อน
     ขึ้นมา ซึ่งจะชนกับ UNIQUE constraint ของ number_alpl ทันที
     """
-    handler_id      = _lookup_id(cur, "handler",      "handler_id",      "handler_name",  config.get("handler"))
-    vendor_id       = _lookup_id(cur, "vendor",        "vendor_id",       "vendor_name",   config.get("vendor"))
-    owner_id        = _lookup_id(cur, "owner",         "owner_id",        "owner_name",    config.get("owner"))
-    package_size_id = _lookup_id(cur, "package_size",  "package_size_id", "package_size",  config.get("package_size"))
+    part_number_id = _lookup_id(cur, "part_number", "part_number_id", "part_number_name", config.get("part_number"))
+    vendor_id      = _lookup_id(cur, "vendor",      "vendor_id",      "vendor_name",      config.get("vendor"))
+    owner_id       = _lookup_id(cur, "owner",       "owner_id",       "owner_name",       config.get("owner"))
     cur.execute(
-        "UPDATE parts SET part_number = %s, handler_id = %s, description = %s, "
-        "vendor_id = %s, po_number = %s, package_size_id = %s, owner_id = %s, "
+        "UPDATE parts_specifications SET part_number_id = %s, description = %s, "
+        "vendor_id = %s, po_number = %s, owner_id = %s, "
         "recieve_date = %s "
         "WHERE number_alpl = %s",
         (
-            config.get("part_number"), handler_id, config.get("description"),
-            vendor_id, config.get("po_number"), package_size_id, owner_id,
-            config.get("recieve_date"), number_alpl,
+            part_number_id, config.get("description"),
+            vendor_id, config.get("po_number"), owner_id,
+            config.get("recieve_date") or None, number_alpl,
         ),
     )
 
@@ -967,14 +1824,17 @@ async def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
     409 ที่อ่านง่ายแทนที่จะปล่อยให้เป็น 500 ดิบๆ
     """
     # field ที่แก้ตรงๆ ได้เลย ไม่ต้อง resolve ผ่าน lookup table
-    direct_fields = {"number_alpl", "part_number", "description", "po_number", "recieve_date"}
+    direct_fields = {"number_alpl", "description", "po_number", "recieve_date"}
     # field ที่เป็น "ชื่อ" จาก dropdown — ต้อง resolve เป็น id ก่อน (key ที่รับจาก
-    # request → (คอลัมน์จริงใน parts, ตาราง lookup, id column, name column))
+    # request → (คอลัมน์จริงใน parts_specifications, ตาราง lookup, id column,
+    # name column)) — part_number ย้ายมาอยู่ตรงนี้แล้ว (ไม่ใช่ direct_fields
+    # อีกต่อไป) เพราะตอนนี้ต้อง resolve เป็น part_number_id ก่อน ไม่ใช่คอลัมน์
+    # VARCHAR ตรงๆ — handler/package_size ไม่มีในนี้แล้ว เพราะ derive มาจาก
+    # part_number_id ทั้งคู่ ไม่ได้เก็บที่ parts_specifications โดยตรง
     lookup_fields = {
-        "handler":      ("handler_id",      "handler",      "handler_id",      "handler_name"),
-        "vendor":       ("vendor_id",       "vendor",       "vendor_id",       "vendor_name"),
-        "owner":        ("owner_id",        "owner",        "owner_id",        "owner_name"),
-        "package_size": ("package_size_id", "package_size", "package_size_id", "package_size"),
+        "part_number": ("part_number_id", "part_number", "part_number_id", "part_number_name"),
+        "vendor":      ("vendor_id",      "vendor",      "vendor_id",      "vendor_name"),
+        "owner":       ("owner_id",       "owner",       "owner_id",       "owner_name"),
     }
     db = get_db()
     try:
@@ -994,7 +1854,7 @@ async def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
             set_clause = ", ".join(set_parts)
             try:
                 cur.execute(
-                    f"UPDATE parts SET {set_clause} WHERE number_alpl = %s",
+                    f"UPDATE parts_specifications SET {set_clause} WHERE number_alpl = %s",
                     (*values, part_id),
                 )
             except pymysql.MySQLError as exc:
@@ -1011,78 +1871,67 @@ async def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
 
 
 @app.delete("/api/parts/{part_id}")
-async def delete_part(part_id: int, cascade: bool = False):
-    """ลบ Part 1 row ออกจากตาราง `parts`
+async def delete_part(part_id: int):
+    """ลบ Part 1 row ออกจากตาราง `parts_specifications`
 
-    FK ของ sessions.number_alpl/measurements.number_alpl ที่ชี้มาที่
-    parts.number_alpl เป็นแบบ RESTRICT (ไม่มี ON DELETE CASCADE ที่ระดับ DB —
-    ดู init.sql) ปกติแล้วถ้า ALPL นี้ยังมีประวัติผูกอยู่ MySQL จะปฏิเสธ DELETE เอง
+    **กฎการลบ (ตามที่ตกลงกันไว้)**: ลบได้ต่อเมื่อ ALPL นี้ "ไม่มีข้อมูลการวัด
+    (Measurement) เหลืออยู่เลย" เท่านั้น — ถ้ายังมี Measurement อยู่จะปฏิเสธ
+    ทันทีด้วย 409 พร้อมข้อความบอกจำนวนรายการที่ติดอยู่ (frontend เอาไปโชว์เป็น
+    popup เตือน) ไม่มีโหมด cascade ที่ลบ Measurement ตามไปด้วยอีกต่อไป —
+    ประวัติการวัดถือเป็นข้อมูลจริงที่ห้ามหายไปโดยไม่ตั้งใจ ถ้าผู้ใช้ต้องการลบ
+    จริงๆ ต้องไปลบ Measurement ทีละรายการเองที่ตาราง Measurements ก่อน
 
-    cascade=False (ค่า default): ลบตรงๆ เจอ FK block ก็ปฏิเสธเป็น 409
-
-    cascade=True: ใช้เมื่อผู้ใช้กด "ยืนยัน" ใน popup ของ edit.html ที่เตือนไว้ชัดเจน
-    ว่าลบ Part นี้จะลบ Measurement ทั้งหมดของ ALPL นี้ไปด้วย — เป็นการ cascade
-    แบบต้องยืนยันจากผู้ใช้ตรงๆ ทุกครั้ง (ไม่ใช่ ON DELETE CASCADE เงียบๆ ที่ระดับ DB)
-
-    จุดที่ต้องระวัง: 1 session (แถวใน `sessions`) แทน "1 รอบการวัด" ซึ่งในโหมด
-    New อาจมีคิวหลาย ALPL ได้ แต่คอลัมน์ sessions.number_alpl เก็บได้แค่ ALPL
-    เดียว (ตัวแรกที่กรอกตอนเริ่ม) — ถ้า ALPL ที่กำลังจะลบดันเป็น "ตัวแทน" ของ
-    session ที่ยังมี measurement ของ ALPL อื่นในคิวเดียวกันเหลืออยู่ การ
-    DELETE FROM sessions ตรงๆ จะโดน FK block (measurements.session_id ของ ALPL
-    อื่นยังชี้มาที่ session นี้อยู่) เราจึงไม่ลบ session ทิ้งดื้อๆ แต่ตรวจก่อนว่า
-    session นั้นยังมี measurement ของ ALPL อื่นเหลืออยู่ไหม ถ้ามี → "ย้าย" session
-    ไปอ้างอิง ALPL อื่นที่ยังมีข้อมูลแทน (แค่เอา ALPL นี้ออกจากการเป็นตัวแทน ไม่ได้
-    ลบประวัติของ ALPL อื่นทิ้งไปด้วย) ถ้าไม่เหลือแล้วจริงๆ ค่อยลบ session ทิ้ง
-    ทำทั้งหมดเป็น transaction เดียว (ปิด autocommit ชั่วคราว) กัน DB ค้างอยู่
-    ครึ่งๆ กลางๆ ถ้ามีขั้นไหนพังกลางทาง
-
-    ก่อนจะแตะ DB เลย เช็คก่อนว่า ALPL นี้ "ยังไม่ถึงคิว" ของ session ที่กำลัง
-    running อยู่ตอนนี้ไหม (เทียบกับ session_queues ใน memory ไม่ต้อง query DB)
-    ถ้าใช่ ปฏิเสธการลบไปเลย เพราะถ้าปล่อยให้ลบไปตอนนี้ พอ Agent วัดมาถึง ALPL
-    นี้จริงๆ ในอนาคต จะหา Part ไม่เจอ — โหมด IPM จะพังเป็น 404 ตรงๆ (ไม่มี
-    lazy-insert กันไว้เหมือนโหมด New) ส่วนโหมด New แม้จะ self-heal ได้ด้วย
-    lazy-insert (ดู create_measurement) แต่ก็ทำให้ผู้ใช้งง เพราะกดลบไปแล้วแต่
-    ข้อมูลกลับมาอีกทีแบบไม่มีการแจ้งเตือน จึงบล็อกไว้ทั้ง 2 โหมดให้พฤติกรรม
-    คาดเดาได้ง่ายเหมือนกัน — ALPL ที่วัดไปแล้ว (ผ่านคิวไปแล้ว) ไม่โดนบล็อก
-    ยังลบได้ตามปกติแม้ session จะยัง running อยู่ก็ตาม (ดู delete_part เดิม
-    ที่ทดสอบแล้วว่า retarget session ไปอ้างอิง ALPL อื่นที่วัดแล้วได้อย่างปลอดภัย
-    ไม่กระทบ session ที่กำลัง running อยู่)
+    ส่วนแถวใน `sessions` ที่อ้างถึง ALPL นี้อยู่ ถือเป็นข้อมูล bookkeeping ล้วนๆ
+    (ไม่ใช่ผลการวัด) — พอไม่มี Measurement เหลือแล้ว session พวกนั้นก็ไม่มี
+    ความหมายอะไรต่อ จึงลบทิ้งให้อัตโนมัติก่อนลบ Part เพื่อไม่ให้ FK block
+    ทำทั้งหมดเป็น transaction เดียว (ปิด autocommit ชั่วคราว) กัน DB ค้างครึ่งๆ
+    กลางๆ ถ้ามีขั้นไหนพังกลางทาง
     """
     db = get_db()
     try:
         db.autocommit(False)
         with db.cursor() as cur:
             _block_if_session_running(cur, "ลบ")
-            if cascade:
-                cur.execute("DELETE FROM measurements WHERE number_alpl = %s", (part_id,))
-                cur.execute("SELECT session_id FROM sessions WHERE number_alpl = %s", (part_id,))
-                orphaned_session_ids = [row["session_id"] for row in cur.fetchall()]
-                for sid in orphaned_session_ids:
-                    cur.execute(
-                        "SELECT number_alpl FROM measurements WHERE session_id = %s LIMIT 1",
-                        (sid,),
-                    )
-                    remaining = cur.fetchone()
-                    if remaining:
-                        # session นี้ยังมี measurement ของ ALPL อื่นเหลืออยู่ — ย้าย
-                        # ให้ session อ้างอิง ALPL นั้นแทน แทนที่จะลบ session ทิ้ง
-                        cur.execute(
-                            "UPDATE sessions SET number_alpl = %s WHERE session_id = %s",
-                            (remaining["number_alpl"], sid),
-                        )
-                    else:
-                        # ไม่มี measurement เหลือแล้วจริงๆ (ทั้ง session ไม่เคยมีผลวัด
-                        # ของ ALPL ไหนเลย หรือ ALPL ที่กำลังลบเป็นตัวเดียวที่เคยวัด)
-                        cur.execute("DELETE FROM sessions WHERE session_id = %s", (sid,))
-            try:
-                cur.execute("DELETE FROM parts WHERE number_alpl = %s", (part_id,))
-            except pymysql.MySQLError as exc:
+
+            # เช็คก่อนเลยว่ามี Measurement ของ ALPL นี้เหลืออยู่ไหม — ถ้ามี ปฏิเสธ
+            # ทันที ไม่แตะอะไรใน DB เลย (ตรวจเองแทนที่จะรอ FK error เพื่อให้ได้
+            # ข้อความบอกจำนวนที่ติดอยู่ชัดเจน ผู้ใช้จะได้รู้ว่าต้องไปจัดการอะไรต่อ)
+            cur.execute("SELECT COUNT(*) AS n FROM measurements WHERE number_alpl = %s", (part_id,))
+            measurement_count = cur.fetchone()["n"]
+            if measurement_count:
                 db.rollback()
                 raise HTTPException(
                     409,
-                    f"ลบไม่ได้ — ALPL {part_id} ยังมี Session/Measurement ผูกอยู่ "
-                    f"กรุณาลบ Measurement ที่เกี่ยวข้องกับ ALPL นี้ทั้งหมดก่อน แล้วค่อยลบ Part: {exc}",
+                    f"ลบไม่ได้ — ALPL {part_id} ยังมีข้อมูลการวัด (Measurement) อยู่ "
+                    f"{measurement_count} รายการ กรุณาลบ Measurement ของ ALPL นี้ให้หมดก่อน "
+                    f"แล้วค่อยลบ Part",
                 )
+
+            # ไม่มี Measurement เหลือแล้ว — เคลียร์ session ที่อ้างถึง ALPL นี้ทิ้งได้
+            # อย่างปลอดภัย (ไม่มี measurement ตัวไหนชี้มาที่ session พวกนี้แล้ว)
+            # ── สำรองก่อนลบ ── ต้องเก็บ sessions ที่จะถูกลบพ่วงไปด้วย ไม่งั้น
+            # กู้ Part กลับมาได้แต่ประวัติ session หายไปแล้วกู้ไม่ได้อีก
+            part_row = _fetch_one(
+                cur, "SELECT * FROM parts_specifications WHERE number_alpl = %s", (part_id,)
+            )
+            if part_row is None:
+                db.rollback()
+                raise HTTPException(404, "Part not found")
+            cur.execute("SELECT * FROM sessions WHERE number_alpl = %s", (part_id,))
+            session_rows = cur.fetchall() or []
+            _archive_before_delete(
+                kind="part", table="parts_specifications",
+                pk={"number_alpl": part_id}, row=part_row,
+                related={"sessions": session_rows},
+            )
+
+            cur.execute("DELETE FROM sessions WHERE number_alpl = %s", (part_id,))
+
+            try:
+                cur.execute("DELETE FROM parts_specifications WHERE number_alpl = %s", (part_id,))
+            except pymysql.MySQLError as exc:
+                db.rollback()
+                raise HTTPException(409, f"ลบ ALPL {part_id} ไม่สำเร็จ: {exc}")
             if cur.rowcount == 0:
                 db.rollback()
                 raise HTTPException(404, "Part not found")
@@ -1100,10 +1949,19 @@ async def delete_part(part_id: int, cascade: bool = False):
 # list_measurements และ export_csv เพื่อให้ response/CSV มีชื่อ operator (ไม่ใช่
 # แค่ operator_id เปล่าๆ) หลังจากย้าย Operator จากคอลัมน์ VARCHAR ตรงๆ ไปเป็น
 # FK ชี้ตาราง operator
+# nominal/tolerance ที่ join มาด้วย ใช้ให้ frontend คำนวณเองได้ว่า value_x/value_y
+# แต่ละตัว "ผ่านหรือไม่ผ่าน" แยกรายแกน (DB เก็บแค่ result รวมของทั้ง 2 แกน) —
+# ตาราง Measurement ทั้งหน้า Home และ Edit ใช้ระบายสีเขียว/แดงรายค่า
+# หมายเหตุ: CSV export ใช้ SELECT ชุดนี้ด้วย จึงมีคอลัมน์พวกนี้ติดไปในไฟล์ export
+# ด้วย (ตั้งใจ — มีประโยชน์ตอนเอาไปวิเคราะห์ต่อใน Power BI/Excel)
 MEASUREMENTS_SELECT = """
-    SELECT m.*, op.operator_name AS operator_name
+    SELECT m.*, op.operator_name AS operator_name,
+           pn.nominal_x AS nominal_x, pn.nominal_y AS nominal_y,
+           pn.upper_tol AS upper_tol, pn.lower_tol AS lower_tol
     FROM measurements m
     LEFT JOIN operator op ON m.operator_id = op.operator_id
+    LEFT JOIN parts_specifications p ON m.number_alpl = p.number_alpl
+    LEFT JOIN part_number pn ON p.part_number_id = pn.part_number_id
 """
 
 
@@ -1162,9 +2020,9 @@ async def list_measurements(
     if result:
         conditions.append("m.result = %s"); params.append(result)
     if date_from:
-        conditions.append("m.timestamp >= %s"); params.append(date_from)
+        conditions.append("m.timestamp >= %s"); params.append(_day_start(date_from))
     if date_to:
-        conditions.append("m.timestamp <= %s"); params.append(date_to)
+        conditions.append("m.timestamp <= %s"); params.append(_day_end(date_to))
     if session_id is not None:
         conditions.append("m.session_id = %s"); params.append(session_id)
 
@@ -1278,6 +2136,9 @@ async def create_measurement(req: MeasurementCreate):
                     if pos >= len(queue):
                         raise HTTPException(400, "Measurement queue หมดแล้วสำหรับ session นี้")
                     number_alpl = queue[pos]
+                    # entry_mode/note ถูก map ไว้แล้วตั้งแต่ start_session ตามโหมด
+                    # ที่ผู้ใช้เลือกหน้าเว็บ: Rework → ('New', 'Rework'),
+                    # New → ('New', None), IPM → ('IPM', None)
                     measure_type = qstate["entry_mode"]  # 'IPM' หรือ 'New'
                     operator_name = qstate.get("operator")
                     note = qstate.get("note")
@@ -1292,29 +2153,30 @@ async def create_measurement(req: MeasurementCreate):
                 # ทันวัด (เช่น กด Stop กลางคัน) กลายเป็น Part ค้างอยู่ใน DB ทั้งที่
                 # ไม่มีประวัติจริง
                 if qstate is not None and qstate.get("new_part_config") is not None:
-                    cur.execute("SELECT 1 FROM parts WHERE number_alpl = %s", (number_alpl,))
+                    cur.execute("SELECT 1 FROM parts_specifications WHERE number_alpl = %s", (number_alpl,))
                     if not cur.fetchone():
                         try:
                             _insert_part_row(cur, number_alpl, qstate["new_part_config"])
                         except pymysql.MySQLError as exc:
                             raise HTTPException(409, f"Insert Part ALPL {number_alpl} ไม่สำเร็จ: {exc}")
 
-            # หา nominal/tolerance ผ่าน package_size ที่ผูกกับ part นี้ — schema
-            # ใหม่เก็บ tolerance ตัวเดียวใช้ร่วมกันทั้งแกน X/Y (upper_tol/lower_tol)
-            # แทนคอลัมน์แยกแกนแบบเดิม (ดู init.sql — package_size table)
+            # หา nominal/tolerance ผ่าน part_number ที่ผูกกับ part นี้ — tolerance
+            # ตัวเดียวใช้ร่วมกันทั้งแกน X/Y (upper_tol/lower_tol) เก็บอยู่ที่
+            # part_number (ไม่ใช่ package_size อีกต่อไป — ดู init.sql)
             cur.execute(
-                "SELECT ps.nominal_x, ps.nominal_y, ps.upper_tol, ps.lower_tol "
-                "FROM parts p JOIN package_size ps ON p.package_size_id = ps.package_size_id "
+                "SELECT pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol "
+                "FROM parts_specifications p "
+                "JOIN part_number pn ON p.part_number_id = pn.part_number_id "
                 "WHERE p.number_alpl = %s",
                 (number_alpl,),
             )
             part = cur.fetchone()
             if not part:
-                raise HTTPException(404, "Part not found (หรือยังไม่ได้ตั้ง package_size ให้ part นี้)")
+                raise HTTPException(404, "Part not found (หรือยังไม่ได้ตั้ง part_number ให้ part นี้)")
 
             # เช็ค OK/NG — tolerance ตัวเดียวใช้ร่วมกันทั้งแกน X และ Y
-            ok_x = (part["nominal_x"] - part["lower_tol"]) <= req.value_x <= (part["nominal_x"] + part["upper_tol"])
-            ok_y = (part["nominal_y"] - part["lower_tol"]) <= req.value_y <= (part["nominal_y"] + part["upper_tol"])
+            ok_x = _within_tolerance(req.value_x, part["nominal_x"], part["upper_tol"], part["lower_tol"])
+            ok_y = _within_tolerance(req.value_y, part["nominal_y"], part["upper_tol"], part["lower_tol"])
             result = "OK" if (ok_x and ok_y) else "NG"
 
             # resolve ชื่อ operator (จาก dropdown) เป็น operator_id ก่อน insert —
@@ -1387,6 +2249,7 @@ async def create_measurement(req: MeasurementCreate):
                 )
             status = "complete"
             session_queues.pop(session_id, None)  # session จบแล้ว ลบคิวออกจาก memory
+            measure_timeouts.pop(session_id, None)
             await push_event(
                 "session_complete",
                 {"session_id": session_id, "measured": measured, "target": target},
@@ -1408,6 +2271,17 @@ async def create_measurement(req: MeasurementCreate):
                     "value_x":        req.value_x,
                     "value_y":        req.value_y,
                     "result":         result,
+                    # ผลแยกรายแกน + ช่วงที่รับได้ — ให้ Live Telemetry โชว์ได้ว่า
+                    # "พังที่แกนไหน" ไม่ใช่รู้แค่ result รวม (DB เก็บแค่ result
+                    # รวมอย่างเดียว ค่าพวกนี้จึงต้องส่งมาทาง event ตอนวัดเสร็จ
+                    # ส่วนตอน refresh หน้าเว็บ frontend คำนวณเองจาก nominal/tol
+                    # ที่ /api/measurements แนบมาให้ — ดู MEASUREMENTS_SELECT)
+                    "ok_x":           ok_x,
+                    "ok_y":           ok_y,
+                    "nominal_x":      part["nominal_x"],
+                    "nominal_y":      part["nominal_y"],
+                    "upper_tol":      part["upper_tol"],
+                    "lower_tol":      part["lower_tol"],
                     "measured":       measured,
                     "target":         target,
                 },
@@ -1433,8 +2307,8 @@ async def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(..
     "แก้" ค่าที่บันทึกไว้แล้วเป็นการ override ด้วยมือจากหน้า editor ซึ่งไม่มีมาก่อน
 
     ใช้ pattern เดียวกับ update_part(): whitelist เฉพาะ field ที่อนุญาตให้แก้ได้
-    (value_x, value_y, number_alpl, note) เพื่อกัน body ไปเขียนทับ column ที่ไม่ควร
-    แก้ผ่าน endpoint นี้ (เช่น session_id, timestamp, image_path)
+    (number_alpl, operator) เพื่อกัน body ไปเขียนทับ column ที่ไม่ควรแก้ผ่าน
+    endpoint นี้ (เช่น session_id, timestamp, image_path, value_x/value_y)
 
     `number_alpl` แก้ไขได้ (เพิ่มเข้ามาใหม่) — ใช้กรณี IPM พิมพ์/เลือก ALPL ผิดตัว
     (เลือกชิ้นที่มีอยู่จริงในระบบผิดตัว) วิธีแก้ที่ถูกคือ retarget measurement row
@@ -1447,19 +2321,37 @@ async def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(..
     จึงคำนวณ result ใหม่เสมอหลัง update ทุกครั้ง (ไม่ว่าจะแก้ field ไหนก็ตาม) แทนที่
     จะรับค่าจาก frontend ตรงๆ กัน Result ค้างไม่ตรงกับ ALPL/ค่าที่วัดได้จริง
     """
-    allowed = {"value_x", "value_y", "number_alpl", "note"}
-    fields = {k: v for k, v in data.items() if k in allowed}
-    if not fields:
-        raise HTTPException(400, "No valid fields provided")
-    set_clause = ", ".join(f"{k} = %s" for k in fields)
+    # แก้ได้เฉพาะ number_alpl กับ operator เท่านั้น (ตามที่ตกลงกันไว้) —
+    # value_x/value_y เป็นผลวัดจริงจากเครื่อง ส่วน note/measure_type เป็นข้อมูล
+    # ของ session ที่ระบบกำหนดตอนวัด ไม่ควรถูกแก้ย้อนหลังผ่าน endpoint นี้
+    # operator ส่งมาเป็น "ชื่อ" จาก dropdown แล้ว resolve เป็น operator_id เอง
+    # (เหมือน pattern ของ update_part) — measurements.operator_id เป็น NOT NULL
+    # จึงไม่รับค่าว่าง ต้องเลือก operator ที่มีอยู่จริงเสมอ
+    allowed = {"number_alpl"}
     db = get_db()
     try:
         with db.cursor() as cur:
             _block_if_session_running(cur, "แก้ไข")
+
+            set_parts, values = [], []
+            for k, v in data.items():
+                if k in allowed:
+                    set_parts.append(f"{k} = %s")
+                    values.append(v)
+            if "operator" in data:
+                operator_id = _lookup_id(cur, "operator", "operator_id", "operator_name", data["operator"])
+                if operator_id is None:
+                    raise HTTPException(400, "ต้องเลือก Operator (เว้นว่างไม่ได้)")
+                set_parts.append("operator_id = %s")
+                values.append(operator_id)
+            if not set_parts:
+                raise HTTPException(400, "No valid fields provided")
+
+            set_clause = ", ".join(set_parts)
             try:
                 cur.execute(
                     f"UPDATE measurements SET {set_clause} WHERE measurement_id = %s",
-                    (*fields.values(), measurement_id),
+                    (*values, measurement_id),
                 )
             except pymysql.MySQLError as exc:
                 raise HTTPException(
@@ -1472,10 +2364,10 @@ async def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(..
             # คำนวณ OK/NG ใหม่จากค่า value_x/value_y/number_alpl "ปัจจุบัน" ของ row
             # นี้เสมอ (หลัง update) — ครอบคลุมทั้งกรณีแก้ ALPL, แก้ value, หรือแก้แค่ note
             cur.execute(
-                "SELECT m.value_x, m.value_y, ps.nominal_x, ps.nominal_y, ps.upper_tol, ps.lower_tol "
+                "SELECT m.value_x, m.value_y, pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol "
                 "FROM measurements m "
-                "JOIN parts p ON m.number_alpl = p.number_alpl "
-                "JOIN package_size ps ON p.package_size_id = ps.package_size_id "
+                "JOIN parts_specifications p ON m.number_alpl = p.number_alpl "
+                "JOIN part_number pn ON p.part_number_id = pn.part_number_id "
                 "WHERE m.measurement_id = %s",
                 (measurement_id,),
             )
@@ -1483,10 +2375,10 @@ async def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(..
             if not row:
                 raise HTTPException(
                     404,
-                    "ไม่พบ package_size ของ ALPL นี้ — คำนวณ OK/NG ใหม่ไม่ได้ (ตรวจสอบว่า Part ตั้ง Package Size ไว้แล้ว)",
+                    "ไม่พบ part_number ของ ALPL นี้ — คำนวณ OK/NG ใหม่ไม่ได้ (ตรวจสอบว่า Part ตั้ง Part Number ไว้แล้ว)",
                 )
-            ok_x = (row["nominal_x"] - row["lower_tol"]) <= row["value_x"] <= (row["nominal_x"] + row["upper_tol"])
-            ok_y = (row["nominal_y"] - row["lower_tol"]) <= row["value_y"] <= (row["nominal_y"] + row["upper_tol"])
+            ok_x = _within_tolerance(row["value_x"], row["nominal_x"], row["upper_tol"], row["lower_tol"])
+            ok_y = _within_tolerance(row["value_y"], row["nominal_y"], row["upper_tol"], row["lower_tol"])
             new_result = "OK" if (ok_x and ok_y) else "NG"
             cur.execute(
                 "UPDATE measurements SET result = %s WHERE measurement_id = %s",
@@ -1540,49 +2432,81 @@ async def upload_measurement_image(measurement_id: int, file: UploadFile = File(
     เดียวกัน) แต่ตอนนี้ Agent อยู่คนละเครื่อง (Pi) กับ backend (PC) จึงต้องรับ
     "เนื้อไฟล์จริง" มาด้วยเลย แล้ว backend เป็นคนตัดสินใจ path ปลายทางเอง
 
-    path ปลายทาง: ALPL_IMAGE_DIR/<package_size ของ ALPL นี้>/<measurement_id>_<number_alpl><นามสกุลไฟล์>
+    path ปลายทาง (เปลี่ยนจากเดิมที่แยกตาม package_size มาเป็นแยกตามวันที่ ตามที่
+    ตกลงกันไว้): ALPL_IMAGE_DIR/<DD-MM-YYYY พ.ศ.>/<number_alpl>_<DD-MM-YYYY พ.ศ.>.jpg
+    เช่น "22-07-2569/203_22-07-2569.jpg" — ไฟล์ต้นทางจาก TM-X (ปกติเป็น .bmp)
+    ถูกแปลงเป็น .jpg เสมอด้วย Pillow ก่อนเซฟ (ไม่เก็บไฟล์ต้นฉบับ .bmp ไว้เลย)
     เก็บเป็น "path สัมพัทธ์" (relative ต่อ ALPL_IMAGE_DIR) ลงคอลัมน์
     measurements.image_path — ไม่เก็บ absolute path เต็มๆ ลง DB เพื่อไม่ให้
     รั่วโครงสร้างไฟล์ระบบจริงออกไป และให้ /api/image-url ต่อ URL ได้ตรงๆ จาก
     ค่านี้ (ดู get_image_url ด้านล่าง กับ static mount /media/alpl ท้ายไฟล์)
+
+    หมายเหตุ (อัปเดต): ชื่อไฟล์เปลี่ยนจาก "number_alpl + วันที่" เป็น
+    "number_alpl + measurement_id + ตัวสุ่ม" (เช่น "203_5821_a3f9c8d4e5b6c7d8.jpg")
+    — measurement_id ทำให้ชื่อไฟล์ไม่ซ้ำกันเองอยู่แล้วโดยธรรมชาติ (เลขรันของแต่ละ
+    การวัด) ส่วนตัวสุ่ม (hex 16 ตัวอักษร จาก secrets.token_hex) กันคนในวง office
+    network เดาชื่อไฟล์ ALPL ตัวอื่นถูกโดยไล่เลข measurement_id เอา (ตัว IP
+    allowlist ของ office network เป็นชั้นป้องกันหลักที่กันคนนอกอยู่แล้ว ตัวสุ่มนี้
+    เป็นชั้นเสริมเท่านั้น) โฟลเดอร์ปลายทางยังคงแยกตามวันที่วัดเหมือนเดิม (ดู
+    dest_dir ด้านล่าง) แค่ชื่อไฟล์ข้างในไม่มีวันที่ปนแล้ว
+    ผลข้างเคียง: ชื่อไฟล์ไม่ซ้ำกันเองอัตโนมัติอีกต่อไปเหมือนก่อนหน้านี้ (เดิมใช้
+    number_alpl+วันที่ ล้วนๆ ทำให้เขียนทับไฟล์เดิมเองโดยไม่ต้องทำอะไรเพิ่ม) จึง
+    ต้องลบไฟล์เก่าด้วยมือด้านล่าง (`old_image_path`) หลังเซฟไฟล์ใหม่สำเร็จ
+    ไม่งั้นรูปเก่าจะค้างสะสมในโฟลเดอร์ทุกครั้งที่ ALPL เดียวกันถูกวัดซ้ำในวันเดียวกัน
+    — ยังคงพฤติกรรมเดิมไว้ว่า "เก็บแค่รูปล่าสุดของ ALPL นั้นในแต่ละวัน"
     """
     db = get_db()
     try:
         with db.cursor() as cur:
             cur.execute(
-                "SELECT m.number_alpl, ps.package_size "
-                "FROM measurements m "
-                "JOIN parts p ON m.number_alpl = p.number_alpl "
-                "LEFT JOIN package_size ps ON p.package_size_id = ps.package_size_id "
-                "WHERE m.measurement_id = %s",
+                "SELECT number_alpl, image_path FROM measurements WHERE measurement_id = %s",
                 (measurement_id,),
             )
             row = cur.fetchone()
             if not row:
                 raise HTTPException(404, "Measurement not found")
 
-            package_folder = _safe_folder_name(row["package_size"])
-            dest_dir = os.path.join(ALPL_IMAGE_DIR, package_folder)
+            old_image_path = row["image_path"]  # ไฟล์เก่า (ถ้ามี) ของ ALPL นี้ — ต้องลบทิ้งเองหลังเซฟไฟล์ใหม่สำเร็จ
+
+            date_str = _thai_date_str()
+            dest_dir = os.path.join(ALPL_IMAGE_DIR, date_str)
             os.makedirs(dest_dir, exist_ok=True)
 
-            ext = os.path.splitext(file.filename or "")[1] or ".jpg"
-            filename = f"{measurement_id}_{row['number_alpl']}{ext}"
+            # ตัวสุ่มต่อท้ายชื่อไฟล์ — ใช้ secrets (CSPRNG) ไม่ใช่ random module
+            # เพราะเป็นงานที่เกี่ยวกับความปลอดภัย (เดาไม่ได้จริงในทางปฏิบัติ)
+            # 8 ไบต์ (16 ตัวอักษร hex) พอสำหรับ defense-in-depth ชั้นเสริม ไม่ต้อง
+            # ยาวถึงระดับกัน brute-force จากอินเทอร์เน็ตแบบ token รีเซ็ตรหัสผ่าน
+            token = secrets.token_hex(8)
+            filename = f"{row['number_alpl']}_{measurement_id}_{token}.jpg"
             dest_path_abs = os.path.join(dest_dir, filename)
-            image_path_rel = f"{package_folder}/{filename}"  # เก็บลง DB แบบ forward-slash เสมอ (ใช้ต่อ URL ตรงๆ ได้)
+            image_path_rel = f"{date_str}/{filename}"  # เก็บลง DB แบบ forward-slash เสมอ (ใช้ต่อ URL ตรงๆ ได้)
 
             try:
-                with open(dest_path_abs, "wb") as out:
-                    shutil.copyfileobj(file.file, out)
-            except OSError as exc:
-                raise HTTPException(500, f"บันทึกไฟล์รูปไม่สำเร็จ: {exc}")
+                image_bytes = await file.read()
+                img = Image.open(BytesIO(image_bytes))
+                if img.mode != "RGB":
+                    img = img.convert("RGB")  # JPEG ไม่รองรับ alpha/palette (RGBA/P/LA ฯลฯ)
+                img.save(dest_path_abs, "JPEG", quality=90)
+            except Exception as exc:
+                raise HTTPException(500, f"บันทึก/แปลงไฟล์รูปเป็น .jpg ไม่สำเร็จ: {exc}")
             finally:
-                file.file.close()
+                await file.close()
 
             cur.execute(
                 "UPDATE measurements SET image_path = %s, image_upload_failed = 0 "
                 "WHERE measurement_id = %s",
                 (image_path_rel, measurement_id),
             )
+
+            # ลบไฟล์เก่าทิ้ง "หลัง" เซฟไฟล์ใหม่และอัปเดต DB สำเร็จแล้วเท่านั้น —
+            # ชื่อไฟล์มีตัวสุ่มแล้วจึงไม่ทับกันเองอัตโนมัติแบบเดิมอีกต่อไป ถ้าไม่ลบ
+            # เอง ไฟล์เก่าจะค้างสะสมในโฟลเดอร์ทุกครั้งที่วัด ALPL เดิมซ้ำวันเดียวกัน
+            if old_image_path and old_image_path != image_path_rel:
+                # ใช้ _delete_image_file เพื่อให้ได้การกัน 2 ชั้นเหมือนตอน DELETE
+                # (URL ตกค้างจากยุค MinIO + path ที่หลุดออกนอกโฟลเดอร์รูป) —
+                # เดิม os.remove ตรงๆ ถ้าเจอแถวเก่าที่เก็บ URL เต็มไว้จะได้ path
+                # มั่วๆ ที่ไม่ควรไปแตะตั้งแต่แรก
+                _delete_image_file(old_image_path)
         await push_event(
             "image_updated",
             {
@@ -1598,16 +2522,48 @@ async def upload_measurement_image(measurement_id: int, file: UploadFile = File(
 
 @app.delete("/api/measurements/{measurement_id}")
 async def delete_measurement(measurement_id: int):
-    """ลบ measurement 1 row (เช่น ลบค่าที่อ่านผิดพลาด/เป็นการทดสอบ)"""
+    """ลบ measurement 1 row (เช่น ลบค่าที่อ่านผิดพลาด/เป็นการทดสอบ) + ลบไฟล์รูปด้วย
+
+    เดิมลบแค่แถวใน DB ทำให้ไฟล์รูปกลายเป็น "ไฟล์กำพร้า" ค้างสะสมใน
+    ALPL_IMAGE_DIR ไปเรื่อยๆ โดยไม่มีอะไรอ้างถึงอีกเลย — และไล่เก็บทีหลังไม่ได้
+    ด้วย เพราะข้อมูลที่จะใช้เทียบว่าไฟล์ไหนกำพร้า (แถวใน measurements) ถูกลบไป
+    พร้อมกันแล้ว
+
+    ลำดับสำคัญ: **อ่าน image_path ก่อน → ลบแถว → ค่อยลบไฟล์**
+    ถ้าลบแถวไม่สำเร็จ (ไม่เจอ row / ติด session guard) ไฟล์ต้องยังอยู่ครบ
+    ส่วนถ้าลบแถวสำเร็จแล้วลบไฟล์พลาด ก็ยอมให้ไฟล์ค้าง ดีกว่าทำให้ request พัง
+    ทั้งที่ข้อมูลถูกลบไปเรียบร้อยแล้ว (autocommit=True แถวถูก commit ทันที)
+    """
     db = get_db()
     try:
         with db.cursor() as cur:
             _block_if_session_running(cur, "ลบ")
+
+            row = _fetch_one(
+                cur, "SELECT * FROM measurements WHERE measurement_id = %s", (measurement_id,)
+            )
+            if not row:
+                raise HTTPException(404, "Measurement not found")
+            image_path = row["image_path"]
+
+            # ── สำรองก่อนลบ ── ตัวนี้ "ย้าย" ไฟล์รูปเข้าถังขยะให้ด้วย ไม่ได้ลบ
+            archived = _archive_before_delete(
+                kind="measurement", table="measurements",
+                pk={"measurement_id": measurement_id}, row=row,
+                image_path=image_path,
+            )
+
             cur.execute(
                 "DELETE FROM measurements WHERE measurement_id = %s", (measurement_id,)
             )
             if cur.rowcount == 0:
                 raise HTTPException(404, "Measurement not found")
+
+        # ลบไฟล์รูปเฉพาะตอนที่ "สำรองไม่สำเร็จ" เท่านั้น — ถ้าสำรองได้ ไฟล์ถูก
+        # ย้ายเข้าถังขยะไปแล้ว (_delete_image_file จะหาไม่เจอและคืน False เอง
+        # อยู่แล้ว แต่เขียนเงื่อนไขให้ชัดดีกว่าพึ่งผลข้างเคียง)
+        if archived is None and _delete_image_file(image_path):
+            log.info("ลบไฟล์รูปของ measurement %s แล้ว (%s)", measurement_id, image_path)
         return {"ok": True}
     finally:
         db.close()
@@ -1623,8 +2579,9 @@ async def delete_measurement(measurement_id: int):
 # แทน แต่ดีไซน์การจัดเก็บ (โครงสร้างโฟลเดอร์/ชื่อไฟล์/ใครเป็นคนย้ายไฟล์) ยังไม่
 # fix — จึงตัด /api/upload-url ทิ้งไปเลย (Agent ตอนนี้ไม่อัปโหลดรูปแล้ว) ส่วน
 # /api/image-url: ดีไซน์เสร็จแล้ว — image_path ใน DB เป็น path สัมพัทธ์ต่อ
-# ALPL_IMAGE_DIR เสมอ (เช่น "3x3/42_1028.jpg" — ดู upload_measurement_image
-# ด้านบน) จึงต่อ URL ตรงๆ ได้จาก static mount "/media/alpl" (ท้ายไฟล์) ไม่ต้อง
+# ALPL_IMAGE_DIR เสมอ (เช่น "22-07-2569/203_22-07-2569.jpg" — แยกโฟลเดอร์ตาม
+# วันที่วัด ดู upload_measurement_image ด้านบน) จึงต่อ URL ตรงๆ ได้จาก static
+# mount "/media/alpl" (ท้ายไฟล์) ไม่ต้อง
 # ออก presigned URL แบบ MinIO เดิมอีกต่อไป (ไฟล์อยู่บนดิสก์เครื่องนี้ตรงๆ)
 @app.get("/api/image-url/{measurement_id}")
 async def get_image_url(measurement_id: int):
@@ -1651,56 +2608,1407 @@ async def get_image_url(measurement_id: int):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# CSV Export
+# Export (CSV) — เทมเพลตเลือกคอลัมน์ + filter + preview
 # ══════════════════════════════════════════════════════════════════════════════
-@app.get("/api/export/csv")
-async def export_csv(
-    number_alpl: Optional[int] = None,
-    result:      Optional[str] = None,
-    date_from:   Optional[str] = None,
-    date_to:     Optional[str] = None,
-    session_id:  Optional[int] = None,
-):
-    """Export ประวัติ measurement (พร้อม filter) เป็นไฟล์ CSV ให้ดาวน์โหลด
+# SELECT ก้อนเดียวที่ join ครบทุกตารางที่ export อาจต้องใช้ — ดึงมาทั้งหมดเสมอ
+# แล้วค่อยเลือก/จัดรูปแบบคอลัมน์ในฝั่ง Python ตามเทมเพลต (ไม่ประกอบ SQL แบบ
+# dynamic จากค่าที่ผู้ใช้ส่งมา จึงไม่มีช่องให้ SQL injection เลย)
+EXPORT_SELECT = """
+    SELECT m.measurement_id, m.session_id, m.number_alpl, m.value_x, m.value_y,
+           m.result, m.note, m.measure_type, m.timestamp,
+           op.operator_name,
+           pn.part_number_name, pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol,
+           h.handler_name, ps.package_size, t.template_name,
+           v.vendor_name, o.owner_name,
+           p.po_number, p.description, p.recieve_date
+    FROM measurements m
+    LEFT JOIN operator op             ON m.operator_id = op.operator_id
+    LEFT JOIN parts_specifications p  ON m.number_alpl = p.number_alpl
+    LEFT JOIN part_number pn          ON p.part_number_id = pn.part_number_id
+    LEFT JOIN handler h               ON pn.handler_id = h.handler_id
+    LEFT JOIN package_size ps         ON pn.package_size_id = ps.package_size_id
+    LEFT JOIN template t              ON ps.template_id = t.template_id
+    LEFT JOIN vendor v                ON p.vendor_id = v.vendor_id
+    LEFT JOIN owner o                 ON p.owner_id = o.owner_id
+"""
 
-    ทำไมต้องใช้ Pandas: เป็นวิธีที่ง่ายที่สุดในการแปลง row จาก DB ให้เป็น CSV
-    ที่ถูกต้อง (จัดการ type, encoding, ค่าที่ขาดหายไป) โดยไม่ต้องเขียน CSV เอง
-    ใช้ utf-8-sig encoding เพื่อให้เปิดใน Excel ได้ถูกต้องแม้มีตัวอักษรไทยอยู่ใน
-    ไฟล์ (BOM ช่วยไม่ให้ตัวอักษรเพี้ยน) ใช้ filter เดียวกันกับ list_measurements
-    เพื่อให้ข้อมูลที่แสดงในตารางตรงกับที่ export ออกมา
+
+def _fmt_num(v, digits: int = 3):
+    return "" if v is None else f"{float(v):.{digits}f}"
+
+
+def _csv_header(key: str) -> str:
+    """หัวคอลัมน์ในไฟล์ CSV — ใช้ csv_label ถ้ามี ไม่มีก็ใช้ label ตามปกติ
+
+    มีไว้เพราะบางช่องชื่อที่เหมาะกับ "ชิปในหน้าแก้ผังรายงาน" กับ "หัวคอลัมน์ใน
+    ไฟล์ CSV" ไม่ใช่ชื่อเดียวกัน เช่น timestamp: ในรายงานเลือกได้ว่าจะเอาแค่
+    วันที่หรือเวลา จึงเรียกว่า "Date" แต่ CSV ออกทั้งวันและเวลาในช่องเดียวเสมอ
+    เรียกว่า Date เฉยๆ จะสื่อผิด
     """
-    conditions, params = [], []
-    if number_alpl is not None:
-        conditions.append("m.number_alpl = %s"); params.append(number_alpl)
-    if result:
-        conditions.append("m.result = %s"); params.append(result)
-    if date_from:
-        conditions.append("m.timestamp >= %s"); params.append(date_from)
-    if date_to:
-        conditions.append("m.timestamp <= %s"); params.append(date_to)
-    if session_id is not None:
-        conditions.append("m.session_id = %s"); params.append(session_id)
+    c = EXPORT_COLUMNS[key]
+    return c.get("csv_label") or c["label"]
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+def _fmt_timestamp(r, fmt: str = "datetime") -> str:
+    """วันเวลาของการวัด — เลือกได้ว่าจะเอาอะไรบ้าง (ผู้ใช้ติ๊กในหน้าแก้ผังรายงาน)
+    date      → 30/07/2569 แบบ DD/MM/YYYY
+    time      → 14:23:11
+    datetime  → ทั้งคู่
+    """
+    ts = r["timestamp"]
+    if not ts:
+        return ""
+    if fmt == "time":
+        return ts.strftime("%H:%M:%S")
+    if fmt == "date":
+        return ts.strftime("%d/%m/%Y")
+    return ts.strftime("%d/%m/%Y %H:%M:%S")
+
+
+# รูปแบบที่ให้เลือกได้ของช่องวันเวลา (frontend เอาไปทำ dropdown บนเซลล์)
+_TIME_FORMATS = [
+    {"key": "date",     "label": "Date"},
+    {"key": "time",     "label": "Time"},
+    {"key": "datetime", "label": "Date & Time"},
+]
+
+
+def _axis_state(r, axis: str) -> str:
+    """ค่าที่วัดได้ของแกนนี้ อยู่ในสเปกไหม — คืน "OK"/"NG" ("" ถ้าเทียบไม่ได้)
+
+    ต่างจาก Result ที่เป็นค่าดิบใน DB อยู่แล้ว — อันนี้ต้องคำนวณเทียบสเปกทีละแกน
+    เพราะ Result เป็นผลรวมของทั้ง X และ Y (X ผ่านแต่ Y ไม่ผ่าน → Result = NG
+    ทั้งที่ตัวเลข X เองอยู่ในสเปก) ถ้าเอา Result มาใช้ระบายสีช่อง X จะสีผิด
+    """
+    val = r[f"value_{axis}"]
+    nom = r[f"nominal_{axis}"]
+    if val is None or nom is None or r["upper_tol"] is None or r["lower_tol"] is None:
+        return ""
+    return "OK" if _within_tolerance(val, nom, r["upper_tol"], r["lower_tol"]) else "NG"
+
+
+def _tolerance_spec(r) -> str:
+    """สเปกขนาดชิ้นงานแบบย่อบรรทัดเดียว — ใช้ในรายงาน PDF/Excel เท่านั้น
+
+    รูปแบบ: "<nominal>  +<upper>  -<lower>" เช่น "9.02  +0.03  -0.01"
+    ถ้า nominal X กับ Y ไม่เท่ากัน (package ไม่ใช่ทรงจัตุรัส) จะคั่นด้วย "/"
+    เป็น "3.28/7.43  +0.02  -0.01" — ที่ยุบเลขเดียวตอน X=Y เพราะรายงาน
+    ที่ห้อง PM Kit ใช้อยู่เขียนแบบนั้น (ดูตัวอย่างที่ผู้ใช้ให้มา)
+
+    ทศนิยม 2 ตำแหน่งเท่านั้น (ไม่ใช่ 3 ตำแหน่งแบบ _fmt_num ปกติ) เพราะสเปก
+    บนแบบชิ้นงานเขียนแค่ 2 ตำแหน่ง — ส่วนค่าที่วัดได้จริง (value_x/value_y)
+    ยังใช้ 3 ตำแหน่งเหมือนเดิม เพราะต้องเห็นความละเอียดของการวัด
+
+    หมายเหตุ: หน้า Export CSV ยังใช้คอลัมน์แยก (nominal_x/nominal_y/
+    upper_tol/lower_tol) เหมือนเดิม ไม่ได้ถูกยุบตาม — ตั้งใจให้ CSV แยกช่อง
+    เพื่อเอาไปคำนวณต่อได้ ส่วนรายงานเน้นอ่านง่ายบนกระดาษ
+    """
+    d = 2
+    nx, ny = r["nominal_x"], r["nominal_y"]
+    if nx is None and ny is None:
+        nom = ""
+    elif nx is None or ny is None:
+        nom = _fmt_num(nx if nx is not None else ny, d)
+    elif abs(float(nx) - float(ny)) < _TOL_EPS:
+        nom = _fmt_num(nx, d)
+    else:
+        nom = f"{_fmt_num(nx, d)}/{_fmt_num(ny, d)}"
+
+    parts = [p for p in (nom,
+                         f"+{_fmt_num(r['upper_tol'], d)}" if r["upper_tol"] is not None else "",
+                         f"-{_fmt_num(r['lower_tol'], d)}" if r["lower_tol"] is not None else "") if p]
+    return "  ".join(parts)
+
+
+# catalog ของคอลัมน์ที่เลือกใส่เทมเพลตได้
+#   key    → ชื่อที่เก็บใน export_template.columns_json (เป็น "สัญญา" กับ frontend)
+#   label  → หัวคอลัมน์ในไฟล์ CSV
+#   group  → ใช้จัดกลุ่มในหน้าเลือกคอลัมน์
+#   get    → ฟังก์ชันดึง/จัดรูปแบบค่าจาก row ที่ EXPORT_SELECT คืนมา
+# หมายเหตุ: nominal และ tolerance แยกเป็นคอลัมน์ละค่า (Nominal X, Nominal Y,
+# Upper Tol, Lower Tol) ไม่รวมเป็นช่องเดียวแบบที่แสดงบนหน้าเว็บ ("4.030 / 4.030")
+# เพราะไฟล์ export เอาไปคำนวณต่อใน Excel/Power BI ถ้ารวมเป็นสตริงจะต้องมาแยกเอง
+EXPORT_COLUMNS: Dict[str, Dict[str, Any]] = {
+    # row_number = ไม่ได้มาจาก DB — _render_report นับลำดับแถวให้ตอนคลี่ผัง
+    # scope=report เพราะ CSV ไม่ต้องมีเลขลำดับ (Excel/โปรแกรมอื่นใส่เองได้)
+    "item":          {"label": "Item",          "group": "ข้อมูลการวัด", "scope": "report",
+                      "row_number": True, "get": lambda r: ""},
+    "number_alpl":   {"label": "ALPL",          "group": "ข้อมูลการวัด",
+                      "header": "Number ALPL", "get": lambda r: r["number_alpl"]},
+    # Value X/Y เป็น scope=csv เพราะในรายงานมันไม่ยืนเดี่ยว — เป็นส่วนหนึ่งของ
+    # บล็อก Tolerance เสมอ (ดู tolerance_spec ด้านล่าง)
+    # values/state = ใช้ตั้ง "หน้าตาแยกตามค่า" ในรายงาน (เช่น เกินสเปกให้พื้นแดง)
+    # state ของแกนต้องคำนวณเอง ไม่ใช้ Result เพราะ Result เป็นผลรวมของทั้ง X และ Y
+    "value_x":       {"label": "Value X",       "group": "ข้อมูลการวัด", "scope": "csv",
+                      "values": ["OK", "NG"], "state": lambda r: _axis_state(r, "x"),
+                      "get": lambda r: _fmt_num(r["value_x"])},
+    "value_y":       {"label": "Value Y",       "group": "ข้อมูลการวัด", "scope": "csv",
+                      "values": ["OK", "NG"], "state": lambda r: _axis_state(r, "y"),
+                      "get": lambda r: _fmt_num(r["value_y"])},
+    # ── บล็อก Tolerance (รายงานเท่านั้น) ────────────────────────────────
+    # ลากครั้งเดียวได้ผังกว้าง 2 คอลัมน์ สูง 3 แถว:
+    #   แถว 1  [        Tolerance        ]   ผสาน 2 คอลัมน์ — หัวตาราง
+    #   แถว 2  [   ข้อมูล Tolerance      ]   ผสาน 2 คอลัมน์ — สเปกของกลุ่ม
+    #   แถว 3   ข้อมูล Value X | ข้อมูล Value Y  แถวที่ทำซ้ำต่อ 1 การวัด
+    # แถว 2 พิมพ์ครั้งเดียวต่อกลุ่ม เพราะรายงานถูกแบ่งกลุ่มด้วยสเปกนี้เสมอ
+    #
+    # label  = ชื่อชิปในแผงซ้าย (บอกว่าลากแล้วได้อะไรบ้าง)
+    # header = ข้อความที่พิมพ์เป็นหัวตารางจริงในรายงาน — คนละอันกับ label
+    #          เพราะหัวตารางบนกระดาษต้องสั้นว่า "Tolerance" เฉยๆ
+    "tolerance_spec": {
+        "label": "Tolerance + Value X/Y", "group": "ข้อมูลการวัด", "scope": "report",
+        "get": _tolerance_spec,
+        "block": {
+            "cols": 2,
+            "header": "Tolerance",
+            "data": [{"key": "value_x", "label": "Value X"},
+                     {"key": "value_y", "label": "Value Y"}],
+        },
+    },
+    "result":        {"label": "Result",        "group": "ข้อมูลการวัด", "values": ["OK", "NG"],
+                      "state": lambda r: r["result"] or "",
+                      "get": lambda r: r["result"]},
+    "note":          {"label": "Note",          "group": "ข้อมูลการวัด", "get": lambda r: r["note"] or ""},
+    "operator":      {"label": "Operator",      "group": "ข้อมูลการวัด", "get": lambda r: r["operator_name"] or ""},
+    "measure_type":  {"label": "Measure Type",  "group": "ข้อมูลการวัด", "get": lambda r: r["measure_type"] or ""},
+    # header = ข้อความหัวตารางเริ่มต้นในรายงาน (ต่างจาก label ที่เป็นชื่อชิป/หัว CSV)
+    # formats = รูปแบบที่ติ๊กเลือกได้บนเซลล์ — ค่าเริ่มต้นคือตัวแรกในลิสต์ (date)
+    "timestamp":     {"label": "Date",          "csv_label": "Timestamp",
+                      "group": "ข้อมูลการวัด",
+                      "header": "Date", "formats": _TIME_FORMATS,
+                      "get": lambda r: _fmt_timestamp(r, "datetime"),
+                      "get_fmt": _fmt_timestamp},
+    "session_id":    {"label": "Session",       "group": "ข้อมูลการวัด", "get": lambda r: r["session_id"]},
+
+    "part_number":   {"label": "Part Number",   "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["part_number_name"] or ""},
+    "handler":       {"label": "Handler",       "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["handler_name"] or ""},
+    "package_size":  {"label": "Package Size",  "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["package_size"] or ""},
+    "template_name": {"label": "Template",      "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["template_name"] or ""},
+    # ── สเปกขนาด: CSV ใช้ 4 ช่องแยก / รายงาน PDF-Excel ใช้ช่องรวมช่องเดียว ──
+    # scope บอกว่าคอลัมน์นี้โผล่ในหน้าไหน (ไม่ใส่ = โผล่ทั้งสองหน้า)
+    "nominal_x":     {"label": "Nominal X",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["nominal_x"])},
+    "nominal_y":     {"label": "Nominal Y",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["nominal_y"])},
+    "upper_tol":     {"label": "Upper Tol",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["upper_tol"])},
+    "lower_tol":     {"label": "Lower Tol",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["lower_tol"])},
+    "vendor":        {"label": "Vendor",        "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["vendor_name"] or ""},
+    "owner":         {"label": "Owner",         "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["owner_name"] or ""},
+    "po_number":     {"label": "PO Number",     "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["po_number"] if r["po_number"] is not None else ""},
+    "description":   {"label": "Description",   "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["description"] or ""},
+    "recieve_date":  {"label": "Receive Date",  "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["recieve_date"].strftime("%d/%m/%Y") if r["recieve_date"] else ""},
+}
+
+
+# kind ของเทมเพลตมี 3 ค่า: 'csv' | 'pdf' | 'excel' — แยกลิสต์กันคนละหน้า
+# ('report' คือชื่อเก่าสมัยที่ PDF/Excel ใช้ลิสต์ร่วมกัน ยังอ่านของเดิมได้อยู่)
+# ส่วน "ชุดคอลัมน์" มีแค่ 2 แบบ: csv ใช้คอลัมน์แยก / รายงานใช้บล็อก Tolerance
+def _columns_scope(kind: str) -> str:
+    return "csv" if kind == "csv" else "report"
+
+
+@app.get("/api/export/columns")
+async def list_export_columns(kind: str = "csv"):
+    """คืน catalog คอลัมน์ที่ใส่ในเทมเพลตได้ (key/label/group)
+    ใช้สร้างหน้าเลือกคอลัมน์ — frontend ไม่ต้อง hardcode รายชื่อเอง
+
+    kind='csv'          → ได้ Nominal X / Nominal Y / Upper Tol / Lower Tol แยก 4 ช่อง
+    kind='pdf'|'excel'  → ได้ช่องรวม "Tolerance" ช่องเดียวแทนทั้ง 4 ช่องนั้น
+    คอลัมน์ที่ไม่ระบุ scope โผล่ทั้งสองแบบ
+    """
+    out = []
+    for k, c in EXPORT_COLUMNS.items():
+        if c.get("scope") not in (None, _columns_scope(kind)):
+            continue
+        item = {"key": k, "label": c["label"], "group": c["group"]}
+        if c.get("block"):
+            # แนบ values ของ "ลูก" ในบล็อกไปด้วย (value_x/value_y ก็ตั้งหน้าตา
+            # แยกตามค่าได้เหมือน Result) — ลูกไม่ได้อยู่ใน catalog เป็นตัวของตัวเอง
+            blk = dict(c["block"])
+            blk["data"] = [
+                {**d, **({"values": EXPORT_COLUMNS[d["key"]]["values"]}
+                         if EXPORT_COLUMNS.get(d["key"], {}).get("values") else {})}
+                for d in c["block"]["data"]
+            ]
+            item["block"] = blk             # ผังหลายเซลล์ที่ frontend ต้องกางออก
+        if c.get("header"):
+            item["header"] = c["header"]    # ข้อความหัวตารางเริ่มต้นในรายงาน
+        if c.get("values"):
+            item["values"] = c["values"]    # ค่าที่เป็นไปได้ → ตั้งหน้าตาแยกตามค่าได้
+        if c.get("formats"):
+            item["formats"] = c["formats"]  # รูปแบบที่ติ๊กเลือกได้บนเซลล์
+        out.append(item)
+    return out
+
+
+# คอลัมน์รวมแบบเก่าที่เคยมีในเทมเพลตที่บันทึกไว้ก่อนหน้า → คอลัมน์ย่อยชุดใหม่
+# (เทมเพลตเก่าที่ผู้ใช้เซฟไว้แล้วจะยังใช้งานได้ ไม่ใช่หายไปเงียบๆ)
+_LEGACY_COLUMN_ALIASES = {
+    "nominal_xy": ["nominal_x", "nominal_y"],
+    "tolerance":  ["upper_tol", "lower_tol"],
+}
+
+
+def _parse_columns(raw) -> List[str]:
+    """แปลงค่า columns_json จาก DB (str หรือ list) เป็น list ของ key ที่ใช้ได้จริง
+    — แตก key แบบเก่าเป็นคอลัมน์ย่อย และตัด key ที่ไม่รู้จักทิ้ง
+    """
+    cols = raw
+    if isinstance(cols, str):
+        try:
+            cols = json.loads(cols)
+        except Exception:
+            cols = []
+    if not isinstance(cols, list):
+        cols = []
+
+    out: List[str] = []
+    for c in cols:
+        for key in _LEGACY_COLUMN_ALIASES.get(c, [c]):
+            if key in EXPORT_COLUMNS and key not in out:
+                out.append(key)
+    return out
+
+
+def _get_template(cur, export_template_id: int) -> Dict[str, Any]:
+    cur.execute(
+        "SELECT export_template_id, name, kind, columns_json, layout_json, is_default "
+        "FROM export_template WHERE export_template_id = %s",
+        (export_template_id,),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(404, "ไม่พบเทมเพลตนี้")
+    return row
+
+
+def _parse_layout(raw):
+    """แปลง layout_json จาก DB (str หรือ dict) เป็น dict — None ถ้าไม่มี/พัง"""
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except Exception:
+            return None
+    return raw if isinstance(raw, dict) else None
+
+
+@app.get("/api/export/templates")
+async def list_export_templates(kind: str = "csv"):
+    """คืนเทมเพลตของชนิดที่ระบุ — csv / pdf / excel แยกลิสต์กันคนละชนิด
+
+    PDF กับ Excel เคยใช้ kind='report' ร่วมกัน ทำให้เทมเพลตปนกันข้ามรูปแบบ
+    ตอนนี้แยกแล้ว แต่ยังดึงของเก่าที่เป็น 'report' มาแสดงด้วย จะได้ไม่หายไปเฉยๆ
+    """
+    kinds = [kind, "report"] if kind in ("pdf", "excel") else [kind]
+    ph = ", ".join(["%s"] * len(kinds))
     db = get_db()
     try:
         with db.cursor() as cur:
             cur.execute(
-                f"{MEASUREMENTS_SELECT} {where} ORDER BY m.timestamp DESC", params
+                "SELECT export_template_id, name, kind, columns_json, layout_json, is_default "
+                f"FROM export_template WHERE kind IN ({ph}) ORDER BY is_default DESC, name",
+                kinds,
             )
-            rows = cur.fetchall()
+            return [
+                {
+                    "export_template_id": r["export_template_id"],
+                    "name": r["name"],
+                    "kind": r["kind"],
+                    "columns": _parse_columns(r["columns_json"]),
+                    "layout": _parse_layout(r["layout_json"]),
+                    "is_default": bool(r["is_default"]),
+                }
+                for r in cur.fetchall()
+            ]
     finally:
         db.close()
 
-    df  = pd.DataFrame(rows)
+
+class ExportTemplateBody(BaseModel):
+    name: str
+    # เทมเพลต CSV ใช้ columns ส่วนเทมเพลตรายงาน (PDF/Excel) ใช้ layout
+    # อย่างใดอย่างหนึ่งต้องมี (ดู _validate_template_body)
+    columns: Optional[List[str]] = None
+    layout:  Optional[Dict[str, Any]] = None
+    kind:    str = "csv"
+
+
+def _validate_template_body(body: ExportTemplateBody) -> List[str]:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(400, "ต้องตั้งชื่อเทมเพลต")
+    cols = [c for c in (body.columns or []) if c in EXPORT_COLUMNS]
+    if not cols:
+        raise HTTPException(400, "ต้องเลือกอย่างน้อย 1 คอลัมน์")
+    return cols
+
+
+def _template_payload(body: ExportTemplateBody):
+    """ตรวจ body แล้วคืน (kind, columns_json, layout_json) ที่พร้อมเขียนลง DB
+
+    เก็บข้อมูลคนละคอลัมน์กันตามชนิด:
+      csv          → columns_json (รายชื่อคอลัมน์ + ลำดับ)
+      pdf / excel  → layout_json  (ผังตารางทั้งก้อนจากหน้า editor แบบสเปรดชีต)
+
+    ⚠ ทุกอย่างที่ "ไม่ใช่ csv" ถือเป็นรายงานหมด — ห้ามเช็คแบบ `kind == "report"`
+    เพราะตอนแยก PDF กับ Excel ออกจากกัน ค่า kind เปลี่ยนเป็น 'pdf'/'excel' แล้ว
+    การเช็คชื่อตายตัวทำให้เทมเพลตรายงานตกไปเข้าเส้นทางของ CSV แล้วเด้ง
+    "ต้องเลือกอย่างน้อย 1 คอลัมน์" ทั้งที่หน้าจอนั้นไม่มีให้เลือกคอลัมน์เลย
+    """
+    if not body.name.strip():
+        raise HTTPException(400, "ต้องตั้งชื่อเทมเพลต")
+
+    if body.kind != "csv":
+        if not body.layout:
+            raise HTTPException(400, "เทมเพลตรายงานต้องมีผังตาราง (layout)")
+        kind = body.kind if body.kind in ("pdf", "excel", "report") else "pdf"
+        return kind, None, json.dumps(body.layout, ensure_ascii=False)
+
+    cols = _validate_template_body(body)
+    return "csv", json.dumps(cols, ensure_ascii=False), None
+
+
+@app.post("/api/export/templates", status_code=201)
+async def create_export_template(body: ExportTemplateBody):
+    kind, cols_json, layout_json = _template_payload(body)
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            try:
+                cur.execute(
+                    "INSERT INTO export_template (name, kind, columns_json, layout_json, is_default) "
+                    "VALUES (%s, %s, %s, %s, 0)",
+                    (body.name.strip(), kind, cols_json, layout_json),
+                )
+            except pymysql.MySQLError as exc:
+                raise HTTPException(409, f"สร้างเทมเพลตไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
+            return {"export_template_id": cur.lastrowid}
+    finally:
+        db.close()
+
+
+@app.patch("/api/export/templates/{export_template_id}")
+async def update_export_template(export_template_id: int, body: ExportTemplateBody):
+    kind, cols_json, layout_json = _template_payload(body)
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            row = _get_template(cur, export_template_id)
+            # เทมเพลตตั้งต้นของระบบล็อกไว้ — ให้ Duplicate ไปแก้ตัวใหม่แทน
+            if row["is_default"]:
+                raise HTTPException(403, "เทมเพลตค่าเริ่มต้นแก้ไขไม่ได้ — กด Duplicate แล้วแก้ตัวสำเนาแทน")
+            try:
+                cur.execute(
+                    "UPDATE export_template SET name = %s, kind = %s, columns_json = %s, layout_json = %s "
+                    "WHERE export_template_id = %s",
+                    (body.name.strip(), kind, cols_json, layout_json, export_template_id),
+                )
+            except pymysql.MySQLError as exc:
+                raise HTTPException(409, f"บันทึกไม่สำเร็จ (ชื่อนี้อาจซ้ำกับเทมเพลตอื่น): {exc}")
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.delete("/api/export/templates/{export_template_id}")
+async def delete_export_template(export_template_id: int):
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            row = _get_template(cur, export_template_id)
+            if row["is_default"]:
+                raise HTTPException(403, "เทมเพลตค่าเริ่มต้นลบไม่ได้")
+            cur.execute(
+                "DELETE FROM export_template WHERE export_template_id = %s", (export_template_id,)
+            )
+        return {"ok": True}
+    finally:
+        db.close()
+
+
+@app.post("/api/export/templates/{export_template_id}/duplicate", status_code=201)
+async def duplicate_export_template(export_template_id: int):
+    """ทำสำเนาเทมเพลต (ใช้ได้กับทุกตัวรวมทั้งตัวค่าเริ่มต้น) — ตั้งชื่อใหม่ให้
+    อัตโนมัติแบบ "<ชื่อเดิม> (สำเนา)" และเติมเลขต่อท้ายถ้าชื่อนั้นถูกใช้ไปแล้ว
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            row = _get_template(cur, export_template_id)
+            cur.execute("SELECT name FROM export_template")
+            taken = {r["name"] for r in cur.fetchall()}
+            base = f"{row['name']} (สำเนา)"
+            name, n = base, 2
+            while name in taken:
+                name, n = f"{base} {n}", n + 1
+            # สำเนาต้องเก็บทั้ง 2 ฟิลด์ตามชนิดของต้นฉบับ (csv ใช้ columns_json,
+            # report ใช้ layout_json) — คัดลอกดิบๆ ไปเลยไม่ต้องแปลง
+            cur.execute(
+                "INSERT INTO export_template (name, kind, columns_json, layout_json, is_default) "
+                "VALUES (%s, %s, %s, %s, 0)",
+                (
+                    name,
+                    row.get("kind") or "csv",
+                    json.dumps(_parse_columns(row["columns_json"]), ensure_ascii=False)
+                        if row.get("columns_json") else None,
+                    json.dumps(_parse_layout(row["layout_json"]), ensure_ascii=False)
+                        if row.get("layout_json") else None,
+                ),
+            )
+            return {"export_template_id": cur.lastrowid, "name": name}
+    finally:
+        db.close()
+
+
+# subquery หา measurement_id ของ "การวัดครั้งล่าสุดของแต่ละ ALPL"
+# คิดจากข้อมูลทั้งตารางก่อนเสมอ (ไม่ขึ้นกับ filter อื่น) แล้วค่อยเอาไป AND กับ
+# filter ที่เหลือ — ให้ความหมายตรงกับ ISLatest ที่ใช้ใน Power BI คือ
+# "แถวนี้เป็นค่าล่าสุดของ ALPL นั้นไหม" เป็นคุณสมบัติของแถว ไม่ใช่ผลของการกรอง
+# (เช่นกรอง Result=NG + ล่าสุด = ALPL ที่ "สถานะปัจจุบันยังไม่ผ่าน" ไม่ใช่
+#  "เคยมี NG ครั้งล่าสุดในบรรดา NG ทั้งหมด" ซึ่งคนละความหมายกันคนละเรื่อง)
+def _latest_only_sql(inner_where: str) -> str:
+    """เงื่อนไข "เอาเฉพาะการวัดล่าสุดของแต่ละ ALPL"
+
+    ⚠ จุดที่เคยพลาด: ของเดิม subquery เป็น `FROM measurements` เปล่าๆ ไม่มี WHERE
+    จึงหา "ล่าสุด" จากทั้งตารางก่อน แล้วค่อยเอาผลไปกรองด้วยเงื่อนไขของผู้ใช้ทีหลัง
+    ผลคือถ้า ALPL ตัวไหนถูกวัดซ้ำ "นอกช่วง" ที่ผู้ใช้กรอง แถวล่าสุดของมันจะตก
+    ตัวกรอง แล้ว ALPL ตัวนั้นหายไปจากรายงานทั้งตัว ทั้งที่ในช่วงที่เลือกมีการวัดจริง
+    เช่น กรอง 1–15 ก.ค. แต่ ALPL 400 ถูกวัดซ้ำวันที่ 20 ก.ค. → 400 หายไปเฉยๆ
+
+    ตอนนี้ subquery ใช้ FROM/JOIN และ WHERE ชุดเดียวกับ query หลัก จึงหมายถึง
+    "ล่าสุดภายในชุดข้อมูลที่กรองแล้ว" ตามที่ผู้ใช้คาดหวังจริงๆ
+    (พารามิเตอร์ของ inner_where ต้องถูกส่งซ้ำอีกชุด — ดู _export_filters)
+    """
+    return f"""m.measurement_id IN (
+    SELECT measurement_id FROM (
+        SELECT m.measurement_id,
+               ROW_NUMBER() OVER (
+                   PARTITION BY m.number_alpl
+                   ORDER BY m.timestamp DESC, m.measurement_id DESC
+               ) AS rn
+        {_EXPORT_FROM}
+        {inner_where}
+    ) AS latest WHERE latest.rn = 1
+)"""
+
+
+# รูปแบบที่ยอมรับต่อ 1 ท่อน: "400" หรือ "400-407" (เว้นวรรครอบๆ ได้)
+_RANGE_PART_RE = re.compile(r"^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$")
+
+
+def _parse_int_ranges(spec: str, field_label: str):
+    """แปลงข้อความแบบ "400-407,500,600" เป็น (ช่วง, ตัวเดี่ยว)
+
+    คืนค่าเป็น ([(400, 407)], [500, 600]) — แยกช่วงกับตัวเดี่ยวออกจากกัน
+    **ตั้งใจไม่แตกช่วงออกเป็นรายตัว** เพราะถ้าผู้ใช้พิมพ์ "1-999999" การแตกจะได้
+    ค่าเกือบล้านตัวไปต่อเป็น SQL ยาว ~6.5 MB ซึ่งชน max_allowed_packet ของ MySQL
+    หรือช้าจนใช้งานไม่ได้ — เก็บเป็นช่วงแล้วแปลงเป็น BETWEEN ตอนสร้าง SQL แทน
+    ต้นทุนเท่ากับไม่กรองเลย (จำนวนแถวขึ้นกับข้อมูลจริง ไม่ใช่ความกว้างของช่วง)
+
+    เคสที่รองรับ: เว้นวรรค, พิมพ์กลับด้าน (407-400), ค่าซ้ำ, ท่อนว่างจากคอมมาเกิน
+    """
+    ranges, singles = [], []
+    for part in str(spec).split(","):
+        if not part.strip():
+            continue  # เช่น "400,,500" หรือคอมมาท้ายสุด — ข้ามไปเฉยๆ
+        m = _RANGE_PART_RE.match(part)
+        if not m:
+            raise HTTPException(
+                400,
+                f'รูปแบบ {field_label} ไม่ถูกต้องตรง "{part.strip()}" — '
+                f'ใช้ได้เช่น 400 หรือ 400-407 หรือ 400-407,500,600',
+            )
+        lo = int(m.group(1))
+        if m.group(2) is None:
+            singles.append(lo)
+            continue
+        hi = int(m.group(2))
+        if lo > hi:
+            lo, hi = hi, lo          # พิมพ์กลับด้าน (407-400) ก็ยังใช้ได้
+        if lo == hi:
+            singles.append(lo)       # "400-400" ก็คือตัวเดียว
+        else:
+            ranges.append((lo, hi))
+    return sorted(set(ranges)), sorted(set(singles))
+
+
+_DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _day_end(v):
+    """ครอบปลายช่วงให้เต็มวัน — "2026-07-30" → "2026-07-30 23:59:59"
+
+    ถ้าไม่ทำ MySQL จะตีค่าเป็น 00:00:00 แล้ว `timestamp <= ...` จะตัดการวัด
+    ของวันสุดท้ายที่ผู้ใช้เลือกทิ้งทั้งวัน หน้าเว็บเติมเวลาให้อยู่แล้ว แต่ย้าย
+    มาบังคับที่ backend ด้วย เพราะเป็นกติกาที่หน้าใหม่ (หรือคนที่ยิง API ตรงๆ)
+    ไม่มีทางรู้ แล้วจะเจอบั๊กเดิมซ้ำ
+    """
+    return f"{v} 23:59:59" if isinstance(v, str) and _DATE_ONLY_RE.match(v.strip()) else v
+
+
+def _day_start(v):
+    return f"{v} 00:00:00" if isinstance(v, str) and _DATE_ONLY_RE.match(v.strip()) else v
+
+
+def _export_filters(f: Dict[str, Any]):
+    """สร้าง WHERE + params ของหน้า Export — ใช้ร่วมกันทั้ง preview และ csv
+    เพื่อให้สิ่งที่เห็นในตัวอย่างตรงกับไฟล์ที่ดาวน์โหลดจริงเสมอ
+    """
+    conditions, params = [], []
+
+    def eq(col, key):
+        """เงื่อนไขเท่ากับ — รองรับทั้งค่าเดียวและหลายค่า (multi-select)
+
+        หลายค่าจะกลายเป็น IN (...) ซึ่งหมายถึง "เอาอันไหนก็ได้ในกลุ่มนี้" (OR กัน
+        ภายในช่องเดียวกัน) ส่วนต่างช่องกันยังเป็น AND เหมือนเดิม เช่น
+        เลือก Vendor = A,B และ Result = NG → (vendor A หรือ B) และ ต้องเป็น NG
+        """
+        v = f.get(key)
+        if v is None or v == "":
+            return
+        if isinstance(v, (list, tuple, set)):
+            vals = [x for x in v if x not in (None, "")]
+            if not vals:
+                return
+            conditions.append(f"{col} IN ({','.join(['%s'] * len(vals))})")
+            params.extend(vals)
+        else:
+            conditions.append(f"{col} = %s"); params.append(v)
+
+    # ALPL รับได้ทั้งตัวเดียว, หลายตัวคั่นคอมมา และช่วง — ประกอบเป็นเงื่อนไข
+    # เดียวที่ OR กันเอง เช่น (BETWEEN 400 AND 407 OR BETWEEN 500 AND 507 OR IN (600))
+    alpl_spec = f.get("number_alpl")
+    if alpl_spec not in (None, ""):
+        alpl_ranges, alpl_singles = _parse_int_ranges(alpl_spec, "ALPL")
+        or_parts = []
+        for lo, hi in alpl_ranges:
+            or_parts.append("m.number_alpl BETWEEN %s AND %s")
+            params.extend([lo, hi])
+        if alpl_singles:
+            or_parts.append(f"m.number_alpl IN ({','.join(['%s'] * len(alpl_singles))})")
+            params.extend(alpl_singles)
+        if or_parts:
+            conditions.append("(" + " OR ".join(or_parts) + ")")
+
+    eq("m.result",          "result")
+    eq("m.session_id",      "session_id")
+    eq("op.operator_name",  "operator")
+    eq("m.measure_type",    "measure_type")
+    eq("v.vendor_name",     "vendor")
+    eq("o.owner_name",      "owner")
+    eq("pn.part_number_name", "part_number")
+    eq("h.handler_name",    "handler")
+    eq("ps.package_size",   "package_size")
+    eq("p.po_number",       "po_number")
+
+    # ช่วงวันที่ของ "วันที่วัด" (measurements.timestamp)
+    if f.get("date_from"):
+        conditions.append("m.timestamp >= %s"); params.append(_day_start(f["date_from"]))
+    if f.get("date_to"):
+        conditions.append("m.timestamp <= %s"); params.append(_day_end(f["date_to"]))
+    # ช่วงวันที่ของ "วันที่รับชิ้นงาน" (parts_specifications.recieve_date)
+    if f.get("recv_from"):
+        conditions.append("p.recieve_date >= %s"); params.append(_day_start(f["recv_from"]))
+    if f.get("recv_to"):
+        conditions.append("p.recieve_date <= %s"); params.append(_day_end(f["recv_to"]))
+
+    # Description ค้นแบบมีคำนี้อยู่ข้างใน (ไม่ต้องพิมพ์ตรงเป๊ะ)
+    if f.get("description"):
+        conditions.append("p.description LIKE %s"); params.append(f"%{f['description']}%")
+
+    # ต้องต่อท้ายสุดเสมอ — เงื่อนไขนี้ห่อ WHERE ของ "ทุกข้อข้างบน" ไว้ข้างใน
+    # ลำดับพารามิเตอร์จึงเป็น [ของข้อข้างบน..., ของข้อข้างบนซ้ำอีกรอบ...]
+    # (ถ้าย้ายไปไว้กลางๆ ลำดับ %s จะเพี้ยนแล้วได้ข้อมูลผิดแบบเงียบๆ)
+    if f.get("latest_only"):
+        inner_where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        inner_params = list(params)
+        conditions.append(_latest_only_sql(inner_where))
+        params.extend(inner_params)
+
+    return (("WHERE " + " AND ".join(conditions)) if conditions else ""), params
+
+
+# FROM + JOIN ชุดเดียวกับ EXPORT_SELECT — ใช้ตอนนับ COUNT(*) เพราะ WHERE อ้างถึง
+# คอลัมน์ของตาราง join ด้วย (vendor/owner/handler ฯลฯ) จะนับจาก measurements
+# เปล่าๆ ไม่ได้
+_EXPORT_FROM = """
+    FROM measurements m
+    LEFT JOIN operator op             ON m.operator_id = op.operator_id
+    LEFT JOIN parts_specifications p  ON m.number_alpl = p.number_alpl
+    LEFT JOIN part_number pn          ON p.part_number_id = pn.part_number_id
+    LEFT JOIN handler h               ON pn.handler_id = h.handler_id
+    LEFT JOIN package_size ps         ON pn.package_size_id = ps.package_size_id
+    LEFT JOIN template t              ON ps.template_id = t.template_id
+    LEFT JOIN vendor v                ON p.vendor_id = v.vendor_id
+    LEFT JOIN owner o                 ON p.owner_id = o.owner_id
+"""
+
+
+def _fetch_export_rows(cols: List[str], where: str, params: list, limit: Optional[int] = None):
+    """ดึงข้อมูลแล้วแปลงเป็น list ของ list ตามลำดับคอลัมน์ใน `cols`"""
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) AS n {_EXPORT_FROM} {where}", params)
+            total = cur.fetchone()["n"]
+            sql = f"{EXPORT_SELECT} {where} ORDER BY m.timestamp DESC"
+            if limit:
+                sql += f" LIMIT {int(limit)}"
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+    finally:
+        db.close()
+    data = [[EXPORT_COLUMNS[c]["get"](r) for c in cols] for r in rows]
+    return data, total
+
+
+def _count_export_rows(where: str, params: list) -> int:
+    """นับจำนวนแถวอย่างเดียว — ใช้เช็คเพดานก่อนดึงข้อมูลจริงมาสร้างไฟล์"""
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) AS n {_EXPORT_FROM} {where}", params)
+            return cur.fetchone()["n"]
+    finally:
+        db.close()
+
+
+def _fetch_export_raw(where: str, params: list, limit: Optional[int] = None):
+    """เหมือน _fetch_export_rows แต่คืน row ดิบ (dict) ไม่ได้แปลงเป็นคอลัมน์
+    ใช้กับรายงาน PDF/Excel ที่ต้องหยิบค่าทีละช่องตามผังตาราง ไม่ใช่เรียงเป็นแถว
+    เรียง ASC ตามเวลา เพราะรายงานบนกระดาษอ่านจากเก่าไปใหม่ (ต่างจาก CSV ที่
+    เรียง DESC ให้เห็นตัวล่าสุดก่อน)
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute(f"SELECT COUNT(*) AS n {_EXPORT_FROM} {where}", params)
+            total = cur.fetchone()["n"]
+            sql = f"{EXPORT_SELECT} {where} ORDER BY m.timestamp ASC, m.measurement_id ASC"
+            if limit:
+                sql += f" LIMIT {int(limit)}"
+            cur.execute(sql, params)
+            return cur.fetchall(), total
+    finally:
+        db.close()
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# ตัวเรนเดอร์รายงาน — ใช้ร่วมกันทั้ง Preview / Excel / PDF
+# ══════════════════════════════════════════════════════════════════════════
+# รับผังจาก report-template.html (layout_json) + ข้อมูลจริง แล้วคลี่ออกเป็น
+# ตาราง 2 มิติที่พร้อมวาด ไม่ว่าจะวาดด้วย HTML (preview/print) หรือ openpyxl
+#
+# โครงของผัง 1 ชุด:
+#   แถว 0 .. dataRow-1   = ส่วนหัว   — พิมพ์ซ้ำทุกกลุ่ม (มีเซลล์ spec ของกลุ่ม)
+#   แถว dataRow          = แถวข้อมูล — ทำซ้ำ 1 แถวต่อ 1 การวัด
+#   แถว dataRow+1 .. จบ  = ส่วนท้าย  — พิมพ์ครั้งเดียวตอนจบรายงาน (ช่องเซ็นชื่อ)
+#
+# รายงานถูกแบ่งกลุ่มด้วย tolerance_spec เสมอ (ดู GROUP_BY ใน frontend) ชิ้นงาน
+# คนละสเปกจึงไม่ปนกันในตารางเดียว
+REPORT_GROUP_BY = "tolerance_spec"
+
+
+def _cell_out(cell: Dict[str, Any], text: str) -> Dict[str, Any]:
+    """แปลงเซลล์ในผังเป็นเซลล์ผลลัพธ์ — เก็บเฉพาะที่ตัววาดต้องใช้"""
+    out = {"v": text, "s": cell.get("s") or {}}
+    span = cell.get("span")
+    if span:
+        out["span"] = {"r": int(span.get("r", 1)), "c": int(span.get("c", 1))}
+    if cell.get("hidden"):
+        out["hidden"] = True
+    # ทำเครื่องหมายไว้ว่าเซลล์ไหนมาจากข้อมูลจริง — ตัววาดใช้ตัดสินใจตีเส้นขอบ
+    if cell.get("f") or cell.get("spec"):
+        out["data"] = True
+    if cell.get("hdr"):
+        out["head"] = True
+    return out
+
+
+def _render_report(layout: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """คลี่ผัง + ข้อมูล ออกเป็นตารางพร้อมวาด
+
+    คืน {"nCols": int, "rows": [[cell, ...], ...]} โดย cell = {v, s, span?, hidden?}
+    """
+    grid = layout.get("grid") or []
+    n_rows = int(layout.get("nRows") or len(grid))
+    n_cols = int(layout.get("nCols") or (len(grid[0]) if grid else 0))
+    data_row = int(layout.get("dataRow", 2))
+    if not grid or n_cols == 0:
+        return {"nCols": 0, "rows": []}
+    data_row = max(0, min(data_row, n_rows - 1))
+
+    def tpl_row(r: int) -> List[Dict[str, Any]]:
+        row = grid[r] if r < len(grid) else []
+        return [row[c] if c < len(row) else {} for c in range(n_cols)]
+
+    def clamp(cells: List[Dict[str, Any]], r: int, last: int) -> List[Dict[str, Any]]:
+        """ตัด rowspan ไม่ให้ทะลุออกนอกบล็อกที่กำลังพิมพ์อยู่
+
+        ผู้ใช้ผสานเซลล์คร่อมแถวข้อมูลได้ในหน้าแก้ไข แต่ตอนคลี่ออกมา ส่วนหัวของ
+        กลุ่มถัดไปจะมาต่อท้าย ถ้าปล่อย rowspan เดิมไว้มันจะกินทับแถวของกลุ่มถัดไป
+        แล้วช่วงผสานซ้อนกัน → Excel เปิดไฟล์ไม่ขึ้น บอกว่าไฟล์เสียหาย
+        """
+        for cell in cells:
+            sp = cell.get("span")
+            if sp and sp["r"] > 1:
+                sp["r"] = max(1, min(sp["r"], last - r + 1))
+        return cells
+
+    def render_static(r: int, spec_text: str) -> List[Dict[str, Any]]:
+        """แถวส่วนหัว/ส่วนท้าย — แทนเฉพาะเซลล์ spec ด้วยค่าของกลุ่มปัจจุบัน
+        เซลล์ f (ข้อมูลรายชิ้น) ที่หลุดมาอยู่นอกแถวข้อมูลถือว่าไม่มีความหมาย
+        ปล่อยว่างไว้ ดีกว่าเอาค่าของชิ้นแรกมาใส่แบบมั่วๆ
+        """
+        out = []
+        for cell in tpl_row(r):
+            if cell.get("spec"):
+                out.append(_cell_out(cell, spec_text))
+            elif cell.get("f"):
+                out.append(_cell_out(cell, ""))
+            else:
+                out.append(_cell_out(cell, cell.get("v") or ""))
+        return out
+
+    def render_data(row: Dict[str, Any], item_no: int) -> List[Dict[str, Any]]:
+        """แถวข้อมูล 1 แถวต่อ 1 การวัด — rowspan ถูกบีบเป็น 1 เพราะแถวนี้ถูก
+        ทำซ้ำหลายรอบ ถ้าปล่อย rowspan เดิมไว้จะกินทับแถวของการวัดชิ้นถัดไป
+        """
+        out = []
+        for cell in tpl_row(data_row):
+            key = cell.get("f")
+            col = EXPORT_COLUMNS.get(key) if key else None
+
+            # ช่องลำดับแถว (Item) — ค่าไม่ได้อยู่ใน DB ต้องนับตอนคลี่ผัง
+            if col and col.get("row_number"):
+                text = str(item_no)
+            # รูปแบบที่ผู้ใช้ติ๊กไว้บนเซลล์ (ตอนนี้มีแค่ช่องวันเวลา: date/time/ทั้งคู่)
+            elif col and col.get("get_fmt") and cell.get("fmt"):
+                text = col["get_fmt"](row, cell["fmt"])
+            elif col:
+                text = col["get"](row)
+            else:
+                text = cell.get("v") or ""
+
+            c = _cell_out(cell, str(text))
+            if "span" in c:
+                c["span"]["r"] = 1
+
+            # หน้าตาแยกตามค่า — เช่น Result OK พื้นเขียว / NG พื้นแดง
+            # "สถานะ" ของเซลล์มาจากฟังก์ชัน state ของคอลัมน์ ไม่ใช่ข้อความที่แสดง
+            # เพราะบางคอลัมน์สถานะกับค่าที่แสดงเป็นคนละเรื่อง เช่น Value X แสดง
+            # "4.089" แต่สถานะคือ NG (เกินสเปก) — ถ้าจับคู่ด้วยข้อความจะไม่เจอเลย
+            variants = cell.get("variants") or {}
+            if variants:
+                state = col["state"](row) if col and col.get("state") else str(text)
+                if state in variants:
+                    c["s"] = variants[state]
+            out.append(c)
+        return out
+
+    # จัดกลุ่มตามสเปก โดยรักษาลำดับที่เจอครั้งแรกไว้ (ไม่เรียงใหม่)
+    #
+    # แบ่งกลุ่มเฉพาะเมื่อผังมีช่อง Tolerance อยู่จริงเท่านั้น — ถ้าผู้ใช้ทำ
+    # เทมเพลตที่ไม่ได้ลาก Tolerance ลงไป การแบ่งกลุ่มจะทำให้หัวตารางถูกพิมพ์ซ้ำ
+    # หลายรอบโดยไม่มีอะไรบนกระดาษบอกว่าทำไมถึงแยกก้อน ผู้ใช้จะงงว่าเป็นบั๊ก
+    has_spec = any(
+        (cell or {}).get("spec") or (cell or {}).get("hdr") == REPORT_GROUP_BY
+        for row in grid for cell in row
+    )
+    groups: Dict[str, List[Dict[str, Any]]] = {}
+    if has_spec:
+        for r in rows:
+            groups.setdefault(EXPORT_COLUMNS[REPORT_GROUP_BY]["get"](r), []).append(r)
+    elif rows:
+        groups[""] = list(rows)
+
+    # แถวส่วนหัวแบ่งเป็น 2 พวก:
+    #   - แถวที่มีช่องข้อมูลผูกอยู่ (ชื่อคอลัมน์ / สเปกของกลุ่ม) → ซ้ำทุกกลุ่ม
+    #     เพราะแต่ละกลุ่มเป็นตารางของมันเอง ต้องมีหัวตารางกำกับ
+    #   - แถวที่เป็นข้อความที่ผู้ใช้พิมพ์เองล้วนๆ (เช่น "ตรวจสอบการวัดวันที่ ...")
+    #     → พิมพ์ครั้งเดียวตอนกลุ่มแรก เพราะเป็นหัวเรื่องของทั้งรายงาน ไม่ใช่ของ
+    #     ตารางใดตารางหนึ่ง ถ้าซ้ำทุกกลุ่มจะกลายเป็นชื่อเรื่องโผล่กลางหน้า
+    # เช็คที่เซลล์ต้นของการผสาน (ข้าม hidden) เพราะหัวเรื่องมักผสานยาวทั้งแถว
+    def _repeats_per_group(r: int) -> bool:
+        return any(
+            (c.get("hdr") or c.get("spec") or c.get("f"))
+            for c in tpl_row(r) if not c.get("hidden")
+        )
+
+    repeat_head = {r: _repeats_per_group(r) for r in range(0, data_row)}
+
+    out_rows: List[List[Dict[str, Any]]] = []
+    # ลำดับแถว (Item) นับต่อเนื่องทั้งรายงาน ไม่รีเซ็ตตอนขึ้นกลุ่มใหม่ —
+    # ตรงกับรายงานกระดาษที่ห้อง PM Kit ใช้ ซึ่งเลขลำดับคือ "ชิ้นที่เท่าไรของใบนี้"
+    item_no = 0
+    for gi, (spec_text, members) in enumerate(groups.items()):
+        for r in range(0, data_row):
+            if gi and not repeat_head[r]:
+                continue
+            out_rows.append(clamp(render_static(r, spec_text), r, data_row - 1))
+        for m in members:
+            item_no += 1
+            out_rows.append(render_data(m, item_no))
+    # ส่วนท้ายพิมพ์ครั้งเดียวตอนจบ (ปกติเป็นช่องเซ็นชื่อ/ผู้ตรวจ)
+    for r in range(data_row + 1, n_rows):
+        out_rows.append(clamp(render_static(r, ""), r, n_rows - 1))
+
+    # ── ตัดคอลัมน์/แถวว่างที่ห้อยท้ายทิ้ง ──────────────────────────────
+    # ผังในหน้าแก้ไขมี 10 คอลัมน์ 5 แถวเสมอ แต่ผู้ใช้ใช้จริงไม่กี่ช่อง ถ้าปล่อย
+    # ช่องว่างติดไปด้วย เวลาพิมพ์ PDF ตารางจะถูกจัดกึ่งกลางโดยนับช่องว่างพวกนั้น
+    # เข้าไปด้วย ทำให้ส่วนที่มีเนื้อหาดูเบี้ยวไปทางซ้าย และมีเส้นจางๆ ห้อยอยู่
+    # ทางขวาของกระดาษ
+    def filled(cell: Dict[str, Any]) -> bool:
+        return bool((cell.get("v") or "").strip() or cell.get("data") or cell.get("head"))
+
+    last_col = 0
+    for row in out_rows:
+        for c, cell in enumerate(row):
+            if not cell.get("hidden") and filled(cell):
+                last_col = max(last_col, c + (cell.get("span", {}) or {}).get("c", 1))
+    last_col = last_col or n_cols
+
+    for row in out_rows:
+        del row[last_col:]
+        for c, cell in enumerate(row):
+            sp = cell.get("span")
+            if sp and c + sp["c"] > last_col:
+                sp["c"] = max(1, last_col - c)
+
+    while out_rows and not any(filled(x) for x in out_rows[-1]):
+        out_rows.pop()
+
+    return {"nCols": last_col, "rows": out_rows, "groups": len(groups)}
+
+
+def _load_report_layout(cur, export_template_id: int) -> Dict[str, Any]:
+    tpl = _get_template(cur, export_template_id)
+    layout = _parse_layout(tpl.get("layout_json"))
+    if not layout or not layout.get("grid"):
+        raise HTTPException(400, f'เทมเพลต "{tpl["name"]}" ยังไม่มีผังตาราง — เปิดแก้ไขแล้วบันทึกใหม่อีกครั้ง')
+    return {"name": tpl["name"], "kind": tpl.get("kind") or "pdf", "layout": layout}
+
+
+# พารามิเตอร์ filter ที่ /api/export/preview กับ /api/export/csv รับเหมือนกันทุกตัว
+# (ประกาศเป็น Pydantic model แล้วใช้ Depends เพื่อไม่ต้องเขียนซ้ำ 2 ที่ และกัน
+#  ลืมเพิ่มข้างใดข้างหนึ่งจนตัวอย่างกับไฟล์จริงไม่ตรงกัน)
+def export_filters_dep(
+    # ALPL เป็น str ไม่ใช่ int — รับได้ทั้ง "400", "400,500,600" และ
+    # "400-407,500-507" (ดู _parse_int_ranges)
+    number_alpl:  Optional[str] = None,
+    date_from:    Optional[str] = None,
+    date_to:      Optional[str] = None,
+    recv_from:    Optional[str] = None,
+    recv_to:      Optional[str] = None,
+    session_id:   Optional[int] = None,
+    po_number:    Optional[int] = None,
+    description:  Optional[str] = None,
+    # ── ช่องแบบเลือกได้หลายค่า (multi-select) ────────────────────────────
+    # ส่งมาเป็น query param ซ้ำๆ เช่น ?vendor=A&vendor=B → กลายเป็น IN ('A','B')
+    # ต้องประกาศเป็น dependency แบบฟังก์ชัน ไม่ใช่ Pydantic model + Depends()
+    # เพราะ field ชนิด List ใน model ไม่ผูกกับ query param (ทดสอบแล้ว)
+    result:       Optional[List[str]] = Query(None),
+    operator:     Optional[List[str]] = Query(None),
+    measure_type: Optional[List[str]] = Query(None),
+    vendor:       Optional[List[str]] = Query(None),
+    owner:        Optional[List[str]] = Query(None),
+    part_number:  Optional[List[str]] = Query(None),
+    handler:      Optional[List[str]] = Query(None),
+    package_size: Optional[List[str]] = Query(None),
+    # ค่าเริ่มต้นเป็น True — หน้า Export ต้องการ "สถานะล่าสุดของแต่ละ ALPL"
+    # เป็นหลัก ไม่ใช่ประวัติทุกครั้งที่เคยวัด (ติ๊กออกได้ถ้าอยากได้ทั้งหมด)
+    latest_only:  bool = True,
+) -> Dict[str, Any]:
+    """พารามิเตอร์ filter ที่ /api/export/preview กับ /api/export/csv รับเหมือนกัน
+    ประกาศไว้ที่เดียวแล้วใช้ร่วมกันผ่าน Depends — กันลืมเพิ่มข้างใดข้างหนึ่ง
+    จนตัวอย่างบนหน้าจอกับไฟล์ที่ดาวน์โหลดจริงไม่ตรงกัน
+    """
+    return {
+        "number_alpl": number_alpl, "date_from": date_from, "date_to": date_to,
+        "recv_from": recv_from, "recv_to": recv_to, "session_id": session_id,
+        "po_number": po_number, "description": description,
+        "result": result, "operator": operator, "measure_type": measure_type,
+        "vendor": vendor, "owner": owner, "part_number": part_number,
+        "handler": handler, "package_size": package_size,
+        "latest_only": latest_only,
+    }
+
+
+@app.get("/api/export/preview")
+async def export_preview(
+    export_template_id: int,
+    filters: Dict[str, Any] = Depends(export_filters_dep),
+    limit:   int = Query(5, ge=1, le=50),
+):
+    """คืนหัวคอลัมน์ + ข้อมูลตัวอย่างไม่กี่แถว + จำนวนแถวทั้งหมดที่ตรงกับ filter
+    ให้หน้าเว็บโชว์ก่อนกดดาวน์โหลดจริง (จะได้รู้ว่ากรองถูกไหม ไฟล์ใหญ่แค่ไหน)
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            tpl = _get_template(cur, export_template_id)
+    finally:
+        db.close()
+
+    cols = _parse_columns(tpl["columns_json"])
+    where, params = _export_filters(filters)
+    data, total = _fetch_export_rows(cols, where, params, limit=limit)
+    return {
+        "template_name": tpl["name"],
+        "columns": [_csv_header(c) for c in cols],
+        "column_keys": cols,
+        "rows": data,
+        "total": total,
+    }
+
+
+@app.get("/api/export/csv")
+async def export_csv(
+    export_template_id: Optional[int] = None,
+    filters: Dict[str, Any] = Depends(export_filters_dep),
+):
+    """Export ประวัติ measurement (พร้อม filter) เป็นไฟล์ CSV ให้ดาวน์โหลด
+
+    export_template_id: เลือกว่าจะเอาคอลัมน์ไหนและเรียงลำดับยังไง — ถ้าไม่ส่งมา
+    จะใช้เทมเพลตที่ is_default = 1 ให้อัตโนมัติ (พฤติกรรมเดิมของ endpoint นี้
+    คือ dump ทุกคอลัมน์ ซึ่งตรงกับเทมเพลตค่าเริ่มต้นพอดี ของเดิมที่เรียกมาโดย
+    ไม่ส่งพารามิเตอร์นี้จึงยังใช้งานได้เหมือนเดิม)
+
+    ใช้ utf-8-sig encoding เพื่อให้เปิดใน Excel ได้ถูกต้องแม้มีตัวอักษรไทยอยู่ใน
+    ไฟล์ (BOM ช่วยไม่ให้ตัวอักษรเพี้ยน) และใช้ filter ชุดเดียวกับ /api/export/preview
+    เพื่อให้ไฟล์ที่ได้ตรงกับตัวอย่างที่เห็นบนหน้าจอเสมอ
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            if export_template_id is not None:
+                tpl = _get_template(cur, export_template_id)
+            else:
+                cur.execute(
+                    "SELECT export_template_id, name, kind, columns_json, layout_json, is_default "
+                    "FROM export_template WHERE kind = 'csv' AND is_default = 1 LIMIT 1"
+                )
+                tpl = cur.fetchone()
+                if not tpl:
+                    raise HTTPException(404, "ยังไม่มีเทมเพลตค่าเริ่มต้นในระบบ")
+    finally:
+        db.close()
+
+    cols = _parse_columns(tpl["columns_json"])
+    where, params = _export_filters(filters)
+    data, _ = _fetch_export_rows(cols, where, params)
+
+    df  = pd.DataFrame(data, columns=[_csv_header(c) for c in cols])
     buf = StringIO()
     df.to_csv(buf, index=False, encoding="utf-8-sig")
     buf.seek(0)
+
+    # ชื่อไฟล์ใส่วันที่ให้ด้วย — ดาวน์โหลดหลายรอบจะได้ไม่ทับกันใน Downloads
+    fname = f"measurements_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
     return StreamingResponse(
-        iter([buf.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=measurements.csv"},
+        iter(["﻿" + buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
     )
+
+
+# ── รายงาน PDF/Excel — ใช้ผังจาก report-template.html ────────────────────────
+# preview กับไฟล์จริงเรียก _render_report ตัวเดียวกัน สิ่งที่เห็นบนจอจึงตรงกับ
+# ไฟล์ที่ได้เสมอ (ถ้าแยกโค้ดกัน 2 ชุดจะเพี้ยนกันเงียบๆ ตอนแก้ข้างเดียว)
+
+# preview ไม่ดึงทั้งหมด — ผังใหญ่ๆ ที่มีหมื่นแถวจะทำให้หน้าเว็บค้าง
+REPORT_PREVIEW_LIMIT = 300
+
+# เพดานของ "ไฟล์จริง" — ทั้ง Excel และ PDF สร้างตารางทั้งก้อนไว้ในหน่วยความจำ
+# ก่อนส่งออก ถ้าไม่จำกัดแล้วเจอข้อมูลหลักหมื่นแถว จะกินแรมหนักและ request ค้าง
+# จนหมดเวลาแบบเงียบๆ — ปฏิเสธไปเลยพร้อมบอกให้กรองข้อมูลก่อน ดีกว่าปล่อยให้ค้าง
+REPORT_MAX_ROWS = int(os.getenv("REPORT_MAX_ROWS", 20000))
+
+
+def _guard_report_size(total: int) -> None:
+    if total > REPORT_MAX_ROWS:
+        raise HTTPException(
+            413,
+            f"ข้อมูลที่เลือกมี {total:,} แถว เกินเพดาน {REPORT_MAX_ROWS:,} แถวของรายงาน "
+            f"— กรองให้แคบลงก่อน (เช่น จำกัดช่วงวันที่) หรือใช้ Export CSV แทน "
+            f"ถ้าต้องการข้อมูลดิบทั้งหมด",
+        )
+
+
+@app.get("/api/export/report-preview")
+async def export_report_preview(
+    export_template_id: int,
+    filters: Dict[str, Any] = Depends(export_filters_dep),
+    full: int = 0,
+):
+    """คืนผังที่คลี่แล้วพร้อมข้อมูลจริง ให้หน้าเว็บวาดเป็นตาราง preview
+
+    full=0 → ตัดที่ REPORT_PREVIEW_LIMIT แถว (ดูบนจอเฉยๆ ไม่ต้องครบ)
+    full=1 → เอาครบทุกแถว ใช้ตอนสั่งพิมพ์เป็น PDF จริง — ไฟล์ที่ได้ต้องไม่ขาด
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            tpl = _load_report_layout(cur, export_template_id)
+    finally:
+        db.close()
+
+    where, params = _export_filters(filters)
+    if full:
+        _guard_report_size(total_check := _count_export_rows(where, params))
+    rows, total = _fetch_export_raw(where, params, limit=None if full else REPORT_PREVIEW_LIMIT)
+    out = _render_report(tpl["layout"], rows)
+    out.update({
+        "template_name": tpl["name"],
+        "total": total,
+        "shown": len(rows),
+        "truncated": total > len(rows),
+    })
+    return out
+
+
+@app.get("/api/export/xlsx")
+async def export_xlsx(
+    export_template_id: int,
+    filters: Dict[str, Any] = Depends(export_filters_dep),
+):
+    """สร้างไฟล์ .xlsx จากผังรายงาน — คงฟอนต์/สี/การผสานเซลล์ตามที่จัดไว้"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(
+            500,
+            "ยังไม่ได้ติดตั้ง openpyxl — รัน `pip install openpyxl` ในเครื่องที่รัน Backend ก่อน",
+        )
+
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            tpl = _load_report_layout(cur, export_template_id)
+    finally:
+        db.close()
+
+    where, params = _export_filters(filters)
+    rows, total = _fetch_export_raw(where, params)
+    _guard_report_size(total)
+    rendered = _render_report(tpl["layout"], rows)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Report"
+
+    thick = Side(style="medium", color="000000")
+    box = Border(left=thick, right=thick, top=thick, bottom=thick)
+
+    def rgb(v: Optional[str]) -> Optional[str]:
+        """#RRGGBB → RRGGBB (openpyxl ไม่รับเครื่องหมาย #)"""
+        if not v or not isinstance(v, str):
+            return None
+        v = v.strip().lstrip("#")
+        return v.upper() if re.fullmatch(r"[0-9A-Fa-f]{6}", v) else None
+
+    # ผังเก็บค่าการจัดวางเป็นคำของ CSS แต่ openpyxl ใช้คำคนละชุด ถ้าส่งคำที่มัน
+    # ไม่รู้จักไปจะโยน ValueError ทันที (เคสจริงที่เจอ: valign='middle' ของ CSS
+    # ซึ่ง openpyxl เรียกว่า 'center') — แปลงและกรองให้เหลือเฉพาะค่าที่ยอมรับได้
+    _H = {"left": "left", "center": "center", "right": "right", "justify": "justify"}
+    _V = {"top": "top", "middle": "center", "center": "center", "bottom": "bottom"}
+
+    def align_of(s: Dict[str, Any]) -> "Alignment":
+        try:
+            indent = max(0, min(250, int(s.get("indent") or 0)))
+        except (TypeError, ValueError):
+            indent = 0
+        return Alignment(
+            horizontal=_H.get(str(s.get("align") or "").lower(), "center"),
+            vertical=_V.get(str(s.get("valign") or "").lower(), "center"),
+            indent=indent,
+            wrap_text=False,
+        )
+
+    def size_of(s: Dict[str, Any]) -> float:
+        try:
+            v = float(s.get("size") or 11)
+        except (TypeError, ValueError):
+            return 11.0
+        return v if 1 <= v <= 409 else 11.0
+
+    for r, row in enumerate(rendered["rows"], start=1):
+        for c, cell in enumerate(row, start=1):
+            if cell.get("hidden"):
+                continue
+            s = cell.get("s") or {}
+            x = ws.cell(row=r, column=c, value=cell.get("v") or "")
+            x.font = Font(
+                name=str(s.get("font") or "Tahoma"),
+                size=size_of(s),
+                bold=bool(s.get("bold")),
+                italic=bool(s.get("italic")),
+                underline="single" if s.get("underline") else None,
+                color=rgb(s.get("color")) or "000000",
+            )
+            fill = rgb(s.get("fill"))
+            if fill:
+                x.fill = PatternFill("solid", fgColor=fill)
+            x.alignment = align_of(s)
+            # เส้นขอบหนารอบเซลล์ที่มีเนื้อหา — ตรงกับที่ตกลงไว้ว่าในหน้าแก้ไข
+            # ไม่ต้องโชว์เส้น แต่ตอน export ต้องมี
+            if cell.get("v") or cell.get("data") or cell.get("head"):
+                x.border = box
+
+            span = cell.get("span")
+            if span and (span["r"] > 1 or span["c"] > 1):
+                r2 = r + max(1, span["r"]) - 1
+                c2 = min(c + max(1, span["c"]) - 1, rendered["nCols"])
+                # ข้ามถ้าซ้อนกับช่วงที่ผสานไปแล้ว — openpyxl ไม่ห้ามตอนสร้าง แต่
+                # ไฟล์ที่ได้จะเปิดไม่ขึ้นใน Excel (บอกว่าไฟล์เสียหาย) ยอมให้ผสาน
+                # ไม่ครบดีกว่าได้ไฟล์ที่เปิดไม่ได้เลย
+                if not any(
+                    m.min_row <= r2 and r <= m.max_row and m.min_col <= c2 and c <= m.max_col
+                    for m in ws.merged_cells.ranges
+                ):
+                    ws.merge_cells(start_row=r, start_column=c, end_row=r2, end_column=c2)
+
+    for c in range(1, (rendered["nCols"] or 1) + 1):
+        ws.column_dimensions[get_column_letter(c)].width = 18
+
+    buf = BytesIO()
+    try:
+        wb.save(buf)
+    except Exception as exc:
+        log.exception("สร้างไฟล์ xlsx ไม่สำเร็จ")
+        raise HTTPException(500, f"สร้างไฟล์ Excel ไม่สำเร็จ: {type(exc).__name__}: {exc}")
+    buf.seek(0)
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", tpl["name"]).strip("_") or "report"
+    fname = f"{safe}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={fname}"},
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ถังขยะ — ดูรายการ / กู้คืน / ลบอัตโนมัติเมื่อเกินอายุ
+# ══════════════════════════════════════════════════════════════════════════════
+# ⚠ ไฟล์ในถังขยะ "ห้าม" mount เป็น static เด็ดขาด — ต่างจาก image_ALPL ที่เปิด
+#   ให้เข้าถึงผ่าน /media/alpl ถังขยะเข้าถึงได้เฉพาะผ่าน endpoint ด้านล่างเท่านั้น
+
+# ป้ายชื่อภาษาไทยของแต่ละ kind — ใช้แสดงในตารางหน้าเว็บ
+_DELETED_KIND_LABEL = {
+    "measurement":  "ผลการวัด",
+    "part":         "Part (ALPL)",
+    "operator":     "Operator",
+    "owner":        "Owner",
+    "vendor":       "Vendor",
+    "handler":      "Handler",
+    "template":     "Template",
+    "package_size": "Package Size",
+    "part_number":  "Part Number",
+}
+
+
+def _deleted_files():
+    """ไล่หาไฟล์ .json ทุกอันในถังขยะ — คืน (โฟลเดอร์วัน, ชื่อไฟล์, path เต็ม)"""
+    if not os.path.isdir(DELETED_DIR):
+        return []
+    out = []
+    for day in sorted(os.listdir(DELETED_DIR), reverse=True):
+        day_dir = os.path.join(DELETED_DIR, day)
+        if not os.path.isdir(day_dir):
+            continue
+        for name in sorted(os.listdir(day_dir), reverse=True):
+            if name.endswith(".json"):
+                out.append((day, name, os.path.join(day_dir, name)))
+    return out
+
+
+def _deleted_summary(payload: Dict[str, Any]) -> str:
+    """ข้อความสรุปสั้นๆ ให้คนอ่านออกว่าแถวที่ลบไปคืออะไร โดยไม่ต้องเปิดไฟล์ดู"""
+    kind, row = payload.get("kind"), payload.get("row", {})
+    if kind == "measurement":
+        vx, vy = row.get("value_x"), row.get("value_y")
+        return (f"ALPL {row.get('number_alpl')} · {vx} / {vy} · {row.get('result')}"
+                f" · {str(row.get('timestamp') or '')[:19]}")
+    if kind == "part":
+        n = len(payload.get("related", {}).get("sessions", []))
+        return f"ALPL {row.get('number_alpl')}" + (f" (+ {n} sessions)" if n else "")
+    # lookup ทั้งหมดมีคอลัมน์ชื่อลงท้ายด้วย _name
+    for k, v in row.items():
+        if k.endswith("_name") or k == "package_size":
+            return str(v)
+    return ", ".join(f"{k}={v}" for k, v in list(row.items())[:3])
+
+
+def _purge_old_deleted() -> int:
+    """ลบโฟลเดอร์ในถังขยะที่เก่ากว่า DELETED_RETENTION_DAYS วัน — คืนจำนวนที่ลบ
+
+    อ่านวันจาก "ชื่อโฟลเดอร์" (DD-MM-YYYY พ.ศ.) ไม่ใช่ mtime ของไฟล์ เพราะ mtime
+    เปลี่ยนได้ง่ายเวลาก๊อป/ย้ายไฟล์ ส่วนชื่อโฟลเดอร์คือวันที่ลบจริงเสมอ
+    """
+    if not os.path.isdir(DELETED_DIR):
+        return 0
+    cutoff = datetime.now().date() - timedelta(days=DELETED_RETENTION_DAYS)
+    removed = 0
+    for day in os.listdir(DELETED_DIR):
+        day_dir = os.path.join(DELETED_DIR, day)
+        if not os.path.isdir(day_dir):
+            continue
+        try:
+            d, m, y = day.split("-")
+            day_date = date(int(y) - 543, int(m), int(d))   # แปลง พ.ศ. → ค.ศ.
+        except (ValueError, TypeError):
+            log.warning("ข้ามโฟลเดอร์ในถังขยะที่ชื่อไม่ใช่รูปแบบวันที่: %s", day)
+            continue
+        if day_date < cutoff:
+            try:
+                shutil.rmtree(day_dir)
+                removed += 1
+                log.info("ลบถังขยะของวันที่ %s (เกิน %s วัน)", day, DELETED_RETENTION_DAYS)
+            except OSError as exc:
+                log.warning("ลบโฟลเดอร์ถังขยะ %s ไม่สำเร็จ: %s", day, exc)
+    return removed
+
+
+@app.get("/api/deleted")
+async def list_deleted():
+    """รายการทุกอย่างที่อยู่ในถังขยะ เรียงจากลบล่าสุดก่อน"""
+    items = []
+    for day, name, path in _deleted_files():
+        try:
+            with open(path, encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception as exc:
+            log.warning("อ่านไฟล์ถังขยะ %s ไม่สำเร็จ: %s", name, exc)
+            continue
+        kind = payload.get("kind", "?")
+        items.append({
+            "id":         f"{day}/{name}",          # ใช้เป็นตัวอ้างตอนกู้คืน
+            "deleted_at": payload.get("deleted_at"),
+            "kind":       kind,
+            "kind_label": _DELETED_KIND_LABEL.get(kind, kind),
+            "summary":    _deleted_summary(payload),
+            "has_image":  bool(payload.get("image_file")),
+        })
+    return {"items": items, "total": len(items), "retention_days": DELETED_RETENTION_DAYS}
+
+
+def _deleted_path(item_id: str) -> str:
+    """แปลง id ("<วัน>/<ไฟล์>.json") เป็น path จริง พร้อมกันหลุดออกนอกถังขยะ"""
+    base = os.path.realpath(DELETED_DIR)
+    target = os.path.realpath(os.path.join(base, item_id))
+    if not target.startswith(base + os.sep) or not target.endswith(".json"):
+        raise HTTPException(404, "ไม่พบรายการนี้ในถังขยะ")
+    if not os.path.isfile(target):
+        raise HTTPException(404, "ไม่พบรายการนี้ในถังขยะ")
+    return target
+
+
+@app.post("/api/deleted/restore")
+async def restore_deleted(body: Dict[str, str] = Body(...)):
+    """กู้คืน 1 รายการจากถังขยะ — insert แถวกลับ + ย้ายไฟล์รูปกลับที่เดิม
+
+    ทำเป็น transaction เดียว ถ้าขั้นไหนพังจะ rollback ทั้งหมด แล้วไฟล์ JSON
+    ยังอยู่ในถังขยะเหมือนเดิม (ลองใหม่ได้)
+
+    ⚠ ลำดับการกู้สำคัญ: ถ้าแถวนี้อ้าง FK ไปหาของที่ถูกลบไปแล้วเหมือนกัน
+      (เช่นกู้ measurement ที่อ้าง operator ที่โดนลบไป) MySQL จะปฏิเสธ
+      ต้องกู้ตัวที่ถูกอ้างก่อน — ข้อความ error จะบอกให้ผู้ใช้รู้
+    """
+    item_id = (body or {}).get("id", "")
+    path = _deleted_path(item_id)
+    with open(path, encoding="utf-8") as f:
+        payload = json.load(f)
+
+    table   = payload["table"]
+    row     = payload["row"]
+    related = payload.get("related") or {}
+
+    db = get_db()
+    try:
+        db.autocommit(False)
+        with db.cursor() as cur:
+            _block_if_session_running(cur, "กู้คืน")
+
+            def insert(tbl: str, data: Dict[str, Any]):
+                cols = ", ".join(f"`{c}`" for c in data)
+                marks = ", ".join(["%s"] * len(data))
+                cur.execute(f"INSERT INTO `{tbl}` ({cols}) VALUES ({marks})", list(data.values()))
+
+            try:
+                insert(table, row)
+                # sessions ต้องเข้าหลัง parts_specifications เสมอ (FK ชี้ไปหา)
+                for tbl, rows in related.items():
+                    for r in rows:
+                        insert(tbl, r)
+            except pymysql.err.IntegrityError as exc:
+                db.rollback()
+                code = exc.args[0] if exc.args else 0
+                if code == 1062:
+                    raise HTTPException(409, "กู้คืนไม่ได้ — มีข้อมูล id นี้อยู่ในระบบแล้ว")
+                if code == 1452:
+                    raise HTTPException(
+                        409,
+                        "กู้คืนไม่ได้ — ข้อมูลนี้อ้างอิงถึงรายการอื่นที่ถูกลบไปแล้ว "
+                        "กรุณากู้คืนรายการที่ถูกอ้างถึงก่อน (เช่น Operator / Part Number)",
+                    )
+                raise HTTPException(409, f"กู้คืนไม่สำเร็จ: {exc}")
+
+        # ── ย้ายไฟล์รูปกลับที่เดิม (หลัง DB สำเร็จแล้วเท่านั้น) ──────────────
+        image_file  = payload.get("image_file")
+        image_path  = row.get("image_path")
+        if image_file and image_path:
+            src = os.path.join(os.path.dirname(path), image_file)
+            dst = os.path.join(ALPL_IMAGE_DIR, image_path)
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.move(src, dst)
+            except OSError as exc:
+                # DB กู้แล้วแต่รูปย้ายไม่สำเร็จ — ไม่ rollback เพราะข้อมูลสำคัญกว่ารูป
+                log.warning("กู้ข้อมูลสำเร็จแต่ย้ายรูปกลับไม่ได้ (%s): %s", image_file, exc)
+
+        db.commit()
+        os.remove(path)   # ออกจากถังขยะแล้ว
+        log.info("กู้คืนจากถังขยะ: %s", item_id)
+        return {"ok": True, "kind": payload.get("kind"), "table": table}
+    finally:
+        db.autocommit(True)
+        db.close()
+
+
+@app.post("/api/deleted/remove")
+async def remove_deleted(body: Dict[str, str] = Body(...)):
+    """ลบ 1 รายการออกจากถังขยะ **ถาวร** — กู้คืนไม่ได้อีก
+
+    ลบทั้งไฟล์ .json และไฟล์รูปที่เก็บคู่กัน ไม่แตะฐานข้อมูลเลย (แถวนั้นถูกลบ
+    ไปตั้งแต่ตอนกดลบครั้งแรกแล้ว ตรงนี้แค่ทิ้งตัวสำรอง)
+    """
+    path = _deleted_path((body or {}).get("id", ""))
+    try:
+        with open(path, encoding="utf-8") as f:
+            image_file = json.load(f).get("image_file")
+    except Exception:
+        image_file = None
+
+    if image_file:
+        # ยึด "โฟลเดอร์ของไฟล์ json" เป็นฐานเสมอ + เอาเฉพาะชื่อไฟล์ กัน image_file
+        # ที่มี path ปนมาพาไปลบไฟล์นอกถังขยะ
+        img = os.path.join(os.path.dirname(path), os.path.basename(image_file))
+        try:
+            os.remove(img)
+        except OSError:
+            pass
+
+    os.remove(path)
+    log.info("ลบถาวรจากถังขยะ: %s", (body or {}).get("id"))
+    return {"ok": True}
+
+
+@app.delete("/api/deleted")
+async def purge_deleted_now():
+    """สั่งลบของในถังขยะที่เกินอายุทันที (ปกติทำอัตโนมัติตอน backend เริ่ม)"""
+    return {"ok": True, "removed_days": _purge_old_deleted()}
 
 
 # ══════════════════════════════════════════════════════════════════════════════

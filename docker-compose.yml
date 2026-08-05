@@ -3,7 +3,15 @@ services:
   mysql:
     image: mysql:8.0
     restart: unless-stopped
+    # --default-time-zone=+07:00 : บังคับให้ CURRENT_TIMESTAMP/NOW() ของ MySQL
+    # เป็นเวลาไทย (UTC+7) — ค่า default ของ container คือ UTC ทำให้ timestamp
+    # ที่บันทึกช้ากว่าเวลาจริง 7 ชม. ส่วนหน้าเว็บอ่านค่าที่ได้เป็น "เวลาท้องถิ่น"
+    # อยู่แล้ว (สตริงจาก API ไม่มี timezone ติดมา) ตั้งตรงนี้ที่เดียวจึงตรงกันทั้งระบบ
+    # ใช้รูปแบบ offset (+07:00) แทนชื่อโซน (Asia/Bangkok) เพราะไม่ต้องพึ่งตาราง
+    # timezone ของ MySQL ที่ไม่ได้โหลดมาครบใน image นี้
+    command: --default-time-zone=+07:00
     environment:
+      TZ: Asia/Bangkok
       MYSQL_ROOT_PASSWORD: rootpassword
       MYSQL_DATABASE: tmx_db
       MYSQL_USER: pc_user

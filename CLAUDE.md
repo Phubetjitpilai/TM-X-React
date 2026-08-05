@@ -15,7 +15,7 @@
 │ (React SPA)  │ ◀─── SSE ─────── │     (FastAPI)      │                         │  Browser      │
 └──────────────┘                  └──────────────────┘
                                           │
-                                  MySQL   │  (รันบนเครื่องโดยตรง — เลิกใช้ Docker แล้ว)
+                                  MySQL   │  (dev: Docker · หน้างานจริง: ลงเครื่องตรง)
                                   (data)  │
                                           ▼
                                    ┌──────────────┐
@@ -24,17 +24,35 @@
                                           ▲
                                           │ HTTP (POST /api/measurements, heartbeat)
                                           │
-                                   ┌──────────────────────┐   TCP + FTP (agent.py ต่อจริงแล้ว) ┌────────────────┐
-                                   │ Backend-pc_station/    │ ─────────────────────────▶ │ KEYENCE TM-X5065│
-                                   │     agent.py (บน Pi)     │ ◀───────────────────────── │  + MCU (Serial) │
-                                   └──────────────────────┘                              └────────────────┘
+                                   ┌────────────────────────────┐        TCP (R0/PW/T1/S0)         ┌─────────────────┐
+                                   │ send_command.py (บน Pi)      │ ───────────────────────────────▶ │ KEYENCE TM-X5065 │
+                                   │  รับ start/stop จาก Backend   │                                  │   + MCU (Serial) │
+                                   └────────────────────────────┘                                  └─────────────────┘
+                                                                                                            │
+                                   ┌────────────────────────────┐        FTP (ค่า .txt + รูป)                 │
+                                   │ Recieve_tm-x.py (บน PC)      │ ◀───────────────────────────────────────────┘
+                                   │  POST ค่า+รูป เข้า Backend     │
+                                   └────────────────────────────┘
 ```
+
+**แยกหน้าที่ชัดเจน 2 สคริปต์ (สถาปัตยกรรมที่ใช้จริง)**
+
+| สคริปต์ | รันที่ | หน้าที่ |
+|---|---|---|
+| `send_command.py` | Raspberry Pi | รับ start/stop จาก Backend → สั่ง TM-X ผ่าน TCP (`R0` → `PW,1,<template>` → `T1` ต่อชิ้น → `S0`) **ไม่เห็นค่า/รูปเลย** |
+| `Recieve_tm-x.py` | PC (เครื่องเดียวกับ Backend) | เปิด FTP server รอรับค่า+รูปที่ TM-X ส่งตรงมา → ถาม Backend ว่า session ไหน running → POST ค่า + อัปโหลดรูป |
+
+Pi ไม่ยุ่งกับรูป/ค่าที่วัดได้แล้ว (TM-X ส่งตรงเข้า PC) — ต่างจาก `agent.py` เดิม
+ที่ Pi เปิด FTP server ของตัวเองรับรูปแล้วส่งต่อให้ PC อีกทอด
 
 - **Frontend → Backend**: HTTP request ปกติ (POST /api/session/start, /api/session/stop ฯลฯ)
 - **Backend → Frontend**: Server-Sent Events (SSE) ทางเดียว ผ่าน `/api/stream`
-- **Backend ↔ Agent**: HTTP — Backend สั่ง Agent ผ่าน `POST /command` (action: start/stop), Agent ส่งค่าที่วัดได้กลับผ่าน `POST /api/measurements`, heartbeat ผ่าน `POST /api/heartbeat`, และรูปภาพผ่าน `POST /api/measurements/{id}/image-upload` (multipart)
-- **Agent ↔ TM-X Controller**: TCP (สั่งวัด/ขอค่า) + FTP (Agent เปิดเป็น FTP server ของตัวเองรอ TM-X ส่งรูปเข้ามา) — `agent.py` ต่อฮาร์ดแวร์จริงแล้ว (รันบน Raspberry Pi), เหลือแค่ `agent_mock_up.py` ที่ยังเป็น mock
-- **รูปภาพ (image storage)**: **เลิกใช้ MinIO แล้ว** ดีไซน์สรุปแล้ว — Agent (บน Pi) รับรูปจาก TM-X ผ่าน FTP แบบ single-shot-per-trigger เก็บพักที่ `Store_image_temporary/` ชั่วคราว แล้วอัปโหลด (HTTP multipart) ไปที่ Backend (บน PC) ผ่าน `POST /api/measurements/{id}/image-upload` — Backend เซฟไฟล์จริงลง `ALPL_IMAGE_DIR` (ค่าเริ่มต้น `ALPL/`) แยกโฟลเดอร์ย่อยตาม `package_size` แล้วอัปเดต `measurements.image_path` เป็น relative path เสิร์ฟผ่าน static mount `/media/alpl`
+- **Backend → Pi**: `POST /command` ไปที่ `AGENT_HOST:AGENT_PORT` (action: `start`/`stop` พร้อม `session_id`, `template_name`, `target_count`, `number_alpl`)
+- **Pi → Backend**: heartbeat ผ่าน `POST /api/heartbeat` ทุก 5 วิ (แนบ `session_id` ปัจจุบัน กัน `heartbeat_checker` mark session เป็น timeout)
+- **Pi → TM-X**: TCP `192.168.10.11:8600` — `R0` (reset) → `PW,1,<template>` (โหลดโปรแกรมวัด) → `T1` ต่อชิ้น (ผ่าน connection ใหม่แยกทุกครั้ง) → `S0` ตอนจบ
+- **TM-X → PC**: FTP — TM-X เขียนไฟล์ `.txt` ต่อท้ายเรื่อยๆ (บรรทัดละ 1 ค่า รูปแบบ `+0005.017,+0005.029`) แล้วส่งรูปตามมาในคอนเนกชันเดียวกัน `Recieve_tm-x.py` จับคู่ "รูปที่เพิ่งได้" กับ "บรรทัดล่าสุดของ .txt"
+- **PC → Backend**: `POST /api/measurements` แล้วอัปโหลดรูปต่อที่ `POST /api/measurements/{id}/image-upload` (multipart)
+- **รูปภาพ (image storage)**: **เลิกใช้ MinIO แล้ว** — `Recieve_tm-x.py` พักไฟล์ที่ `TEMP_IMAGE_DIR` (`Store_image_temporary/`) บน PC แล้วอัปโหลดเข้า Backend (คนละ process แต่เครื่องเดียวกัน) → Backend แปลงเป็น `.jpg` ด้วย Pillow เซฟลง `ALPL_IMAGE_DIR` แยกโฟลเดอร์ตามวันที่วัด (DD-MM-YYYY พ.ศ.) แล้วอัปเดต `measurements.image_path` เสิร์ฟผ่าน static mount `/media/alpl` — ไฟล์ temp ถูกลบทิ้งเสมอไม่ว่าอัปโหลดสำเร็จหรือไม่
 
 ---
 
@@ -45,25 +63,40 @@ TM-X_Project/
 ├── Backend-server/              # FastAPI backend (Single Source of Truth)
 │   ├── main.py
 │   └── requirements.txt
-├── Backend-pc_station/          # Agent ที่รันอยู่บน Raspberry Pi หน้างาน คุยกับ TM-X/MCU (agent.py) + รับรูปผ่าน FTP ของตัวเอง
-│   ├── agent.py                 # ของจริง — ต่อ TCP/FTP กับ TM-X แล้ว (ftp.py logic ถูกรวมเข้ามาที่นี่)
-│   ├── agent_mock_up.py         # โหมด mock (สุ่มค่า value_x/value_y) สำหรับเทสต์ไม่มีฮาร์ดแวร์
-│   └── ftp.py                   # สคริปต์ทดสอบ FTP เดี่ยวๆ (เหลือไว้อ้างอิง ไม่ได้ถูกเรียกจากระบบจริงแล้ว)
+├── Backend-pc_station/          # สคริปต์ฝั่งหน้างาน — 2 ตัวแรกคือของจริงที่ใช้งาน ที่เหลือเป็น legacy
+│   ├── send_command.py          # ✅ ของจริง รันบน Pi — รับ start/stop จาก Backend แล้วสั่ง TM-X ผ่าน TCP
+│   ├── Recieve_tm-x.py          # ✅ ของจริง รันบน PC — FTP server รับค่า+รูปจาก TM-X แล้ว POST เข้า Backend
+│   ├── mockup.py                # โหมด mock (สุ่มค่า) สำหรับเทสต์ไม่มีฮาร์ดแวร์ — รองรับ pause/resume ด้วย
+│   ├── requirements.txt         # dependency ของทั้ง 3 ตัวข้างบน (รวม pyftpdlib)
+│   ├── agent.py                 # ⚠ legacy — สถาปัตยกรรมเก่าที่ Pi เปิด FTP รับรูปเองแล้วส่งต่อ PC (ไม่ใช้แล้ว)
+│   └── tcp.py, ftp.py           # ⚠ legacy — สคริปต์ทดสอบเดี่ยวๆ เหลือไว้อ้างอิง
 ├── Frontend/                    # Web Dashboard สำหรับ Operator (ของเดิม ยังใช้งานจริงอยู่ — ดูหัวข้อ Frontend)
-│   ├── index.html               # หน้าหลัก: Live Telemetry, Part Entry, Camera Preview
-│   ├── edit.html                # Database Editor (Parts/Measurements CRUD)
-│   └── export.html              # หน้า Export ข้อมูล (CSV, placeholder)
+│   ├── index.html               # หน้าหลัก: Live Telemetry, Part Entry, Session Control (Start/Pause/Stop)
+│   ├── edit.html                # Database Editor (Parts/Measurements/Lookup Tables CRUD)
+│   ├── export.html              # Wizard 3 ขั้นของทุกรูปแบบ — ?format=csv|pdf|excel
+│   ├── report-template.html     # ตัวแก้ผังรายงานแบบสเปรดชีต (ใช้กับ PDF/Excel)
+│   └── test.html                # ⚠ mockup เก่า ไม่ได้ใช้แล้ว
 ├── Frontend-react/              # โปรเจกต์ React ใหม่ (Vite+TS+Router+TanStack Query) — กำลังย้ายมาแทน Frontend/ ทีละหน้า ยังไม่ deploy จริง (ดู Frontend-react/README.md)
-├── mysql-init/
-│   ├── init.sql                 # Schema (เดิม auto-run ตอน MySQL container start — ตอนนี้ MySQL รันบนเครื่องโดยตรง ต้อง import เองด้วยมือ)
+├── DEPLOY.md                    # ขั้นตอนติดตั้งบนเครื่อง PC หน้างาน (MySQL ลงตรง ไม่ใช้ Docker)
+├── sql-tools/                   # สคริปต์ SQL ที่ "รันเองด้วยมือ" เท่านั้น (migration/diagnose)
+│   │                            # ⚠ ห้ามเอาไปไว้ใน mysql-init/ เด็ดขาด — ดูหมายเหตุใต้ตาราง
+│   ├── add_measurement_indexes.sql  # เพิ่ม INDEX ให้ DB เก่า (DB ใหม่ได้จาก init.sql อยู่แล้ว)
+│   ├── migrate_export_template.sql  # เพิ่มคอลัมน์ kind/layout_json ให้ DB เก่าที่สร้างไว้ก่อน
+│   ├── migrate_report_kind.sql      # แปลงเทมเพลตเก่า kind='report' → 'pdf'
+│   └── diagnose_start_blockers.sql  # ไล่หาว่า ALPL ตัวไหนกด Start ไม่ได้เพราะติดข้อไหน
+├── mysql-init/                  # ⚠ mount เป็น docker-entrypoint-initdb.d — ทุกไฟล์ .sql
+│   │                            # ในนี้ถูกรันอัตโนมัติเรียงตามตัวอักษรตอน container เกิดใหม่
+│   ├── init.sql                 # Schema + INDEX (auto-run ตอน container เกิดใหม่ / หน้างานต้อง import เอง)
 │   └── insert.sql                # Seed ข้อมูลตั้งต้นของตาราง lookup (operator/owner/handler/vendor/package_size)
 ├── image_ALPL/                  # แหล่งภาพอ้างอิงของแต่ละ ALPL (ใช้เทียบ/แสดงผล)
-├── Store_image_temporary/       # โฟลเดอร์พักภาพชั่วคราวบน Agent/Pi หลัง FTP รับจาก TM-X มา ก่อนอัปโหลดต่อให้ Backend แล้วลบทิ้ง
-├── ALPL/                        # ที่เก็บรูปถาวรบนเครื่อง PC (Backend) แยกโฟลเดอร์ย่อยตาม package_size — สร้างอัตโนมัติโดย main.py (ดู ALPL_IMAGE_DIR)
-├── TM-X_simulation/             # โปรแกรมจำลอง TM-X Controller (สำหรับเทสต์ตอนยังไม่มีฮาร์ดแวร์จริง)
+├── Store_image_temporary/       # โฟลเดอร์พักภาพชั่วคราว **บน PC** (Recieve_tm-x.py) ก่อนอัปโหลดเข้า Backend แล้วลบทิ้ง
+├── ALPL/                        # ที่เก็บรูปถาวรบนเครื่อง PC (Backend) แยกโฟลเดอร์ย่อยตามวันที่วัด (DD-MM-YYYY พ.ศ.) — สร้างอัตโนมัติโดย main.py (ดู ALPL_IMAGE_DIR)
+├── TM-X_simulation/             # ⚠ legacy — ตัวจำลอง TM-X ที่เขียนไว้ตอนยังไม่รู้โปรโตคอลจริง
+│   │                            #   ใช้คำสั่ง LOAD_TEMPLATE/MEASURE_CMD ซึ่งไม่ตรงกับของจริง
+│   │                            #   (R0/PW/T1/S0) และไม่ push ไฟล์ออกทาง FTP — ไม่ได้ใช้แล้ว
 │   ├── tm-x.py
 │   └── requirements.txt
-├── docker-compose.yml           # ⚠️ Legacy — เดิมรัน MySQL+MinIO ผ่าน Docker ตอนนี้ไม่ใช้แล้ว (MySQL รันบนเครื่องโดยตรง, MinIO เลิกใช้) ไฟล์ยังไม่ได้ลบออกจาก repo
+├── docker-compose.yml           # ใช้จริงตอน dev (MySQL) — service `minio` เป็น legacy เลิกใช้แล้วแต่ยังไม่ได้ลบ
 └── .env                         # Config กลาง (DB, Agent, TM-X, Heartbeat, โฟลเดอร์พักภาพชั่วคราว)
 ```
 
@@ -74,17 +107,26 @@ TM-X_Project/
 | Layer | Tools |
 |---|---|
 | Backend | Python 3.11, FastAPI, Pydantic, httpx, pymysql, pandas, sse-starlette, python-dotenv |
-| Database | MySQL 8.0 (รันบนเครื่องโดยตรง — เลิกใช้ Docker แล้ว) |
-| Image Storage | ดีไซน์สรุปแล้ว (เลิกใช้ MinIO) — ไฟล์จริงบนดิสก์ 2 จุด: `Store_image_temporary/` พักชั่วคราวบน Agent/Pi, `ALPL_IMAGE_DIR` (`ALPL/`) เก็บถาวรบน PC แยกโฟลเดอร์ตาม package_size, ส่งข้ามเครื่องด้วย HTTP multipart upload |
+| Database | MySQL 8.0 — **dev: รันผ่าน Docker** (`docker compose up`, port 3307) · **หน้างานจริง: ลงเครื่องตรงเป็น Windows Service** (port 3306) ดู `DEPLOY.md` |
+| Image Storage | ดีไซน์สรุปแล้ว (เลิกใช้ MinIO) — ไฟล์จริงบนดิสก์ 2 จุด: `Store_image_temporary/` พักชั่วคราวบน Agent/Pi, `ALPL_IMAGE_DIR` (`ALPL/`) เก็บถาวรบน PC แยกโฟลเดอร์ตามวันที่วัด (DD-MM-YYYY พ.ศ.) ส่งข้ามเครื่องด้วย HTTP multipart upload — Backend แปลงไฟล์ต้นทาง (ปกติ .bmp) เป็น .jpg เสมอด้วย Pillow ก่อนเซฟ |
 | Frontend | React (Vite) + React Router (SPA) + TanStack Query (react-query) — กำลังย้ายจาก Vanilla JS เดิม (ดูหัวข้อ "Frontend Framework Migration") |
 | Realtime | Server-Sent Events (SSE) |
 | Hardware (เป้าหมาย ยังไม่ต่อจริง) | KEYENCE TM-X5065 (TCP), FTP สำหรับภาพ, MCU ผ่าน Serial |
-| Infra | ไม่มี container แล้ว — MySQL รันเป็น local service บนเครื่อง PC โดยตรง (`docker-compose.yml` ยังอยู่ใน repo แต่เป็น legacy ไม่ได้ใช้งาน) |
+| Infra | dev ใช้ Docker เฉพาะ MySQL · หน้างานไม่มี container เลย (MySQL เป็น Windows Service, backend เป็น process uvicorn ตัวเดียว) — เหตุผลที่ไม่ใช้ Docker หน้างานอยู่ใน `DEPLOY.md` |
+| Export | openpyxl (.xlsx) · PDF ใช้ตัวพิมพ์ของเบราว์เซอร์ (`window.print()` + `@media print`) ไม่ได้สร้างฝั่ง server |
 | Reporting (แยกจากระบบนี้) | Power BI (DAX, ตาราง `combined_3_fixed`) |
 
 **สำคัญ**: ต้องใช้ Python 3.11 เท่านั้น (3.14 ใช้ไม่ได้กับ dependency บางตัว)
 
 ---
+
+> ⚠ **ห้ามวางสคริปต์ SQL อื่นใน `mysql-init/` นอกจาก `init.sql` กับ `insert.sql`**
+> โฟลเดอร์นี้ถูก mount เป็น `docker-entrypoint-initdb.d` — MySQL รันไฟล์ `.sql` **ทุกไฟล์**
+> ในนั้นเรียงตามตัวอักษรตอน container เกิดใหม่ และ entrypoint ใช้ `set -e` ดังนั้นถ้าไฟล์ไหน
+> error ไฟล์ถัดไปจะไม่ถูกรันเลย ตัวอย่างที่เคยเกิดจริง: ไฟล์ชื่อขึ้นต้นด้วย `d` (diagnose)
+> เรียงมาก่อน `init.sql` แล้ว SELECT จากตารางที่ยังไม่มี → `ERROR 1146` → `init.sql`/`insert.sql`
+> ไม่ถูกรัน → ฐานข้อมูลว่างเปล่า หน้าเว็บขึ้น "โหลด ... ไม่สำเร็จ" ทุกช่อง
+> สคริปต์ migration/diagnose ให้เก็บที่ `sql-tools/` แล้วรันเองด้วยมือ
 
 ## Database Schema (`mysql-init/init.sql`)
 
@@ -93,7 +135,7 @@ TM-X_Project/
 - **`parts`**: PK = `number_alpl` (1 ALPL = 1 vendor/handler/package เสมอ) **ไม่ได้เก็บ nominal/tolerance เอง** — ผูกกับ `package_size` ผ่าน `package_size_id` แทน
 - **`package_size`**: เก็บ `nominal_x`, `nominal_y` และ tolerance **ตัวเดียวใช้ร่วมกันทั้งแกน X/Y** (`upper_tol`, `lower_tol` — ไม่ได้แยกราย axis) พร้อม `template_name` (โปรแกรมวัดของ TM-X ที่ผูกกับขนาด package นี้)
 - **`sessions`**: 1 รอบการวัด state = `idle | running | stopped | timeout`, มี `target_count`/`measured_count` ใช้เช็คว่าวัดครบหรือยัง
-- **`measurements`**: ผลวัดแต่ละชิ้น มี `value_x`, `value_y`, `result` (OK/NG), `measure_type` (IPM/New/Rework/Manual), `image_path` (relative path ใต้ `ALPL_IMAGE_DIR` บนเครื่อง PC เช่น `"3x3/42_1028.jpg"` — ไม่ใช่ MinIO แล้ว เสิร์ฟผ่าน static mount `/media/alpl`)
+- **`measurements`**: ผลวัดแต่ละชิ้น มี `value_x`, `value_y`, `result` (OK/NG), `measure_type` (IPM/New/Rework/Manual), `image_path` (relative path ใต้ `ALPL_IMAGE_DIR` บนเครื่อง PC เช่น `"22-07-2569/203_22-07-2569.jpg"` — แยกโฟลเดอร์ตามวันที่วัด (พ.ศ.) ไม่ใช่ตาม package_size แล้ว เสิร์ฟผ่าน static mount `/media/alpl` — หมายเหตุ: ชื่อไฟล์ใช้แค่ `number_alpl` + วันที่ ไม่มี `measurement_id` ปน จึงเขียนทับกันได้ถ้ามีมากกว่า 1 การวัดของ ALPL เดียวกันในวันเดียวกัน (ตั้งใจ — เก็บแค่รูปล่าสุดของวันนั้น))
   - หมายเหตุ (อัปเดต): คอลัมน์ operator **ไม่ใช่ `Oparetor` (VARCHAR สะกดผิด) แบบเดิมแล้ว** — ตอนนี้เป็น `operator_id` (FK ไปตาราง `operator` ที่เก็บ `operator_name`) เอกสารเดิมพูดถึง `Oparetor` เพราะเป็นข้อมูลเก่าก่อน migrate ตอนนี้ล้าสมัยแล้ว
 
 ---
@@ -126,27 +168,88 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 - `POST /api/heartbeat`
 - `GET/POST/PATCH/DELETE /api/parts`, `/api/parts/{id}`
 - `GET/POST/PATCH/DELETE /api/measurements`, `/api/measurements/{id}`, `PATCH /api/measurements/{id}/image`
-- `POST /api/measurements/{id}/image-upload` — รับไฟล์รูป (multipart, `UploadFile`) จาก Agent เซฟลง `ALPL_IMAGE_DIR/<package_size>/<measurement_id>_<number_alpl><ext>` แล้วอัปเดต `measurements.image_path` เป็น relative path + broadcast SSE event `image_updated`
+- `POST /api/measurements/{id}/image-upload` — รับไฟล์รูป (multipart, `UploadFile`) จาก Agent แปลงเป็น `.jpg` ด้วย Pillow แล้วเซฟลง `ALPL_IMAGE_DIR/<DD-MM-YYYY พ.ศ.>/<number_alpl>_<DD-MM-YYYY พ.ศ.>.jpg` แล้วอัปเดต `measurements.image_path` เป็น relative path + broadcast SSE event `image_updated`
 - `GET /api/image-url/{measurement_id}` — คืน `{"url": "/media/alpl/<image_path>"}` จริงแล้ว (ไม่ใช่ stub อีกต่อไป) หรือ 404 ถ้ายังไม่มีรูป ส่วน `POST /api/upload-url` เดิม (MinIO presigned URL) ถูกลบออกจากโค้ดไปแล้ว ไม่มีอยู่อีกต่อไป
 - `GET /api/export/csv` — export พร้อม filter (ใช้ filter ชุดเดียวกับ `list_measurements`)
+- `GET /api/export/columns?kind=csv|pdf|excel` — catalog คอลัมน์ที่ลากใส่เทมเพลตได้
+- `GET /api/export/templates?kind=...`, CRUD + `/duplicate` — เทมเพลตแยก 3 ชนิด
+- `GET /api/export/report-preview?export_template_id=&full=0|1` — คลี่ผัง + ข้อมูลจริงเป็นตาราง 2 มิติ
+- `GET /api/export/xlsx` — สร้างไฟล์ .xlsx จากผังรายงาน (openpyxl)
+
+### Export / รายงาน — สิ่งที่ต้องรู้ก่อนแก้
+1. **`_render_report` เป็นตัวกลางตัวเดียว** ของทั้ง preview / Excel / PDF — แก้ที่นี่ที่เดียว
+   ไม่งั้นสิ่งที่เห็นบนจอกับไฟล์ที่ได้จะเพี้ยนกันเงียบๆ (PDF ใช้ตัวพิมพ์ของเบราว์เซอร์
+   วาดจาก HTML ก้อนเดียวกับ preview ไม่ได้สร้าง PDF ฝั่ง server)
+2. **`kind` มี 3 ค่า**: `csv` / `pdf` / `excel` — ห้ามเช็คแบบ `kind == "report"` อีก
+   (`report` เป็นชื่อเก่าสมัยที่ PDF กับ Excel ใช้ลิสต์ร่วมกัน) ทุกอย่างที่ไม่ใช่ `csv`
+   ถือเป็นรายงานหมด เคยพลาดตรงนี้แล้วบันทึกเทมเพลตไม่ได้เพราะไปตกเส้นทางของ CSV
+3. **`latest_only` ต้องกรองข้างในด้วย** — subquery ของ "เอาเฉพาะการวัดล่าสุด" ใช้ WHERE
+   ชุดเดียวกับ query หลัก ถ้าเผลอเอา WHERE ออกจะกลายเป็น "ล่าสุดของทั้งตาราง" แล้ว
+   ALPL ที่ถูกวัดซ้ำนอกช่วงที่กรองจะหายไปจากรายงานทั้งตัวโดยไม่มีอะไรเตือน
+4. **ค่าวันที่ปลายช่วงถูกครอบเต็มวันที่ backend** (`_day_end`) — ส่ง `2026-07-30` มาเฉยๆ ได้
+5. **`variants` บนเซลล์ข้อมูล** = หน้าตาแยกตามค่า (Result: OK เขียว / NG แดง) ผูกกับ
+   *ฟิลด์* ไม่ใช่ตำแหน่ง ลากย้ายบล็อกแล้วต้องติดไปด้วย (ดู `moveFieldBlock`)
 
 ---
 
-## Agent (`Backend-pc_station/agent.py`)
+## สคริปต์หน้างาน (`Backend-pc_station/`)
 
-รันด้วย:
+### `send_command.py` — รันบน Raspberry Pi
+
 ```bash
 cd Backend-pc_station
 pip install -r requirements.txt
-python agent.py
+python send_command.py          # ฟัง POST /command ที่ port 9998 (= AGENT_PORT)
 ```
 
-- **`agent.py` รันบน Raspberry Pi ต่อฮาร์ดแวร์จริงแล้ว** — คุย TCP กับ TM-X (`TMX_HOST`/`TMX_PORT`) ส่ง template name ตอน Start แล้วรอ trigger (ปัจจุบันจำลองด้วยการกด Enter ที่ terminal แทนสัญญาณจาก MCU จริง) เพื่ออ่านค่า `value_x`/`value_y` ทีละชิ้น — ส่วน `agent_mock_up.py` (mock, สุ่มค่าแทนการรอฮาร์ดแวร์) ยังเก็บไว้แยกต่างหากสำหรับเทสต์ไม่มีฮาร์ดแวร์
-- ฟังก์ชันสื่อสารกับฮาร์ดแวร์จริง (`_ensure_tcp`, `tcp_write`, `tcp_readline`, `_init_serial`, `send_serial`, `serial_reader_loop`) ใช้งานจริงแล้วใน `agent.py`
-- รับคำสั่งจาก Backend ผ่าน HTTP server ของตัวเอง (`POST /command`, action: `start`/`stop`) — ฟัง port ตาม `AGENT_PORT`
-- ส่ง heartbeat กลับ backend ทุก `HEARTBEAT_INTERVAL` วินาที พร้อม `session_id` ปัจจุบัน
-- **รูปภาพ**: `agent.py` เปิด FTP server ของตัวเอง (`SingleShotImageHandler`, ฟัง `AGENT_FTP_HOST`/`AGENT_FTP_PORT`) รอ TM-X ส่งรูปเข้ามา — ปกติล็อกไม่ให้อัปโหลด จนกว่า `arm_image_capture()` จะถูกเรียกตอนเริ่ม trigger วัดแต่ละชิ้น (ปลดล็อกรับได้ 1 ใบ, timeout ตาม `IMAGE_WAIT_TIMEOUT`) ไฟล์ที่รับมาพักไว้ที่ `TEMP_IMAGE_DIR` (`Store_image_temporary/`) แล้ว `upload_image_to_backend()` อัปโหลดต่อไปที่ `POST /api/measurements/{id}/image-upload` ของ Backend (HTTP multipart) จากนั้นลบไฟล์ temp ทิ้งเสมอ — ดีไซน์เดิมที่ทดสอบแยกไว้ใน `ftp.py` ถูกรวมเข้ามาที่นี่แล้ว (`ftp.py` เหลือไว้เป็นสคริปต์ทดสอบเดี่ยวๆ ไม่ได้ถูกเรียกจากระบบจริงอีกต่อไป)
-- `/simulate/object-ready` — endpoint ไว้ test ตอนยังไม่มีฮาร์ดแวร์ (ไม่มีความหมายแล้วสำหรับ `agent.py` ที่ต่อฮาร์ดแวร์จริง เพราะรอ trigger จริงแทน)
+- รับ `POST /command` จาก Backend (action `start`/`stop`) พร้อม `session_id`,
+  `template_name`, `target_count`, `number_alpl`
+- ต่อ TCP ไป TM-X (`TMX_HOST`/`TMX_PORT` จาก `.env`) แล้วส่งตามลำดับ:
+  `R0` (reset) → `PW,1,<template>` (โหลดโปรแกรมวัด, zero-pad 3 หลัก) →
+  วนต่อชิ้นจนครบ `target_count`: รอ `input()` แล้วส่ง `T1` → `S0` ตอนจบ
+- **`T1` ส่งผ่าน connection ใหม่แยกทุกครั้ง** ไม่ใช้ตัวที่ค้างไว้ส่ง R0/PW/S0
+  (ทดสอบกับฮาร์ดแวร์จริงแล้วว่าต้องทำแบบนี้ — ดู `trigger_sensor()`)
+- **ไม่เห็นค่า/รูปที่วัดได้เลย** — ไม่มี FTP server บน Pi อีกต่อไป
+- heartbeat ทุก 5 วิ พร้อม `session_id` ปัจจุบัน (กัน `heartbeat_checker` ฝั่ง
+  backend mark session เป็น timeout แล้วหน้าเว็บโดน reset กลางคัน)
+
+### `Recieve_tm-x.py` — รันบน PC (เครื่องเดียวกับ Backend)
+
+```bash
+cd Backend-pc_station
+python Recieve_tm-x.py          # เปิด FTP server ที่ AGENT_FTP_PORT (default 21)
+```
+
+- เปิด FTP server รอรับของจาก TM-X — **TM-X ส่งตรงมาที่ PC ไม่ผ่าน Pi**
+- TM-X ทำ 2 สเต็ปใน 1 คอนเนกชัน: เขียนไฟล์ `.txt` ผลวัด **ต่อท้ายเรื่อยๆ**
+  (บรรทัดละ 1 ค่า รูปแบบ `+0005.017,+0005.029` = value_x,value_y) แล้วส่งรูปตามมา
+  → `on_file_received` จำ path ของ `.txt` ไว้ พอได้ไฟล์ที่นามสกุลเป็นรูป จึงอ่าน
+  **บรรทัดล่าสุด** ของ `.txt` มาจับคู่กับรูปนั้น
+- ถาม Backend ก่อนทุกครั้งว่ามี session ไหน `running` อยู่ (`GET /api/session/state`)
+  — **ถ้าไม่มี จะทิ้งค่า+รูปนั้นไปเลย** (กันแปะผิด session ตอน TM-X ส่งมาช้า
+  หลัง session จบไปแล้ว)
+- `number_alpl` ที่ส่งไปไม่จำเป็นต้องตรงเป๊ะ — session แบบคิว (IPM/New/Rework)
+  ฝั่ง `main.py` เพิกเฉยค่านี้แล้วใช้ตำแหน่งในคิวของตัวเองแทน
+
+### ข้อจำกัดของสถาปัตยกรรมนี้ที่ต้องรู้
+
+- **Pi ไม่รู้ว่าชิ้นไหนพลาด** — ส่ง `T1` แล้ววนไปชิ้นถัดไปทันที ไม่มี retry
+  แบบ `arm_and_capture()` ของ `agent.py` เดิม ถ้า TM-X พลาดรอบไหน (ไม่ส่งค่า/รูป
+  มาที่ PC) `measured_count` จะไม่ครบ `target_count` แล้ว session ค้างที่
+  `running` — ต้องกด Stop เองจากเว็บ
+- **`send_command.py` ไม่รองรับ `pause`/`resume`** — backend ยิง action นี้ไป
+  แต่ `/command` รู้จักแค่ `start`/`stop` คำสั่งจึงถูกกลืนเงียบๆ (ดู Known Issues)
+- **`input()` บล็อก thread** — กด Stop จากเว็บแล้ว `S0` ถูกยิงไป TM-X ทันที แต่
+  loop จะยังไม่หลุดจนกว่าจะเคาะ Enter ที่เทอร์มินัลอีกครั้ง (จะหายไปเองตอนต่อ
+  MCU จริงเพราะไม่ต้องใช้ `input()` แล้ว)
+- **ไม่เช็ค response ของ `R0`/`PW`** — ถ้า TM-X ตอบ error (เช่นไม่มีโปรแกรม
+  หมายเลขนั้น) โค้ดเดินหน้าวัดต่อทั้ง session โดยไม่มีใครรู้
+
+### `mockup.py` — เทสต์โดยไม่มีฮาร์ดแวร์
+
+สุ่มค่า `value_x`/`value_y` ตาม nominal/tolerance จริงของ ALPL นั้น (จึงได้ OK/NG
+ที่สมจริง) และ **รองรับ `pause`/`resume` ครบ** ต่างจาก `send_command.py`
+
 
 ---
 
@@ -176,18 +279,21 @@ python agent.py
 
 | ตัวแปร | ใช้ที่ | คำอธิบาย |
 |---|---|---|
-| `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_PORT` | Backend | การเชื่อมต่อ MySQL (รันบนเครื่องโดยตรง — port default 3306 ไม่ใช่ 3307 ของ Docker เดิมแล้ว) |
+| `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_PORT` | Backend | การเชื่อมต่อ MySQL — **`DB_PORT=3307` ตอน dev (Docker map ออกมา) · `3306` ตอนลงหน้างาน** |
 | `BACKEND_URL` | Agent | URL ของ Backend (สำหรับ Agent ยิง measurement/heartbeat กลับ) — ถ้า Agent อยู่คนละเครื่อง (เช่น Raspberry Pi) ต้องเปลี่ยนเป็น IP ของเครื่อง PC ที่รัน Backend |
 | `AGENT_HOST` | Backend | ที่อยู่ของเครื่องที่ Agent รันอยู่ (ทิศตรงข้ามกับ `BACKEND_URL`) — default `localhost` (เทสต์เครื่องเดียวได้ปกติ) เปลี่ยนเป็น IP ของ Raspberry Pi เมื่อแยกเครื่องจริง |
 | `AGENT_PORT` | Backend, Agent | Port ที่ Agent HTTP server ฟังอยู่ |
 | `SERIAL_PORT`, `SERIAL_BAUD` | Agent | การเชื่อมต่อ MCU ผ่าน Serial (ยังไม่ใช้จริง) |
 | `TMX_HOST`, `TMX_PORT` | Agent | TCP ของ TM-X Controller (ต่อจริงแล้วที่ `192.168.10.11:8600`) |
-| `TEMP_IMAGE_DIR` | Agent (Pi) | โฟลเดอร์พักภาพชั่วคราวหลัง FTP รับจาก TM-X มา ก่อนอัปโหลดต่อให้ Backend แล้วลบทิ้ง (default `./Store_image_temporary`) |
-| `ALPL_IMAGE_DIR` | Backend (PC) | ที่เก็บรูปถาวร แยกโฟลเดอร์ย่อยตาม `package_size` อัตโนมัติ (default `TM-X_Project/ALPL/`) |
-| `AGENT_FTP_HOST`, `AGENT_FTP_PORT` | Agent (Pi) | ที่อยู่/พอร์ตของ FTP server ที่ Agent เปิดเองรอรับรูปจาก TM-X (default port `2121` เพราะ Linux ต้องเป็น root ถึง bind พอร์ต < 1024 ได้ — เปลี่ยนเป็น `21` แล้วรัน `sudo` ได้ถ้า TM-X ตั้งปลายทางตายตัวที่ 21) |
-| `AGENT_FTP_USER`, `AGENT_FTP_PASS` | Agent (Pi) | บัญชีที่ TM-X ใช้ล็อกอินเข้า FTP server ของ Agent |
+| `TEMP_IMAGE_DIR` | `Recieve_tm-x.py` (**PC**) | โฟลเดอร์พักภาพชั่วคราวหลัง FTP รับจาก TM-X มา ก่อนอัปโหลดต่อให้ Backend แล้วลบทิ้ง (default `./Store_image_temporary`) |
+| `ALPL_IMAGE_DIR` | Backend (PC) | ที่เก็บรูปถาวร แยกโฟลเดอร์ย่อยตามวันที่วัด (DD-MM-YYYY พ.ศ.) อัตโนมัติ (default `TM-X_Project/ALPL/`) — ไฟล์ต้นทางถูกแปลงเป็น `.jpg` เสมอ (Pillow) |
+| `AGENT_FTP_HOST`, `AGENT_FTP_PORT` | `Recieve_tm-x.py` (**PC**) | ที่อยู่/พอร์ตของ FTP server ที่รอรับค่า+รูปจาก TM-X — **ตอนนี้ใช้ `21`** (Windows bind พอร์ตต่ำได้ไม่ต้องเป็น admin ต่างจาก Linux) ถ้าพอร์ต 21 ถูก IIS FTP หรือโปรแกรมอื่นจองอยู่ต้องปิดตัวนั้นก่อน · `agent.py` เดิมใช้ `2121` เพราะรันบน Linux (Pi) |
+| `AGENT_FTP_USER`, `AGENT_FTP_PASS` | `Recieve_tm-x.py` (**PC**) | บัญชีที่ TM-X ใช้ล็อกอินเข้า FTP server บน PC — ต้องตั้งให้ตรงกับที่ตั้งไว้ในตัว TM-X เอง |
 | `AGENT_IMAGE_WAIT_TIMEOUT` | Agent (Pi) | เวลารอรูปสูงสุดหลัง trigger (วินาที) ก่อนจะยอมวัดต่อโดยไม่มีรูป |
 | `HEARTBEAT_INTERVAL`, `HEARTBEAT_TIMEOUT` | Backend, Agent | ความถี่ heartbeat / timeout threshold |
+| `MEASURE_TIMEOUT`, `MEASURE_POLL_INTERVAL` | `send_command.py` (Pi) | รอค่าการวัดกลับมาสูงสุดกี่วินาทีหลังยิง `T1` (default 15) และถี่แค่ไหนที่ถาม backend ว่า `measured_count` ขยับยัง (default 0.4) — ครบเวลาแล้วไม่ขยับจะเด้งถามผู้ใช้บนหน้าเว็บ |
+| `CORS_ORIGINS` | Backend | รายการ origin ที่ยอมให้เรียก API (คั่นด้วยคอมมา) — ค่าเริ่มต้นเปิดเฉพาะ localhost:8000 กับ Vite dev :5173 ใส่ `*` ถ้าอยากได้พฤติกรรมเดิม |
+| `REPORT_MAX_ROWS` | Backend | เพดานจำนวนแถวของรายงาน PDF/Excel (default 20000) เกินแล้วปฏิเสธพร้อมบอกให้กรองก่อน |
 
 > หมายเหตุ: ตัวแปร `MINIO_*` ทั้งหมดถูกถอดออกจากโค้ดแล้ว (เลิกใช้ MinIO) — ถ้าเห็นใน `.env` เก่าที่ยังไม่ได้อัปเดต ลบทิ้งได้เลย ไม่มีโค้ดจุดไหนอ่านค่านี้อีกต่อไป
 
@@ -198,22 +304,31 @@ python agent.py
 ## วิธีรันทั้งระบบ (Local Dev)
 
 ```bash
-# 1. ต้องมี MySQL รันอยู่บนเครื่องแล้ว (ไม่ใช้ Docker แล้ว) — ถ้ายังไม่เคย import
-#    schema ให้รัน mysql-init/init.sql แล้วตามด้วย mysql-init/insert.sql เข้า
-#    ฐานข้อมูล tmx_db ด้วยตัวเองก่อน (เดิม auto-run ตอน Docker container start
-#    ครั้งแรก แต่ตอนนี้ไม่มี Docker แล้วต้อง import เอง เช่นผ่าน mysql CLI หรือ
-#    MySQL Workbench)
+# 1. รัน MySQL ผ่าน Docker (dev ใช้วิธีนี้ — หน้างานจริงลง MySQL ตรง ดู DEPLOY.md)
+#    init.sql + insert.sql ถูกรันให้อัตโนมัติ "เฉพาะตอน volume ว่างเปล่าครั้งแรก"
+docker compose up -d
+#    ⚠ `docker compose down -v` ลบ volume = ข้อมูลการวัดหายทั้งหมด ใช้เฉพาะตอน
+#      ตั้งใจจะเริ่มใหม่จากศูนย์เท่านั้น (สั่ง `down` เฉยๆ ไม่ลบข้อมูล)
 
 # 2. รัน Backend (terminal ที่ 1)
 cd Backend-server
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
+#    --reload ใช้ได้เฉพาะตอน dev — ห้ามใส่ตอนใช้งานจริง เพราะมันจ้องดูไฟล์แล้ว
+#    รีสตาร์ทเอง ทำให้ SSE ของทุกเครื่องที่เปิดอยู่หลุดพร้อมกัน
 
-# 3. รัน Agent (terminal ที่ 2, ปกติรันบน Raspberry Pi หน้างาน)
+# 3. สคริปต์หน้างาน — ของจริงต้องรัน 2 ตัวคนละเครื่อง
 cd Backend-pc_station
 pip install -r requirements.txt
-python agent.py            # ต่อฮาร์ดแวร์ TM-X จริง (TCP+FTP) — ใช้งานจริงแล้ว
-# หรือ python agent_mock_up.py ถ้ายังไม่มีฮาร์ดแวร์ (สุ่มค่าแทน)
+
+#    3a. บน Raspberry Pi (terminal ที่ 2) — สั่ง TM-X ผ่าน TCP
+python send_command.py
+
+#    3b. บน PC เครื่องเดียวกับ Backend (terminal ที่ 3) — รับค่า+รูปจาก TM-X
+python Recieve_tm-x.py
+
+#    หรือถ้ายังไม่มีฮาร์ดแวร์ ใช้ตัวเดียวจบ (สุ่มค่าแทน + รองรับ pause/resume)
+python mockup.py
 
 # 4. รัน Frontend
 # ก่อนย้าย React เสร็จ: เปิดไฟล์ Frontend/index.html ผ่าน browser โดยตรง (หรือให้
@@ -230,9 +345,15 @@ python agent.py            # ต่อฮาร์ดแวร์ TM-X จริ
 
 - [ ] `session_queues` ไม่ persist ลง DB — หายเมื่อ server restart กลาง session
 - [ ] Stop flow ไม่สมมาตร — ปุ่มกายภาพไม่อัปเดต DB เหมือนปุ่มบนเว็บ
-- [ ] `edit.html` ยังเป็น frontend-only mockup (มี `console.log` payload ไว้ ยังไม่เรียก API จริง) — มี TODO marker ค้างอยู่
-- [ ] db-editor topbar navigation links (Home, Edit, Export) ยังไม่ครบ
-- [ ] Trigger วัดแต่ละชิ้นใน `agent.py` ยังจำลองด้วยการกด Enter ที่ terminal แทนสัญญาณ trigger จริงจาก MCU — รอต่อ MCU ผ่าน Serial จริง
+- [x] ~~`edit.html` เป็น frontend-only mockup~~ — เรียก API จริงครบแล้ว (Parts/Measurements/Lookup Tables CRUD)
+- [x] ~~topbar navigation ยังไม่ครบ~~ — ครบทั้ง 4 หน้า จัดกลางพร้อมไฮไลต์หน้าปัจจุบัน
+- [ ] ยังไม่มี auth เลย — ใครเข้าถึง API ได้ก็สั่ง Start/Stop/ลบข้อมูลได้ (จำกัดด้วย `CORS_ORIGINS` ได้ระดับหนึ่ง แต่ไม่ใช่การยืนยันตัวตน)
+- [ ] `Frontend/test.html` เป็น mockup เก่าที่ไม่ได้ใช้แล้ว ยังไม่ได้ลบ
+- [x] ~~Pi ไม่รู้ว่าชิ้นไหนพลาด~~ — `send_command.py` รอยืนยันว่า `measured_count` ขยับจริงหลังยิง `T1` (poll `/api/session/state`) ถ้าครบ `MEASURE_TIMEOUT` แล้วไม่ขยับ จะแจ้ง `POST /api/measure-timeout` → backend broadcast SSE `measure_timeout` → หน้าเว็บเด้ง modal ถามว่า "วัดชิ้นถัดไป / หยุดการวัด" → Pi poll `GET /api/measure-timeout/{session_id}` รอคำตอบ (เลือกหยุด = เดินเส้นทางเดียวกับปุ่ม Stop ทุกประการ)
+- [ ] Trigger วัดแต่ละชิ้นใน `send_command.py` ยังจำลองด้วยการกด Enter ที่ terminal แทนสัญญาณ trigger จริงจาก MCU — รอต่อ MCU ผ่าน Serial จริง
+- [ ] **`send_command.py` ไม่รองรับ `pause`/`resume`** — backend ยิง action นี้ไปแต่ `/command` รู้จักแค่ `start`/`stop` คำสั่งถูกกลืนเงียบๆ แล้วตอบ `{"status":"ok"}` กลับมา → **กด Pause บนเว็บแต่เครื่องจริงยังวัดต่อ** (`mockup.py` รองรับครบ จึงไม่เจอตอนเทสต์)
+- [ ] `POST /api/measurements` ไม่เช็คสถานะ session — ค่าที่ TM-X ส่งมาช้าหลังกด Pause/Stop ยังถูกบันทึกลง DB (`Recieve_tm-x.py` เช็คแค่ว่ามี session `running` อยู่ไหมตอนที่ได้รูป ไม่ใช่ตอนที่ backend รับ)
+- [ ] `send_command.py` ไม่เช็ค response ของ `R0`/`PW` — TM-X ตอบ error ก็เดินหน้าวัดต่อทั้ง session
 - [ ] Power BI dashboard (`combined_3_fixed`) พัฒนาแยกขนานไปกับ Web Frontend
 - [ ] Frontend ย้ายจาก Vanilla JS ไปเป็น React + Vite + TanStack Query ที่ `Frontend-react/` ครบทั้ง 3 หน้าแล้ว (Export, Edit, Dashboard) — ยังไม่ได้ตัดสลับ static mount ใน `main.py` ให้ชี้มาที่นี่ (ยังเสิร์ฟจาก `Frontend/` เดิมอยู่) รอทดสอบผ่านหน้าจอจริงให้ครบทุก flow ก่อน (โดยเฉพาะ Dashboard ที่ซับซ้อนสุด — Part Entry 3 โหมด, SSE) โค้ด Dashboard/Edit เขียนโดยยังไม่เคยผ่าน `npm run build` จริงเช่นกัน (ดูหัวข้อ Frontend Framework Migration)
 

@@ -1,0 +1,219 @@
+/* ============================================================================
+   shared.css — สไตล์ที่ทุกหน้าใช้ร่วมกัน
+   ============================================================================
+   ก่อนหน้านี้ตัวแปรสี, ปุ่ม, แถบเมนูบน และป้ายสถานะ ถูกก๊อปไว้ครบชุดในทั้ง 4 หน้า
+   เวลาแก้ทีต้องไล่แก้ 4 ที่ — เคยพลาดจนเมนูเพี้ยนทั้งสามหน้าพร้อมกันโดยไม่มี
+   error อะไรขึ้นให้เห็นเลย ย้ายมารวมไว้ที่เดียวแล้ว
+
+   วิธีใช้: ใส่บรรทัดนี้ใน <head> ของทุกหน้า "ก่อน" <style> ของหน้านั้น
+       <link rel="stylesheet" href="shared.css" />
+   สไตล์เฉพาะหน้ายังเขียนใน <style> ของหน้าตัวเองได้ตามเดิม และจะทับตัวนี้เสมอ
+   เพราะมาทีหลัง
+   ============================================================================ */
+
+:root {
+  --bg:        #f4f3ef;
+  --surface:   #ffffff;
+  --surface2:  #f7f6f3;
+  --border:    #e3e1da;
+  --accent:    #378ade;
+  --accent2:   #7f77dd;
+  --ok:        #3b6d11;
+  --ok-bg:     #eaf3de;
+  --ng:        #a32d2d;
+  --ng-bg:     #fcebeb;
+  --warn:      #854f0b;
+  --warn-bg:   #faeeda;
+  --text:      #1a1a18;
+  --muted:     #5f5e5a;
+  --radius:    8px;
+  --sidebar-w: 200px;
+}
+
+/* ── Reset & base ──────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+/* ⚠ body เป็น flex column (หน้า Dashboard ต้องใช้เพื่อให้เนื้อหายืดเต็มจอ)
+   ผลข้างเคียง: ลูกตรงของ body กลายเป็น flex item ทันที ถ้าตัวไหนใส่
+   `margin: 0 auto` เพื่อจัดกึ่งกลาง auto margin ในแกนขวางจะ override การ
+   stretch แล้วกล่องจะ "หุบตามเนื้อหา" แทนที่จะกางเต็มความกว้าง
+   → ถ้าจะจัดกึ่งกลาง ต้องใส่ `width: 100%` คู่กับ `max-width` ด้วยเสมอ
+   (เคยพลาดแล้วกล่องหน้า Export หุบเหลือแค่ความกว้างของปุ่ม) */
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+a { color: var(--accent); text-decoration: none; }
+button {
+  cursor: pointer;
+  border: none;
+  border-radius: var(--radius);
+  /* ปุ่มไม่สืบทอดฟอนต์จาก body เอง ต้องสั่ง inherit — ไม่งั้นได้ฟอนต์ default
+     ของเบราว์เซอร์ (Arial บน Windows) ปนอยู่กับข้อความรอบข้างที่เป็น Segoe UI */
+  font-family: inherit;
+  font-size: 0.875rem;
+  font-weight: 500;
+  padding: 0.45rem 1rem;
+  transition: opacity .15s, background .15s;
+}
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button:not(:disabled):hover { opacity: 0.85; }
+select, input, textarea {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.6rem;
+  font-size: 0.875rem;
+  font-family: inherit;
+}
+select:focus, input:focus, textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── Top bar ───────────────────────────────────────────────────────── */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 1.5rem;
+  height: 52px;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+/* โลโก้บริษัทหน้าชื่อระบบ — ไฟล์จริงวางไว้ที่ Frontend/assets/adi-logo.svg
+   (ดู assets/README.md) ถ้ายังไม่มีไฟล์ onerror จะซ่อน <img> ให้เอง
+   แถบบนจึงไม่พังและไม่ขึ้นไอคอนรูปแตก */
+.topbar-logo { height: 26px; width: auto; display: block; flex-shrink: 0; }
+.topbar-brand { display: flex; align-items: center; gap: 0.7rem; }
+.topbar-title {
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: .03em;
+  color: var(--text);
+}
+.topbar-title span { color: var(--accent); }
+/* แถบเมนูนำทางบนสุด — เป็น "ข้อความล้วน" (ไม่ใช่ปุ่ม) ใช้สี --muted ตามปกติ
+   แล้วเปลี่ยนเป็น --accent ตอน hover พร้อม transition นุ่มๆ แบบเดียวกับ
+   element อื่นในไฟล์ (.15s) เพื่อให้กลมกลืนกับธีมเดิม ไม่สร้างชุดสีใหม่ */
+/* หน้าที่กำลังเปิดอยู่ — ตัวเข้ม + สี accent ให้รู้ทันทีว่าอยู่หน้าไหน */
+
+/* ── เมนู Export ที่มี dropdown ย่อย (CSV / PDF / Excel) ────────────────
+   ห้อยอยู่ใต้ตัวเมนูโดยตรง (position:absolute เทียบกับ .topbar-menu)
+   ลูกศรต่อท้ายบอกให้รู้ว่าเมนูนี้กดแล้วมีตัวเลือกย่อย ไม่ได้ไปหน้าเลย
+   เหมือน Home/Edit */
+/* line-height:1 ทั้งตัวเมนูและลูกศร — ไม่งั้นลูกศรจะดันให้คำว่า Export
+   ลอยสูง/ต่ำกว่า Home กับ Edit ที่เป็น <a> ธรรมดา */
+/* แถบบนแบ่ง 3 โซน: โลโก้ซ้าย · เมนูกึ่งกลาง · ป้ายสถานะขวา
+   ฝั่งซ้าย/ขวาใช้ flex:1 เท่ากัน เมนูตรงกลางไม่ยืด (flex:0 0 auto) —
+   ทำแบบนี้เมนูจะอยู่กึ่งกลางจอ "เป๊ะ" เสมอ ไม่ขยับตามความยาวของชื่อระบบ
+   หรือป้ายสถานะที่เปลี่ยนข้อความได้ (Online / Connecting / Offline)
+   ถ้าใช้ justify-content:center เฉยๆ เมนูจะเลื่อนไปมาเวลาสองข้างยาวไม่เท่ากัน */
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: 1rem; flex: 1; min-width: 0; }
+.topbar-right { justify-content: flex-end; }
+.topbar-nav { display: flex; align-items: center; gap: 0.4rem; flex: 0 0 auto; }
+.topbar-link {
+  font-size: 0.85rem;
+  font-weight: normal;
+  color: var(--muted);
+  padding: 0.4rem 0.9rem;
+  border-radius: 7px;
+  transition: color .15s, background .15s;
+  white-space: nowrap;
+}
+.topbar-link:hover { color: var(--accent); background: var(--surface2); }
+/* หน้าที่เปิดอยู่ — พื้นหลังฟ้าอ่อน + ตัวเข้ม ให้เห็นชัดตอนมองผ่านๆ
+   (ใช้โทนเดียวกับตัวที่เลือกอยู่ใน dropdown ของ Export) */
+.topbar-link.active { background: rgba(55,138,222,.12); color: var(--accent); font-weight: 700; }
+
+.topbar-menu { position: relative; display: flex; align-items: center; }
+.topbar-menu > .topbar-link {
+  cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem;
+}
+.topbar-caret { font-size: 0.55rem; line-height: 1; transition: transform .15s; display: inline-block; }
+.topbar-menu.open > .topbar-link { background: rgba(55,138,222,.12); color: var(--accent); }
+.topbar-menu.open .topbar-caret { transform: rotate(180deg); }
+.topbar-dropdown {
+  display: none;
+  position: absolute;
+  left: -0.65rem;
+  top: 1.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 158px;
+  overflow: hidden;
+  z-index: 200;
+}
+.topbar-menu.open .topbar-dropdown { display: block; }
+.topbar-dropdown a, .topbar-dropdown span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.83rem;
+  color: var(--text);
+}
+.topbar-dropdown a + a, .topbar-dropdown a + span, .topbar-dropdown span + span { border-top: 1px solid var(--surface2); }
+.topbar-dropdown a:hover { background: var(--surface2); }
+.topbar-dropdown a.active { background: rgba(55,138,222,.1); color: var(--accent); }
+.topbar-dropdown .soon { color: var(--muted); cursor: not-allowed; }
+.topbar-dropdown .soon small { font-size: 0.68rem; }
+.station-badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.3rem 0.85rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+.station-badge.online     { background: var(--ok-bg);   border-color: var(--ok);   color: var(--ok); }
+.station-badge.offline    { background: var(--ng-bg);   border-color: var(--ng);   color: var(--ng); }
+.station-badge.connecting { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+
+/* ── Toast — ข้อความแจ้งผลลอยขึ้นมาด้านล่างจอ ─────────────────────────── */
+.toast {
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  background: var(--text);
+  color: #fff;
+  padding: 0.65rem 1.25rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s, transform .2s;
+  z-index: 400;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* toast ที่มีปุ่มให้กด — ต้องรับคลิกได้ ต่างจาก toast ธรรมดาที่ตั้ง
+   pointer-events:none ไว้เพื่อไม่ให้บังการคลิกของหน้าเว็บข้างหลัง */
+.toast.has-action {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding-right: 0.5rem;
+}
+.toast-action {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, .45);
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.25rem 0.7rem;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.toast-action:hover { background: rgba(255, 255, 255, .16); }

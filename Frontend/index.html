@@ -6,106 +6,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TM-X Dashboard</title>
-  <style>
+  <title>TM-X Control System</title>
+  <!-- สไตล์/โค้ดที่ทุกหน้าใช้ร่วมกัน — โหลดก่อนเสมอ เพื่อให้ของเฉพาะหน้าทับได้ -->
+<link rel="stylesheet" href="shared.css" />
+<script src="shared.js"></script>
+<style>
     /* ── Variables ─────────────────────────────────────────────────────── */
-    :root {
-      --bg:        #f4f3ef;
-      --surface:   #ffffff;
-      --surface2:  #f7f6f3;
-      --border:    #e3e1da;
-      --accent:    #378ade;
-      --accent2:   #7f77dd;
-      --ok:        #3b6d11;
-      --ok-bg:     #eaf3de;
-      --ng:        #a32d2d;
-      --ng-bg:     #fcebeb;
-      --warn:      #854f0b;
-      --warn-bg:   #faeeda;
-      --text:      #1a1a18;
-      --muted:     #5f5e5a;
-      --radius:    8px;
-      --sidebar-w: 200px;
-    }
-
-    /* ── Reset & base ──────────────────────────────────────────────────── */
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-    }
-    a { color: var(--accent); text-decoration: none; }
-    button {
-      cursor: pointer;
-      border: none;
-      border-radius: var(--radius);
-      font-size: 0.875rem;
-      font-weight: 500;
-      padding: 0.45rem 1rem;
-      transition: opacity .15s, background .15s;
-    }
-    button:disabled { opacity: 0.4; cursor: not-allowed; }
-    button:not(:disabled):hover { opacity: 0.85; }
-    select, input, textarea {
-      background: var(--bg);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 0.4rem 0.6rem;
-      font-size: 0.875rem;
-      font-family: inherit;
-    }
-    select:focus, input:focus, textarea:focus {
-      outline: 2px solid var(--accent);
-      outline-offset: 1px;
-    }
-
-    /* ── Top bar ───────────────────────────────────────────────────────── */
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0 1.5rem;
-      height: 52px;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-    .topbar-title {
-      font-size: 1.1rem;
-      font-weight: 700;
-      letter-spacing: .03em;
-      color: var(--text);
-    }
-    .topbar-title span { color: var(--accent); }
-    /* แถบเมนูนำทางบนสุด — เป็น "ข้อความล้วน" (ไม่ใช่ปุ่ม) ใช้สี --muted ตามปกติ
-       แล้วเปลี่ยนเป็น --accent ตอน hover พร้อม transition นุ่มๆ แบบเดียวกับ
-       element อื่นในไฟล์ (.15s) เพื่อให้กลมกลืนกับธีมเดิม ไม่สร้างชุดสีใหม่ */
-    .topbar-left { display: flex; align-items: center; gap: 1.5rem; }
-    .topbar-nav { display: flex; align-items: center; gap: 1.25rem; }
-    .topbar-link {
-      font-size: 0.85rem;
-      font-weight: normal;
-      color: var(--muted);
-      transition: color .15s;
-    }
-    .topbar-link:hover { color: var(--accent); }
-    .station-badge {
-      font-size: 0.8rem;
-      font-weight: 600;
-      padding: 0.3rem 0.85rem;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-    }
-    .station-badge.online     { background: var(--ok-bg);   border-color: var(--ok);   color: var(--ok); }
-    .station-badge.offline    { background: var(--ng-bg);   border-color: var(--ng);   color: var(--ng); }
-    .station-badge.connecting { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+    /* ── ตัวแปรสี, ปุ่ม/อินพุตพื้นฐาน, แถบเมนูบน, ป้ายสถานะ, toast ──
+       ย้ายไปที่ shared.css แล้ว (โหลดไว้ใน <head> ก่อนบล็อกนี้)
+       เขียนทับเฉพาะที่ต้องต่างจากส่วนกลางได้ที่นี่ */
 
     /* ── Layout ────────────────────────────────────────────────────────── */
     .layout {
@@ -210,8 +119,10 @@
     .session-state-badge.running  { background: rgba(55,138,222,.12);  color: var(--accent); }
     .session-state-badge.stopped  { background: var(--surface2); color: var(--muted); }
     .session-state-badge.timeout  { background: var(--warn-bg);  color: var(--warn); }
+    .session-state-badge.paused   { background: var(--warn-bg);  color: var(--warn); }
     .session-btns { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
     .btn-start   { background: var(--accent); color: #fff; }
+    .btn-pause   { background: var(--warn);   color: #fff; display: none; }
     .btn-stop    { background: var(--ng);     color: #fff; display: none; }
 
     .form-group { display: flex; flex-direction: column; gap: 0.3rem; }
@@ -223,9 +134,20 @@
       display: grid;
       grid-template-columns: 1.1fr 1fr;
       gap: 1.5rem;
+      align-items: stretch;   /* การ์ด 2 ใบสูงเท่ากันเสมอ */
+    }
+    /* การ์ด Camera Preview ต้องเป็น flex column เพื่อให้กล่องรูปข้างใน "กินที่ว่าง
+       ที่เหลือ" ได้ (flex:1) — ความสูงจึงถูกกำหนดโดยการ์ด Live Telemetry ข้างๆ
+       ไม่ใช่โดยตัวรูปเอง ทำให้ไม่มีช่องว่างค้างใต้การ์ดไหนทั้งนั้น */
+    .live-view-grid > .card {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
     }
     @media (max-width: 760px) {
       .live-view-grid { grid-template-columns: 1fr; }
+      /* แนวตั้งแล้วไม่มีการ์ดข้างๆ ให้อ้างความสูง กลับไปใช้ความกว้างเป็นตัวตั้ง */
+      .live-view-grid .camera-preview-box { width: 100%; max-width: 420px; flex: 0 0 auto; }
     }
     .telemetry-header {
       display: flex;
@@ -247,6 +169,100 @@
       gap: 0.75rem;
       margin-bottom: 0.85rem;
     }
+
+    /* ── ป้าย OK/NG รายแกน + ช่วงที่รับได้ ในกล่อง Value X/Y ─────────────── */
+    .tc-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      margin-bottom: 0.2rem;
+    }
+    .tc-axis {
+      font-size: 0.68rem;
+      font-weight: 700;
+      padding: 0.1rem 0.5rem;
+      border-radius: 999px;
+      letter-spacing: .03em;
+    }
+    .tc-axis.ok { background: var(--ok-bg); color: var(--ok); }
+    .tc-axis.ng { background: var(--ng-bg); color: var(--ng); }
+    .tc-range {
+      font-size: 0.68rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+      min-height: 1em;
+    }
+
+    /* ── แถบสัดส่วน OK/NG ของ session + ตัวนับในแถบล่าง ─────────────────── */
+    .telemetry-bar {
+      display: flex;
+      height: 6px;
+      border-radius: 3px;
+      overflow: hidden;
+      background: var(--surface2);
+      margin-bottom: 0.6rem;
+    }
+    .tb-ok { background: var(--ok); width: 0; transition: width .3s; }
+    .tb-ng { background: var(--ng); width: 0; transition: width .3s; }
+    .telemetry-counts {
+      display: flex;
+      align-items: center;
+      gap: 0.55rem;
+      font-weight: 600;
+    }
+    .tcount.ok  { color: var(--ok); }
+    .tcount.ng  { color: var(--ng); }
+    .tcount-sep { color: var(--border); }
+
+    /* ── ค่าที่วัดได้ในตาราง Measurements — เขียว=อยู่ในสเปค แดง=หลุดสเปค ── */
+    .val-ok { color: var(--ok); font-weight: 600; }
+    .val-ng { color: var(--ng); font-weight: 600; }
+
+    /* ── แถบคิว ALPL ใน Live Telemetry ────────────────────────────────────
+       แสดงคิวทั้งหมดของ session ปัจจุบันเรียงตามลำดับที่จะวัด แยกสถานะด้วย
+       "สี + ไอคอน" (ไม่ใช่สีอย่างเดียว) เพื่อให้คนตาบอดสี/จอสะท้อนแสงยังแยกออก:
+       ok = วัดผ่าน, ng = วัดไม่ผ่าน, now = กำลังวัดอยู่, wait = ยังไม่ถึงคิว
+       ชิปที่วัดแล้วกดได้ → เปิด Report modal ของ measurement นั้นตรงๆ */
+    .telemetry-queue { margin-bottom: 0.85rem; }
+    .tq-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+    }
+    .tq-strip {
+      display: flex;
+      gap: 0.4rem;
+      overflow-x: auto;
+      padding-bottom: 0.35rem;
+    }
+    .tq-chip {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.3rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      padding: 0.32rem 0.65rem;
+      border-radius: 7px;
+      border: 1px solid transparent;
+      white-space: nowrap;
+      font-family: inherit;
+      line-height: 1.4;
+    }
+    .tq-chip.ok   { background: var(--ok-bg); color: var(--ok); cursor: pointer; }
+    .tq-chip.ng   { background: var(--ng-bg); color: var(--ng); cursor: pointer; }
+    .tq-chip.ok:hover, .tq-chip.ng:hover { opacity: .78; }
+    .tq-chip.now  { background: var(--surface); color: var(--accent); border-color: var(--accent); }
+    .tq-chip.wait { background: var(--surface2); color: var(--muted); }
+    .tq-ico { font-size: 0.75rem; }
+    .tq-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: var(--accent);
+      animation: tq-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes tq-pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
     .telemetry-xy-col {
       display: flex;
       flex-direction: column;
@@ -306,12 +322,26 @@
     }
     .telemetry-footer strong { color: var(--text); font-weight: 600; }
 
+    /* ⚠ รูป HEAD-A จาก TM-X เป็น 2048×2048 = จัตุรัส (1:1) ไม่ใช่ 4:3
+       (4:3 คือ capture-image ที่เป็นภาพหน้าจอ TM-X ซึ่งเลิกใช้แล้ว)
+       ถ้าตั้ง aspect-ratio ไม่ตรงกับรูปจริง object-fit:contain จะเหลือแถบดำค้างสองข้าง
+       — ต้องแก้ที่นี่ถ้าวันหลังเปลี่ยนไปใช้รูปใบอื่นอีก
+
+       ความสูงไม่ได้มาจากความกว้าง แต่มาจาก "ที่ว่างที่เหลือในการ์ด" (flex:1)
+       ซึ่งการ์ดสูงเท่ากับการ์ด Live Telemetry ข้างๆ เพราะอยู่ใน grid เดียวกัน
+       → รูปจึงพอดีกับการ์ดเสมอ และไม่ดันให้แถวสูงจนเหลือช่องว่างใต้ Live Telemetry
+       (ถ้ากำหนด width แล้วให้ aspect-ratio คิดความสูงแทน รูปจัตุรัสจะสูง 570px
+        ดันแถวจนการ์ดซ้ายมีที่ว่างใต้เนื้อหาเป็นร้อย px) */
     .camera-preview-box {
       position: relative;
       background: var(--surface2);
       border: 1px dashed var(--border);
       border-radius: var(--radius);
-      min-height: 180px;
+      aspect-ratio: 1 / 1;
+      flex: 1 1 auto;
+      min-height: 0;
+      width: auto;
+      margin: 0 auto;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -328,8 +358,11 @@
       height: 100%;
       object-fit: contain;
       background: #000;
+      cursor: zoom-in;
     }
-    .camera-preview-icon { font-size: 1.8rem; opacity: .5; }
+    /* การ์ดสูงเท่าเนื้อหาจริง ไม่ถูกยืดตามการ์ดข้างๆ ใน grid — ไม่งั้นจะเหลือ
+       ที่ว่างขาวใต้กล่อง preview เหมือนที่เคยเป็น */
+    .camera-preview-box:only-child { margin-bottom: 0; }
 
     /* ── Part Entry summary — collapsible dropdown ───────────────────────── */
     .pe-summary-dropdown {
@@ -608,16 +641,37 @@
     .result-badge.ok { background: var(--ok-bg); color: var(--ok); }
     .result-badge.ng { background: var(--ng-bg); color: var(--ng); }
 
+    /* ปุ่มเปิดรายงานในตาราง — ตัวไอคอน ALPL ทำหน้าที่เป็นปุ่มเลย
+       ⚠ ห้ามใส่ border + padding กลับเข้ามา: ของเดิมเป็น 28px + border 1px +
+         padding 3px ซึ่งกับ box-sizing:border-box (shared.css) เหลือพื้นที่ให้
+         ไอคอนแค่ 20px — ที่ขนาดนั้นมุมโค้ง rx=20 เหลือรัศมี 4px พอ anti-alias
+         แล้วอ่านเป็น "มุมถูกเฉือนทแยง" ไม่ใช่มุมมน ส่วนวงกลม r=2.5 เหลือรัศมี
+         0.5px กลายเป็นจุดสี่เหลี่ยม — กรอบปุ่มยังไปซ้อนกับกรอบของตัวไอคอนเองอีก
+         ตอนนี้ไอคอนได้พื้นที่เต็ม 30px (ใหญ่ขึ้น 50%) รายละเอียดจึงออกครบ */
     .img-btn-inner {
       background: transparent;
-      border: 1px solid var(--border);
-      width: 28px;
-      height: 28px;
+      border: none;
+      width: 30px;
+      height: 30px;
       padding: 0;
-      border-radius: 4px;
-      display: inline-block;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: transform .12s, filter .12s;
     }
-    .img-btn-inner:hover { background: var(--surface2); border-color: var(--muted); }
+    /* overflow:visible กันเบราว์เซอร์ตัดขอบไอคอนถ้าคำนวณ viewport ของ <use>
+       ไม่ตรงกับกล่องปุ่มพอดี (ค่าเริ่มต้นของ <svg> คือ overflow:hidden ซึ่ง
+       จะเฉือนด้านขวา/ด้านล่างหายไปเงียบๆ โดยไม่มีอะไรบอก) */
+    .img-btn-inner svg { display: block; overflow: visible; }
+    .img-btn-inner:hover { transform: scale(1.12); filter: brightness(0.92); }
+    .img-btn-inner:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
+
+    /* ⚠ อย่าใส่ text-align:center ให้เซลล์นี้ — หัวตาราง (th) ทั้งตารางเป็น
+       text-align:left ถ้าจัดกลางเฉพาะเซลล์ ไอคอนจะไม่ตรงแนวกับคำว่า "IMAGE"
+       ด้านบน (เคยลองแล้วเห็นชัดว่าเยื้อง) ปล่อยชิดซ้ายให้ตรงกับคอลัมน์อื่น */
+    .img-cell { text-align: left; }
     .no-img { color: var(--border); }
     .no-img.upload-failed { color: var(--ng); font-weight: 600; cursor: help; }
 
@@ -672,9 +726,9 @@
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 0;
-      width: 96vw;
+      width: 75vw;
       max-width: 1280px;
-      max-height: 94vh;
+      max-height: 95vh;
       overflow-y: auto;
       position: relative;
       display: flex;
@@ -691,106 +745,132 @@
     .report-header-title { font-size: 1.1rem; font-weight: 700; color: var(--text); }
     .report-header-sub { font-size: 0.83rem; color: var(--muted); margin-top: 0.25rem; }
     .report-header-right { display: flex; align-items: center; gap: 0.85rem; }
-    .report-grid {
+    /* ป้ายผลรวมตัวใหญ่บนหัว modal — เห็นทันทีว่าผ่านไม่ผ่าน ไม่ต้องกวาดหา */
+    .report-verdict {
+      font-size: 1.35rem;
+      font-weight: 800;
+      letter-spacing: .03em;
+      padding: 0.25rem 1.1rem;
+      border-radius: 8px;
+      line-height: 1.3;
+    }
+    .report-verdict.ok { background: var(--ok-bg); color: var(--ok); }
+    .report-verdict.ng { background: var(--ng-bg); color: var(--ng); }
+
+    /* คอลัมน์รูปต้องกว้างพอจะเห็นรายละเอียดชิ้นงาน ของเดิมตรึงไว้ 300px รูปเลย
+       ย่อจนเล็กแล้วลอยกลางกล่องที่ grid ยืดสูงตามคอลัมน์ขวา เหลือที่ว่างเต็มไปหมด
+       — แก้ด้วยการให้ 2 คอลัมน์แบ่งพื้นที่ตามสัดส่วน + align-items:start */
+    /* ⚠ ความกว้างคอลัมน์รูป = ความสูงของรูป (เพราะเป็นจัตุรัส 1:1)
+       ตั้งไว้ ~420px ให้ใกล้เคียงความสูงของการ์ดสเปค 2 ใบทางขวา (~415px)
+       ถ้าตั้งกว้างกว่านี้ รูปจะสูงกว่าคอลัมน์ขวา เหลือช่องว่างขาวใต้สเปค
+       ถ้าแคบกว่านี้ ช่องว่างจะไปโผล่ใต้รูปแทน */
+    .report-body {
       display: grid;
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: minmax(0, 389px) minmax(0, 1fr);
       gap: 1.25rem;
-      padding: 1.5rem;
+      padding: 1.25rem 1.5rem;
+      align-items: start;   /* กันไม่ให้กล่องรูปถูกยืดสูงตามคอลัมน์ขวา */
     }
     @media (max-width: 900px) {
-      .report-grid { grid-template-columns: 1fr; }
-    }
-    .report-cell {
-      background: var(--surface2);
-      border-radius: var(--radius);
-      padding: 1.25rem;
+      .report-body { grid-template-columns: 1fr; }
     }
     .report-image-cell {
-      padding: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      aspect-ratio: 1 / 1;   /* ⚠ ต้องตรงกับรูป HEAD-A ของ TM-X (2048×2048 จัตุรัส) */
       overflow: hidden;
-      min-height: 420px;
       display: flex;
       align-items: center;
       justify-content: center;
-      background: #14140f;
+    }
+    /* ครอบรูปด้วย <a> ให้คลิกเปิดขนาดเต็ม 1024×768 ได้ในแท็บใหม่ — บนจอเล็ก
+       ต่อให้จัดวางดีแค่ไหนก็ยังมีรอยขีดข่วนที่ต้องซูมดู */
+    .report-image-cell a {
+      display: block;
+      width: 100%; height: 100%;
+      cursor: zoom-in;
     }
     .report-image-cell img {
-      width: 100%;
-      height: 100%;
-      max-height: 640px;
+      width: 100%; height: 100%;
       object-fit: contain;
       display: block;
     }
-    .report-image-cell .report-no-image {
-      color: var(--muted);
-      font-size: 0.85rem;
-      text-align: center;
-    }
-    .report-status-cell {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 0.6rem;
-      min-height: 140px;
-    }
-    .report-status-label {
-      font-size: 0.75rem;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: .08em;
-      font-weight: 700;
-    }
-    .report-status-value {
-      font-size: 2.6rem;
-      font-weight: 800;
-      letter-spacing: .03em;
-      line-height: 1;
-    }
-    .report-status-value.ok { color: var(--ok); }
-    .report-status-value.ng { color: var(--ng); }
-    .report-section-title {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.78rem;
-      font-weight: 700;
-      letter-spacing: .05em;
-      text-transform: uppercase;
-      margin-bottom: 0.9rem;
-    }
-    .report-section-title .bar { width: 3px; height: 14px; display: inline-block; border-radius: 1px; }
-    .report-specs-cell .report-section-title { color: var(--accent); }
-    .report-specs-cell .report-section-title .bar { background: var(--accent); }
-    .report-dims-cell .report-section-title { color: var(--accent2); }
-    .report-dims-cell .report-section-title .bar { background: var(--accent2); }
-    .report-specs-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.7rem 1.25rem;
-      font-size: 0.85rem;
-    }
-    .report-specs-grid .rs-full { grid-column: 1 / -1; }
-    .report-specs-grid .rs-label { color: var(--muted); font-size: 0.72rem; margin-bottom: 0.15rem; }
-    .report-specs-grid .rs-value { color: var(--text); word-break: break-word; }
-    .report-dims-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-    }
-    .report-dim-label { font-size: 0.78rem; color: var(--muted); margin-bottom: 0.2rem; }
-    .report-dim-value { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.6rem; }
-    .report-dim-value.x { color: var(--accent); }
-    .report-dim-value.y { color: var(--accent2); }
-    .report-tol-box {
-      background: var(--surface);
+    .report-image-cell .report-no-image { color: var(--muted); font-size: 0.85rem; }
+
+    /* ตารางสรุปผล IPM — ตั้งใจให้หน้าตาเหมือน "ตารางที่จะไปโผล่ใน Excel" จริงๆ
+       (เส้นขอบครบทุกช่อง ตัวหนังสือ mono) ผู้ใช้จะได้เห็นล่วงหน้าว่าวางแล้วได้อะไร */
+    .ipm-summary-table { width: 100%; border-collapse: collapse; }
+    .ipm-summary-table td {
       border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 0.6rem 0.75rem;
-      font-size: 0.78rem;
+      padding: 0.55rem 0.9rem;
+      font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+      font-size: 0.85rem;
+      white-space: nowrap;
     }
-    .report-tol-box .tol-row { display: flex; justify-content: space-between; color: var(--muted); }
-    .report-tol-box .tol-row + .tol-row { margin-top: 0.2rem; }
+    .ipm-summary-table td:first-child { width: 55%; }
+
+    /* ── การ์ดผลรายแกน + แถบเทียบสเปค ─────────────────────────────────────
+       แถบคือ "ไม้บรรทัด": โซนเขียว = ช่วงที่รับได้, ขีดหนา = ค่าที่วัดได้
+       ตัวเลขใต้แถบถูกวางตรงตำแหน่งจริงบนแถบ (ขอบล่าง 25%, nominal 50%,
+       ขอบบน 75%) ไม่ใช่กระจายเต็มความกว้าง — ไม่งั้นเลขจะไม่ตรงกับโซนเขียว */
+    .report-axes { display: flex; flex-direction: column; gap: 0.85rem; }
+    .rax {
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      padding: 0.85rem 1rem 0.9rem;
+    }
+    .rax-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+    .rax-name { font-size: 0.78rem; color: var(--muted); }
+    .rax-tag {
+      font-size: 0.7rem; font-weight: 700;
+      padding: 0.1rem 0.6rem; border-radius: 999px;
+    }
+    .rax-tag.ok { background: var(--ok-bg); color: var(--ok); }
+    .rax-tag.ng { background: var(--ng-bg); color: var(--ng); }
+    .rax-value { font-size: 1.6rem; font-weight: 700; margin-top: 0.15rem; }
+    .rax-value.ok { color: var(--ok); }
+    .rax-value.ng { color: var(--ng); }
+    .rax-value .unit { font-size: 0.8rem; font-weight: 400; color: var(--muted); }
+
+    .rax-bar { position: relative; height: 14px; margin: 2.1rem 0 2.4rem; }
+    .rax-track { position: absolute; inset: 3px 0; background: var(--surface2); border-radius: 4px; }
+    .rax-zone  { position: absolute; top: 0; bottom: 0; left: 25%; width: 50%; background: #C0DD97; border-radius: 4px; }
+    /* left ถูกกำหนดจาก JS ตามสัดส่วนจริงของ nominal (tolerance ไม่สมมาตร) */
+    .rax-nom   { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--ok); opacity: .5; }
+    .rax-mark  { position: absolute; top: -6px; height: 26px; width: 4px; border-radius: 2px; transform: translateX(-50%); }
+    .rax-mark.ok { background: var(--ok); }
+    .rax-mark.ng { background: var(--ng); }
+    .rax-zlabel {
+      position: absolute; top: -1.35rem;
+      font-size: 0.68rem; color: var(--muted);
+      transform: translateX(-50%); white-space: nowrap;
+    }
+    .rax-zlabel.mid { color: var(--ok); }
+    .rax-tick {
+      position: absolute; top: 1.3rem;
+      font-size: 0.68rem; color: var(--muted);
+      transform: translateX(-50%); white-space: nowrap; text-align: center;
+    }
+    .rax-far { position: absolute; top: -2px; font-size: 0.8rem; font-weight: 700; color: var(--ng); }
+    .rax-dev { font-size: 0.78rem; }
+    .rax-dev.ok { color: var(--muted); }
+    .rax-dev.ng { color: var(--ng); }
+
+    /* ข้อมูล Part — ย้ายลงล่างสุดเป็นข้อมูลอ้างอิง ไม่ใช่พระเอกของหน้านี้ */
+    .report-specs {
+      border-top: 1px solid var(--border);
+      background: var(--surface2);
+      padding: 1rem 1.5rem 1.25rem;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 0.8rem 1.25rem;
+      font-size: 0.82rem;
+    }
+    @media (max-width: 900px) { .report-specs { grid-template-columns: repeat(2, 1fr); } }
+    .report-specs .rs-full { grid-column: 1 / -1; }
+    .report-specs .rs-label { color: var(--muted); font-size: 0.7rem; margin-bottom: 0.1rem; }
+    .report-specs .rs-value { color: var(--text); word-break: break-word; }
     .report-close {
       background: transparent;
       border: none;
@@ -805,16 +885,51 @@
 </head>
 <body>
 
+<!-- ── SVG sprite ────────────────────────────────────────────────────────────
+     นิยามไอคอนไว้ที่เดียวตรงนี้ แล้วให้ทุกแถวในตารางอ้างด้วย <use href="#..."/>
+     แทนการ inline svg ซ้ำทุกแถว (ตารางมีได้ถึง 1000 แถว) — เก็บเป็นไฟล์แยกใน
+     assets/ ก็ได้ แต่จะเสีย request เพิ่มและระบายสีตาม CSS ไม่ได้
+     ไอคอน ALPL: ชิ้นงานสี่เหลี่ยมพร้อม contact pin 6 จุดรอบข้าง
+     ⚠ พิกัดชุดนี้ต้องตรงกับ assets/alpl-icon.svg เสมอ แก้ที่ไหนต้องแก้อีกที่ด้วย
+       (ไฟล์นั้นมีคอมเมนต์อธิบายที่มาของแต่ละพิกัดไว้ละเอียดกว่า) -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="icon-alpl" viewBox="0 0 100 100">
+    <rect width="100" height="100" rx="20" fill="#B3B3B3"/>
+    <rect x="20" y="20" width="60" height="60" rx="5" fill="#D9D9D9"/>
+    <rect x="25" y="25" width="50" height="50" rx="5" fill="#757575"/>
+    <circle cx="11" cy="15" r="5" fill="#767676"/>
+    <circle cx="11.5" cy="50.5" r="2.5" fill="#767676"/>
+    <circle cx="11" cy="85" r="5" fill="#767676"/>
+    <circle cx="89" cy="15" r="5" fill="#767676"/>
+    <circle cx="89.5" cy="50.5" r="2.5" fill="#767676"/>
+    <circle cx="89" cy="85" r="5" fill="#767676"/>
+  </symbol>
+</svg>
+
 <header class="topbar">
   <div class="topbar-left">
-    <div class="topbar-title">TM-X <span>Dashboard</span></div>
-    <nav class="topbar-nav">
-      <a class="topbar-link" href="index.html">Home</a>
-      <a class="topbar-link" href="edit.html">Edit</a>
-      <a class="topbar-link" href="export.html">Export</a>
-    </nav>
+    <div class="topbar-brand">
+      <img class="topbar-logo" src="assets/adi-logo.svg" alt="Analog Devices"
+           onerror="this.style.display='none'" />
+      <div class="topbar-title">TM-X <span>Control System</span></div>
+    </div>
   </div>
-  <span class="station-badge connecting" id="station-badge">🟡 Connecting</span>
+
+  <nav class="topbar-nav">
+      <a class="topbar-link active" href="index.html">Home</a>
+      <a class="topbar-link" href="edit.html">Edit</a>
+      <span class="topbar-menu" id="export-menu">
+        <span class="topbar-link" id="export-menu-btn" role="button" tabindex="0" aria-haspopup="true" aria-expanded="false">Export<span class="topbar-caret">▼</span></span>
+        <span class="topbar-dropdown">
+          <a href="export.html?format=csv">CSV</a>
+          <a href="export.html?format=pdf">PDF</a>
+          <a href="export.html?format=excel">Excel</a>
+        </span>
+      </span>
+  </nav>
+  <div class="topbar-right">
+    <span class="station-badge connecting" id="station-badge">🟡 Connecting</span>
+  </div>
 </header>
 
 <div class="layout">
@@ -830,7 +945,14 @@
             <div class="session-state-badge idle" id="sess-state-badge">IDLE</div>
           </div>
           <div class="session-btns">
+            <!-- 3 ปุ่ม แต่เห็นพร้อมกันแค่ 2 เสมอ (ดู renderSessionUI):
+                 idle    → Start
+                 running → Start(กดไม่ได้) + Pause
+                 paused  → Start(วัดต่อ)   + Stop
+                 ตั้งใจให้ Stop โผล่เฉพาะตอนพักอยู่ — บังคับให้กด Pause ก่อนเสมอ
+                 กันเผลอกด Stop กลางคันแล้วเสียคิวทั้งชุด -->
             <button class="btn-start" id="btn-start">▶ Start</button>
+            <button class="btn-pause" id="btn-pause">⏸ Pause</button>
             <button class="btn-stop"  id="btn-stop">■ Stop</button>
           </div>
         </div>
@@ -847,13 +969,24 @@
           </div>
           <div class="telemetry-grid">
             <div class="telemetry-xy-col">
+              <!-- ป้าย OK/NG รายแกน (tc-axis) บอกว่าพังที่แกนไหน ไม่ใช่รู้แค่
+                   Result รวม — ส่วน tc-range คือช่วงที่รับได้ของแกนนั้น
+                   (nominal ± tolerance) ไว้เทียบว่าเกินไปเท่าไหร่ -->
               <div class="telemetry-cell x">
-                <div class="tc-label">Value X</div>
+                <div class="tc-head">
+                  <span class="tc-label">Value X</span>
+                  <span class="tc-axis" id="telemetry-x-axis"></span>
+                </div>
                 <div class="tc-value" id="telemetry-x">—<span> mm</span></div>
+                <div class="tc-range" id="telemetry-x-range"></div>
               </div>
               <div class="telemetry-cell y">
-                <div class="tc-label">Value Y</div>
+                <div class="tc-head">
+                  <span class="tc-label">Value Y</span>
+                  <span class="tc-axis" id="telemetry-y-axis"></span>
+                </div>
                 <div class="tc-value" id="telemetry-y">—<span> mm</span></div>
+                <div class="tc-range" id="telemetry-y-range"></div>
               </div>
             </div>
             <div class="telemetry-result-col" id="telemetry-result-col">
@@ -861,39 +994,41 @@
               <div class="telemetry-result-value" id="telemetry-result-value">—</div>
             </div>
           </div>
+          <!-- แถบคิว ALPL — ซ่อนอัตโนมัติเมื่อคิวมีตัวเดียว (เช่นโหมด IPM ชิ้นเดียว)
+               หรือยังไม่มี session ดู renderQueueStrip() -->
+          <div class="telemetry-queue" id="telemetry-queue" style="display:none">
+            <div class="tq-label">คิวการวัด</div>
+            <div class="tq-strip" id="telemetry-queue-strip"></div>
+          </div>
+          <!-- แถบสัดส่วนผลการวัดของ session ปัจจุบัน: เขียว=OK แดง=NG เทา=ยังไม่วัด
+               บอกครบทั้ง 3 อย่างในภาพเดียว โดยไม่ต้องอ่านตัวเลข -->
+          <div class="telemetry-bar" id="telemetry-bar">
+            <div class="tb-ok" id="telemetry-bar-ok"></div>
+            <div class="tb-ng" id="telemetry-bar-ng"></div>
+          </div>
           <div class="telemetry-footer">
             <span>Session</span>
-            <strong id="telemetry-session-text">— / — measured</strong>
+            <span class="telemetry-counts">
+              <span class="tcount ok" id="telemetry-count-ok">0 OK</span>
+              <span class="tcount-sep">·</span>
+              <span class="tcount ng" id="telemetry-count-ng">0 NG</span>
+              <span class="tcount-sep">·</span>
+              <strong id="telemetry-session-text">— / — measured</strong>
+            </span>
           </div>
         </div>
 
         <div class="card">
           <div class="card-title">Camera Preview</div>
           <div class="camera-preview-box" id="camera-preview-box">
-            <span class="camera-preview-icon">🖼</span>
             <span>No image yet</span>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Section 3 — Stats -->
-    <section id="stats">
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-label">Total</div>
-          <div class="stat-value total" id="stat-total">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">OK</div>
-          <div class="stat-value ok" id="stat-ok">0</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-label">NG</div>
-          <div class="stat-value ng" id="stat-ng">0</div>
-        </div>
-      </div>
-    </section>
+    <!-- Section 3 — Stats: ย้ายไปอยู่ในแถบล่างของการ์ด Live Telemetry แล้ว
+         (Total ซ้ำกับ "x / y measured" ที่มีอยู่เดิม จึงเหลือแค่ OK/NG + แถบสัดส่วน) -->
 
     <!-- Section 4 — Part Entry -->
     <section id="part-entry">
@@ -927,12 +1062,15 @@
                 <th>Value X</th>
                 <th>Value Y</th>
                 <th>Result</th>
+                <th>Note</th>
+                <th>Operator</th>
+                <th>Measure Type</th>
                 <th>Image</th>
                 <th>Timestamp</th>
               </tr>
             </thead>
             <tbody id="meas-body">
-              <tr><td colspan="8" style="text-align:center;color:var(--muted);padding:2rem">Loading…</td></tr>
+              <tr><td colspan="11" style="text-align:center;color:var(--muted);padding:2rem">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -964,26 +1102,19 @@
         <div class="report-header-sub" id="report-subtitle">—</div>
       </div>
       <div class="report-header-right">
+        <span class="report-verdict" id="report-status-value">—</span>
         <button class="report-close" id="report-modal-close" title="Close">✕</button>
       </div>
     </div>
-    <div class="report-grid">
-      <div class="report-cell report-image-cell" id="report-image-cell">
+    <!-- แถวบน: รูป (ซ้าย) + การ์ดผลรายแกนพร้อมแถบเทียบสเปค (ขวา)
+         แถวล่าง: ข้อมูล Part แบบอ้างอิง (ไม่ใช่สิ่งที่คนเปิดหน้านี้มาหา) -->
+    <div class="report-body">
+      <div class="report-image-cell" id="report-image-cell">
         <span class="report-no-image">No image</span>
       </div>
-      <div class="report-cell">
-        <div class="report-section-title"><span class="bar"></span>Part specifications</div>
-        <div class="report-specs-grid" id="report-specs-grid"></div>
-      </div>
-      <div class="report-cell report-status-cell">
-        <span class="report-status-label">Result</span>
-        <span class="report-status-value" id="report-status-value">—</span>
-      </div>
-      <div class="report-cell report-dims-cell">
-        <div class="report-section-title"><span class="bar"></span>Dimensions and tolerances</div>
-        <div class="report-dims-grid" id="report-dims-grid"></div>
-      </div>
+      <div class="report-axes" id="report-axes"></div>
     </div>
+    <div class="report-specs" id="report-specs-grid"></div>
   </div>
 </div>
 
@@ -997,6 +1128,49 @@
     <div class="entry-actions" style="justify-content:flex-end">
       <button type="button" class="btn-edit-entry" id="confirm-modal-cancel">ยกเลิก</button>
       <button type="button" class="btn-submit-entry" id="confirm-modal-ok">ดำเนินการต่อ</button>
+    </div>
+  </div>
+</div>
+
+<!-- Measure timeout modal — Pi ยิง T1 แล้วไม่ได้รับค่ากลับมาภายในเวลาที่กำหนด
+     ตั้งใจไม่ใส่ปุ่มปิด (✕) และไม่ให้คลิกพื้นหลังปิด เพราะเครื่องฝั่ง Pi กำลัง
+     ค้างรอคำตอบอยู่จริงๆ ถ้าปิดทิ้งเฉยๆ session จะค้างโดยไม่มีใครรู้ -->
+<div class="modal-overlay" id="mt-modal">
+  <div class="pe-modal-box" style="max-width:480px">
+    <div class="pe-modal-header">
+      <div class="card-title">⚠ ไม่ได้รับค่าการวัด</div>
+    </div>
+    <div id="mt-modal-message" style="font-size:0.9rem; line-height:1.7; margin-bottom:0.75rem"></div>
+    <div style="font-size:0.8rem; line-height:1.6; color:var(--muted); background:var(--surface2);
+                border:1px solid var(--border); border-radius:var(--radius);
+                padding:0.6rem 0.75rem; margin-bottom:1.25rem">
+      สาเหตุที่พบบ่อย — TM-X วัดไม่ติด (ชิ้นงานวางไม่เข้าที่ / เลนส์สกปรก)
+      หรือ <strong>Recieve_tm-x.py</strong> ไม่ได้รันอยู่
+    </div>
+    <div class="entry-actions" style="justify-content:flex-end">
+      <button type="button" class="btn-edit-entry" id="mt-modal-stop">หยุดการวัด</button>
+      <button type="button" class="btn-submit-entry" id="mt-modal-continue">วัดชิ้นถัดไป</button>
+    </div>
+  </div>
+</div>
+
+<!-- สรุปผล IPM ตอนวัดครบ — ตารางสำหรับคัดลอกไปวางใน Excel -->
+<div class="modal-overlay" id="ipm-summary-modal">
+  <div class="pe-modal-box" style="max-width:560px">
+    <div class="pe-modal-header">
+      <div class="card-title">สรุปผลการวัด <span class="count" id="ipm-summary-count"></span></div>
+      <button class="pe-modal-close" id="ipm-summary-close" title="Close">✕</button>
+    </div>
+
+    <div class="table-wrap">
+      <table class="ipm-summary-table">
+        <tbody id="ipm-summary-body"></tbody>
+      </table>
+    </div>
+
+    <div class="entry-actions" style="justify-content:space-between; align-items:center">
+      <span style="font-size:0.78rem; color:var(--muted)">คัดลอกแล้ววางใน Excel ได้ 2 คอลัมน์ทันที</span>
+      <button type="button" class="btn-submit-entry" id="ipm-summary-copy">📋 คัดลอกข้อความ</button>
     </div>
   </div>
 </div>
@@ -1026,7 +1200,7 @@
       <div class="entry-form-grid">
         <div class="form-group">
           <label for="ipm-number_alpl">ALPL <span class="req">*</span></label>
-          <input type="text" id="ipm-number_alpl" placeholder="e.g. 1028, 1029, 1030" />
+          <input type="text" id="ipm-number_alpl" placeholder="เช่น 201, 202, 203" />
           <div class="field-error" id="err-ipm-number_alpl"></div>
         </div>
         <div class="form-group">
@@ -1041,6 +1215,13 @@
           <input type="text" id="ipm-package_size" list="package-size-datalist" placeholder="ต้องกรอกถ้ามี ALPL ที่ยังไม่เคยลงทะเบียน" />
           <div class="field-error" id="err-ipm-package_size"></div>
         </div>
+        <div class="form-group">
+          <label for="ipm-part_number">Part Number</label>
+          <select id="ipm-part_number" disabled>
+            <option value="">-- เลือก Package Size ก่อน --</option>
+          </select>
+          <div class="field-error" id="err-ipm-part_number"></div>
+        </div>
       </div>
       <div class="entry-actions">
         <button type="submit" class="btn-submit-entry" id="btn-submit-ipm">✔ Save</button>
@@ -1053,36 +1234,22 @@
     <form id="form-new" novalidate style="display:none">
       <div class="entry-session-hint" id="new-order-hint"></div>
       <div class="entry-form-grid">
-        <div class="form-group">
+        <div class="form-group span-2">
           <label for="new-number_alpl">ALPL <span class="req">*</span></label>
-          <input type="text" id="new-number_alpl" placeholder="e.g. 1028, 1029, 1030" />
+          <input type="text" id="new-number_alpl" placeholder="เช่น 201, 202, 203" />
           <div class="field-error" id="err-new-number_alpl"></div>
         </div>
         <div class="form-group">
+          <label for="new-package_size">Package Size <span class="req">*</span></label>
+          <input type="text" id="new-package_size" list="package-size-datalist" placeholder="เลือก package size — จะ map nominal/tolerance/template ให้อัตโนมัติ" />
+          <div class="field-error" id="err-new-package_size"></div>
+        </div>
+        <div class="form-group">
           <label for="new-part_number">Part Number <span class="req">*</span></label>
-          <input type="text" id="new-part_number" placeholder="e.g. ADI-9046-X" />
+          <select id="new-part_number" disabled>
+            <option value="">-- เลือก Package Size ก่อน --</option>
+          </select>
           <div class="field-error" id="err-new-part_number"></div>
-        </div>
-        <div class="form-group">
-          <label for="new-operator">Operator <span class="req">*</span></label>
-          <select id="new-operator">
-            <option value="">-- เลือก Operator --</option>
-          </select>
-          <div class="field-error" id="err-new-operator"></div>
-        </div>
-        <div class="form-group">
-          <label for="new-handler">Handler <span class="req">*</span></label>
-          <select id="new-handler">
-            <option value="">-- เลือก Handler --</option>
-          </select>
-          <div class="field-error" id="err-new-handler"></div>
-        </div>
-        <div class="form-group">
-          <label for="new-vendor">Vendor <span class="req">*</span></label>
-          <select id="new-vendor">
-            <option value="">-- เลือก Vendor --</option>
-          </select>
-          <div class="field-error" id="err-new-vendor"></div>
         </div>
         <div class="form-group span-2">
           <label for="new-description">Description <span class="req">*</span></label>
@@ -1095,9 +1262,18 @@
           <div class="field-error" id="err-new-po_number"></div>
         </div>
         <div class="form-group">
-          <label for="new-package_size">Package Size <span class="req">*</span></label>
-          <input type="text" id="new-package_size" list="package-size-datalist" placeholder="เลือก package size — จะ map nominal/tolerance/template ให้อัตโนมัติ" />
-          <div class="field-error" id="err-new-package_size"></div>
+          <label for="new-vendor">Vendor <span class="req">*</span></label>
+          <select id="new-vendor">
+            <option value="">-- เลือก Vendor --</option>
+          </select>
+          <div class="field-error" id="err-new-vendor"></div>
+        </div>
+        <div class="form-group">
+          <label for="new-operator">Operator <span class="req">*</span></label>
+          <select id="new-operator">
+            <option value="">-- เลือก Operator --</option>
+          </select>
+          <div class="field-error" id="err-new-operator"></div>
         </div>
         <div class="form-group">
           <label for="new-owner">Owner <span class="req">*</span></label>
@@ -1106,15 +1282,10 @@
           </select>
           <div class="field-error" id="err-new-owner"></div>
         </div>
-        <div class="form-group">
+        <div class="form-group span-2">
           <label for="new-receive_date">Receive Date</label>
           <input type="date" id="new-receive_date" />
           <div class="field-error" id="err-new-receive_date"></div>
-        </div>
-        <div class="form-group span-2">
-          <label for="new-note">Note</label>
-          <textarea id="new-note" placeholder="Optional note about this part / batch"></textarea>
-          <div class="field-error" id="err-new-note"></div>
         </div>
       </div>
       <div class="entry-actions">
@@ -1131,36 +1302,22 @@
     <form id="form-rework" novalidate style="display:none">
       <div class="entry-session-hint" id="rework-order-hint"></div>
       <div class="entry-form-grid">
-        <div class="form-group">
+        <div class="form-group span-2">
           <label for="rework-number_alpl">ALPL <span class="req">*</span></label>
           <input type="text" id="rework-number_alpl" placeholder="ต้องเคยลงทะเบียนผ่าน New มาแล้ว" />
           <div class="field-error" id="err-rework-number_alpl"></div>
         </div>
         <div class="form-group">
-          <label for="rework-operator">Operator <span class="req">*</span></label>
-          <select id="rework-operator">
-            <option value="">-- เลือก Operator --</option>
-          </select>
-          <div class="field-error" id="err-rework-operator"></div>
+          <label for="rework-package_size">Package Size <span class="req">*</span></label>
+          <input type="text" id="rework-package_size" list="package-size-datalist" />
+          <div class="field-error" id="err-rework-package_size"></div>
         </div>
         <div class="form-group">
           <label for="rework-part_number">Part Number <span class="req">*</span></label>
-          <input type="text" id="rework-part_number" />
+          <select id="rework-part_number" disabled>
+            <option value="">-- เลือก Package Size ก่อน --</option>
+          </select>
           <div class="field-error" id="err-rework-part_number"></div>
-        </div>
-        <div class="form-group">
-          <label for="rework-handler">Handler <span class="req">*</span></label>
-          <select id="rework-handler">
-            <option value="">-- เลือก Handler --</option>
-          </select>
-          <div class="field-error" id="err-rework-handler"></div>
-        </div>
-        <div class="form-group">
-          <label for="rework-vendor">Vendor <span class="req">*</span></label>
-          <select id="rework-vendor">
-            <option value="">-- เลือก Vendor --</option>
-          </select>
-          <div class="field-error" id="err-rework-vendor"></div>
         </div>
         <div class="form-group span-2">
           <label for="rework-description">Description <span class="req">*</span></label>
@@ -1173,9 +1330,18 @@
           <div class="field-error" id="err-rework-po_number"></div>
         </div>
         <div class="form-group">
-          <label for="rework-package_size">Package Size <span class="req">*</span></label>
-          <input type="text" id="rework-package_size" list="package-size-datalist" />
-          <div class="field-error" id="err-rework-package_size"></div>
+          <label for="rework-vendor">Vendor <span class="req">*</span></label>
+          <select id="rework-vendor">
+            <option value="">-- เลือก Vendor --</option>
+          </select>
+          <div class="field-error" id="err-rework-vendor"></div>
+        </div>
+        <div class="form-group">
+          <label for="rework-operator">Operator <span class="req">*</span></label>
+          <select id="rework-operator">
+            <option value="">-- เลือก Operator --</option>
+          </select>
+          <div class="field-error" id="err-rework-operator"></div>
         </div>
         <div class="form-group">
           <label for="rework-owner">Owner <span class="req">*</span></label>
@@ -1184,7 +1350,7 @@
           </select>
           <div class="field-error" id="err-rework-owner"></div>
         </div>
-        <div class="form-group">
+        <div class="form-group span-2">
           <label for="rework-receive_date">Receive Date <span class="req">*</span></label>
           <input type="date" id="rework-receive_date" />
           <div class="field-error" id="err-rework-receive_date"></div>
@@ -1200,13 +1366,13 @@
 </div>
 
 <script>
-  const API = 'http://localhost:8000';
 
   let session       = { state: 'idle', session_id: null, measured_count: 0, target_count: 1 };
-  let stationStatus = 'connecting';
+  // stationStatus ประกาศไว้ที่ shared.js (setStationBadge เป็นคนอัปเดต) —
+  // หน้านี้แค่ดักฟัง event เพื่อวาดปุ่ม Start ใหม่ทุกครั้งที่สถานะเปลี่ยน
+  document.addEventListener('station-status', renderSessionUI);
   let measurements  = [];   // "หน้าปัจจุบัน" ของตาราง Measurements เท่านั้น (server-side pagination — ดู loadMeasurementsPage)
   let parts         = [];
-  let sse           = null;
   let ipmQueue      = null;
   let newQueue      = null;
   let reworkQueue   = null;
@@ -1252,8 +1418,43 @@
     // เก็บแค่ measurement_id ไว้ ไม่เก็บ URL ตรงๆ เพราะ presigned URL หมดอายุ
     // ใน 1 ชม. — โหลดหน้าใหม่ทีไรขอ URL สดใหม่เสมอแทน
     if (lastImageMeasurementId) updateCameraPreview(lastImageMeasurementId);
-    Promise.all([loadSessionState(), loadMeasurements(), loadParts(), loadDropdownData()])
-      .then(() => connectSSE());
+    // แถบเมนูบนต้องใช้ได้ทันที ห้ามผูกกับการโหลดข้อมูล — เดิมอยู่ใน .then()
+    // ของ Promise.all ถ้ามีตัวใดตัวหนึ่ง reject เมนู Export จะกดไม่ได้เลย
+    initTopbar();
+
+    // ── ต่อ SSE ก่อน แล้วค่อยโหลดข้อมูลขนานไป ────────────────────────────
+    // เดิมรอ Promise.all ของ 7 request ให้เสร็จก่อนจึงเริ่มต่อ SSE ทำให้ป้าย
+    // สถานะค้างที่ "Connecting" ตลอดช่วงโหลดข้อมูล (ยาวขึ้นอีกถ้า DB ตอบช้า
+    // หรือเพิ่ง cold start) ทั้งที่ backend พร้อมรับตั้งแต่วินาทีแรกแล้ว
+    //
+    // ปลอดภัยที่จะสลับลำดับ เพราะ onOpen เรียก loadSessionState() ทุกครั้งที่
+    // ต่อติดอยู่แล้ว — สถานะ session จึงถูก resync ให้ตรงเสมอ ไม่ขึ้นกับว่า
+    // การโหลดชุดแรกเสร็จก่อนหรือหลัง
+    connectSSE({
+        // ทุกครั้งที่ต่อ SSE ติด (รวมตอน reconnect) ต้อง resync สถานะ session
+        // จริงจาก backend เพราะ SSE ไม่มี replay — event ที่ยิงตอนสายหลุดจะหาย
+        // ไปเฉยๆ แล้วปุ่ม Start/Pause จะค้างสถานะเก่า
+        onOpen: loadSessionState,
+        // กด Back กลับมาที่หน้านี้ (เบราว์เซอร์เอาหน้าเดิมจาก BFCache มาแสดง
+        // โดยไม่ยิง DOMContentLoaded อีก) — ต้องโหลดข้อมูลใหม่เอง ไม่งั้นตาราง
+        // กับตัวเลข OK/NG จะเป็นของ ณ ตอนที่ออกไป ซึ่งอันตรายเพราะนี่คือหน้า
+        // คุมการวัดจริง เห็นเลขเก่าโดยไม่รู้ตัวแย่กว่ารอโหลดอีกครึ่งวินาที
+        onRestore: () => { loadMeasurements(); updateStats(); },
+        events: {
+          measurement:      onNewMeasurement,
+          image_updated:    onImageUpdated,
+          session_started:  onSessionStarted,
+          session_stopped:  onSessionStopped,
+          session_paused:   onSessionPaused,
+          session_resumed:  onSessionResumed,
+          measure_timeout:  onMeasureTimeout,
+          session_complete: onSessionComplete,
+          session_timeout:  onSessionTimeout,
+          station_online:   onStationOnline,
+        },
+    });
+
+    Promise.all([loadSessionState(), loadMeasurements(), loadParts(), loadDropdownData()]);
     initPartEntry();
     bindMeasurementFilters();
 
@@ -1309,9 +1510,12 @@
     };
   }
 
-  // ── Dropdown data (Operator/Owner/Vendor/Handler/Package Size) ──
+  // ── Dropdown data (Operator/Owner/Vendor/Package Size) ──
   // dropdown ทุกตัวเป็นแบบปิด — โหลดจาก DB ครั้งเดียวตอนเปิดหน้า แล้วเติมลง
-  // <select>/<datalist> ที่เกี่ยวข้อง ไม่มีช่องให้พิมพ์ค่าใหม่ในฟอร์ม
+  // <select>/<datalist> ที่เกี่ยวข้อง ไม่มีช่องให้พิมพ์ค่าใหม่ในฟอร์ม (ตัด
+  // Handler ออกจาก dropdown ที่เติมตอนโหลดหน้าแล้ว — ฟอร์ม New/Rework ไม่มีช่อง
+  // Handler อีกต่อไปตามที่ตกลงกันไว้ — /api/handlers ยังอยู่ใน backend เผื่อ
+  // edit.html หรือหน้าอื่นยังใช้อยู่)
   async function loadDropdownData() {
     const fillSelect = (ids, items, labelKey) => {
       const optionsHtml = items.map(it => `<option value="${it[labelKey]}">${it[labelKey]}</option>`).join('');
@@ -1321,23 +1525,64 @@
       });
     };
     try {
-      const [operators, owners, vendors, handlers, packageSizes] = await Promise.all([
+      const [operators, owners, vendors, packageSizes] = await Promise.all([
         fetch(`${API}/api/operators`).then(r => r.ok ? r.json() : []),
         fetch(`${API}/api/owners`).then(r => r.ok ? r.json() : []),
         fetch(`${API}/api/vendors`).then(r => r.ok ? r.json() : []),
-        fetch(`${API}/api/handlers`).then(r => r.ok ? r.json() : []),
         fetch(`${API}/api/package-sizes`).then(r => r.ok ? r.json() : []),
       ]);
       fillSelect(['ipm-operator', 'new-operator', 'rework-operator'], operators, 'operator_name');
       fillSelect(['new-owner',   'rework-owner'],   owners,   'owner_name');
       fillSelect(['new-vendor',  'rework-vendor'],  vendors,  'vendor_name');
-      fillSelect(['new-handler', 'rework-handler'], handlers, 'handler_name');
 
       const datalist = document.getElementById('package-size-datalist');
       if (datalist) {
         datalist.innerHTML = packageSizes.map(ps => `<option value="${ps.package_size}"></option>`).join('');
       }
     } catch (e) { console.warn('loadDropdownData:', e); }
+  }
+
+  // ── Part Number dropdown — cascade จาก Package Size ────────────────────────
+  // dropdown ปิดเหมือน operator/vendor/owner/package_size แต่ต้องรอให้เลือก
+  // Package Size ก่อน (ไม่งั้นไม่รู้จะ query ตาราง parts ด้วยเงื่อนไขอะไร) —
+  // ใช้ร่วมกันทั้ง 3 ฟอร์ม (new/rework/ipm) ผ่าน prefix เดียวกับ id ของ field
+  // (`${prefix}-package_size` / `${prefix}-part_number`)
+  const _partNumberDebounce = {};
+  function schedulePartNumberUpdate(prefix) {
+    clearTimeout(_partNumberDebounce[prefix]);
+    _partNumberDebounce[prefix] = setTimeout(() => updatePartNumberOptions(prefix), 250);
+  }
+
+  async function updatePartNumberOptions(prefix) {
+    const pkgInput = document.getElementById(`${prefix}-package_size`);
+    const select   = document.getElementById(`${prefix}-part_number`);
+    if (!pkgInput || !select) return;
+    const pkgVal = pkgInput.value.trim();
+    const previousValue = select.value;
+
+    if (!pkgVal) {
+      select.innerHTML = '<option value="">-- เลือก Package Size ก่อน --</option>';
+      select.disabled = true;
+      return;
+    }
+
+    select.disabled = false;
+    select.innerHTML = '<option value="">-- กำลังโหลด... --</option>';
+    try {
+      const r = await fetch(`${API}/api/part-numbers?package_size=${encodeURIComponent(pkgVal)}`);
+      const partNumbers = r.ok ? await r.json() : [];
+      const optionsHtml = partNumbers.map(pn => `<option value="${pn}">${pn}</option>`).join('');
+      select.innerHTML = partNumbers.length
+        ? `<option value="">-- เลือก Part Number --</option>${optionsHtml}`
+        : '<option value="">-- ไม่มี Part Number ที่เคยลงทะเบียนไว้สำหรับ package size นี้ --</option>';
+      // คงค่าที่เคยเลือกไว้ ถ้ายังอยู่ในตัวเลือกชุดใหม่ (เช่นตอน unlock ฟอร์มกลับมาแก้)
+      if (previousValue && partNumbers.includes(previousValue)) {
+        select.value = previousValue;
+      }
+    } catch (e) {
+      console.warn('updatePartNumberOptions:', e);
+      select.innerHTML = '<option value="">-- โหลด Part Number ไม่สำเร็จ --</option>';
+    }
   }
 
   // ── Confirm modal (Promise-based) — ใช้แทน confirm() ตรงๆ เพราะต้องรอ
@@ -1365,6 +1610,10 @@
       const r = await fetch(`${API}/api/session/state`);
       if (r.ok) updateSession(await r.json());
     } catch (e) { console.warn('loadSessionState:', e); }
+    // วาดแถบคิว ALPL ใหม่ทุกครั้งที่ sync สถานะ session — ครอบคลุมทั้งตอนเปิดหน้า
+    // ครั้งแรกและตอน SSE reconnect (ดู sse.onopen) ทำให้แถบไม่หายถ้า refresh
+    // หน้าเว็บกลาง session
+    await syncQueueStrip();
   }
 
   function updateSession(data) {
@@ -1382,7 +1631,9 @@
     // เคลียร์ทิ้ง เพราะยังไม่ผูกกับ session ไหนเลย ต้องรอผู้ใช้กด Start เอง
     const queue = ipmQueue || newQueue || reworkQueue;
     const queueIsStale = queue && queue.session_id != null &&
-      !(session.state === 'running' && session.session_id === queue.session_id);
+      // นับ 'paused' เป็น session ที่ยังไม่จบ ไม่งั้นพอกด Pause คิว Part Entry
+      // จะถูกมองว่าเป็นของ session เก่าแล้วโดนล้างทิ้งทันที
+      !(['running', 'paused'].includes(session.state) && session.session_id === queue.session_id);
 
     if (queueIsStale) {
       clearAllQueuesAndForms(); // เรียก renderPartEntrySummary() ให้อยู่แล้วในตัว
@@ -1413,51 +1664,31 @@
           : `${mc} / ${tc} measured`;
     }
 
-    const hasQueue = !!(ipmQueue || newQueue || reworkQueue);
-    const canStart = state !== 'running' && stationStatus === 'online' && hasQueue;
+    // ── สถานะปุ่ม Start / Pause / Stop ────────────────────────────────────
+    //   running → Start กดไม่ได้, โชว์ Pause
+    //   paused  → Start กดได้ (= วัดต่อ), โชว์ Stop แทน Pause
+    //   อื่นๆ    → Start กดได้ถ้ามีคิว, ไม่โชว์ทั้ง Pause และ Stop
+    const isPaused  = state === 'paused';
+    const isRunning = state === 'running';
+    const hasQueue  = !!(ipmQueue || newQueue || reworkQueue);
+    // ตอน paused ไม่ต้องมีคิวใน Part Entry ก็กด "วัดต่อ" ได้ (คิวอยู่ที่ backend แล้ว)
+    const canStart = isPaused
+      ? stationStatus === 'online'
+      : (!isRunning && stationStatus === 'online' && hasQueue);
+
     const btnStart = document.getElementById('btn-start');
     btnStart.disabled = !canStart;
-    if (ipmQueue)         btnStart.textContent = `▶ Start (IPM ×${ipmQueue.list.length})`;
-    else if (newQueue)    btnStart.textContent = `▶ Start (New ×${newQueue.list.length})`;
-    else if (reworkQueue) btnStart.textContent = `▶ Start (Rework ×${reworkQueue.list.length})`;
-    else                  btnStart.textContent = '▶ Start (กด Save IPM/New/Rework ก่อน)';
-    document.getElementById('btn-stop').style.display = state === 'running' ? 'inline-block' : 'none';
+    if (isPaused)              btnStart.textContent = `▶ Start (วัดต่อ ${mc}/${tc})`;
+    else if (ipmQueue)         btnStart.textContent = `▶ Start (IPM ×${ipmQueue.list.length})`;
+    else if (newQueue)         btnStart.textContent = `▶ Start (New ×${newQueue.list.length})`;
+    else if (reworkQueue)      btnStart.textContent = `▶ Start (Rework ×${reworkQueue.list.length})`;
+    else                       btnStart.textContent = '▶ Start (กด Save ก่อน)';
+
+    document.getElementById('btn-pause').style.display = isRunning ? 'inline-block' : 'none';
+    document.getElementById('btn-stop').style.display  = isPaused  ? 'inline-block' : 'none';
   }
 
-  function setStationBadge(status) {
-    stationStatus = status;
-    const el  = document.getElementById('station-badge');
-    const map = { online: '🟢 Online', offline: '🔴 Offline', connecting: '🟡 Connecting' };
-    el.textContent = map[status] || status;
-    el.className   = `station-badge ${status}`;
-    renderSessionUI();
-  }
 
-  function connectSSE() {
-    if (sse) { sse.close(); sse = null; }
-    setStationBadge('connecting');
-    sse = new EventSource(`${API}/api/stream`);
-    sse.onopen  = () => {
-      setStationBadge('online');
-      // SSE ไม่มี replay/backfill เลย — ถ้าหลุดกลางคันแล้วต่อกลับมาใหม่ event
-      // ที่ backend ยิงออกไปตอนหลุด (session_complete/session_stopped ฯลฯ)
-      // จะหายไปเฉยๆ ไม่มีทางรู้ได้เลย ทำให้ Part Entry/Start button/Edit button
-      // ค้างสถานะเก่าไม่เคลียร์ให้ (อาการที่เจอ) — ทุกครั้งที่ต่อ SSE สำเร็จ (ทั้ง
-      // ครั้งแรกและตอน reconnect) resync สถานะ session จริงจาก backend ตรงๆ
-      // อีกที กันพลาด แทนที่จะเชื่อแค่ event ที่รอดมาถึง
-      loadSessionState();
-    };
-    sse.onerror = () => { setStationBadge('offline'); setTimeout(connectSSE, 3000); };
-
-    sse.addEventListener('measurement',      e => onNewMeasurement(parse(e)));
-    sse.addEventListener('image_updated',    e => onImageUpdated(parse(e)));
-    sse.addEventListener('session_started',  e => onSessionStarted(parse(e)));
-    sse.addEventListener('session_stopped',  e => onSessionStopped(parse(e)));
-    sse.addEventListener('session_complete', e => onSessionComplete(parse(e)));
-    sse.addEventListener('session_timeout',  e => onSessionTimeout(parse(e)));
-    sse.addEventListener('station_online',   e => onStationOnline(parse(e)));
-    sse.addEventListener('ping', () => {});
-  }
 
   function parse(e) {
     try { return JSON.parse(e.data); } catch { return {}; }
@@ -1466,6 +1697,13 @@
   async function onNewMeasurement(d) {
     updateSession({ measured_count: d.measured, target_count: d.target });
     updateTelemetry(d);
+    // อัปเดตแถบคิวแบบ incremental — ใช้ d.measured (นับจาก backend) เป็น index
+    // ตรงๆ แทนการนับเองฝั่ง client กันคลาดเคลื่อนถ้ามี event หล่นหาย
+    if (d.measured != null && d.measured > 0) {
+      telemetryResults[d.measured - 1] = d.result;
+      telemetryMeasIds[d.measured - 1] = d.measurement_id;
+      renderQueueStrip();
+    }
     updateStats();
     // ตารางตอนนี้แบ่งหน้า/กรองแบบ server-side แล้ว — แถวใหม่จะโผล่ "สด" เฉพาะตอนที่
     // ผู้ใช้กำลังดูหน้า 1 แบบไม่มี filter ค้างอยู่เท่านั้น (ตรงกับตำแหน่งที่มันจะโผล่จริง
@@ -1476,10 +1714,40 @@
     }
   }
 
+  // เช็คว่าค่าที่วัดได้ของ "แกนเดียว" อยู่ในสเปคไหม — คืน true/false/null
+  // (null = ข้อมูลไม่ครบ เช่น part ยังไม่ได้ตั้ง Part Number จึงไม่มี nominal)
+  // tolerance ใช้ค่าเดียวร่วมกันทั้งแกน X/Y ตาม schema ของ part_number
+  // EPS: ค่าที่ตกขอบ tolerance พอดีต้องถือว่าผ่าน — เทียบทศนิยมตรงๆ จะได้ NG
+  // เพราะ 3.02 - 0.01 ในเลขฐานสองได้ 3.0100000000000002 (มากกว่า 3.010)
+  // ต้องใช้ค่าเดียวกับ _TOL_EPS ฝั่ง backend ไม่งั้นสีในตารางจะไม่ตรงกับ Result
+  function axisOk(v, nominal, upperTol, lowerTol) {
+    if (v == null || nominal == null || upperTol == null || lowerTol == null) return null;
+    return (nominal - lowerTol - TOL_EPS) <= v && v <= (nominal + upperTol + TOL_EPS);
+  }
+
+  // เขียนป้าย OK/NG + ช่วงที่รับได้ ลงในกล่อง Value X หรือ Value Y ช่องเดียว
+  function renderAxisCell(axis, value, nominal, upperTol, lowerTol, okFromEvent) {
+    const badge = document.getElementById(`telemetry-${axis}-axis`);
+    const range = document.getElementById(`telemetry-${axis}-range`);
+    if (!badge || !range) return;
+    // ใช้ ok ที่ backend ส่งมาก่อน (แม่นที่สุด) ถ้าไม่มีค่อยคำนวณเองจาก nominal/tol
+    const ok = (okFromEvent != null) ? okFromEvent : axisOk(value, nominal, upperTol, lowerTol);
+    if (ok == null) {
+      badge.textContent = ''; badge.className = 'tc-axis';
+      range.textContent = '';
+      return;
+    }
+    badge.textContent = ok ? 'OK' : 'NG';
+    badge.className   = `tc-axis ${ok ? 'ok' : 'ng'}`;
+    range.textContent = `รับได้ ${(nominal - lowerTol).toFixed(3)} – ${(nominal + upperTol).toFixed(3)}`;
+  }
+
   function updateTelemetry(d) {
     document.getElementById('telemetry-alpl-badge').textContent = `ALPL ${d.number_alpl ?? '—'}`;
     document.getElementById('telemetry-x').innerHTML = `${d.value_x.toFixed(3)}<span> mm</span>`;
     document.getElementById('telemetry-y').innerHTML = `${d.value_y.toFixed(3)}<span> mm</span>`;
+    renderAxisCell('x', d.value_x, d.nominal_x, d.upper_tol, d.lower_tol, d.ok_x);
+    renderAxisCell('y', d.value_y, d.nominal_y, d.upper_tol, d.lower_tol, d.ok_y);
     const resultEl = document.getElementById('telemetry-result-value');
     const colEl    = document.getElementById('telemetry-result-col');
     const cls      = d.result === 'OK' ? 'ok' : 'ng';
@@ -1490,10 +1758,99 @@
     savePartEntryState();
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // แถบคิว ALPL ใน Live Telemetry
+  // ══════════════════════════════════════════════════════════════════════════
+  // 3 array นี้ขนานกันเสมอ (index เดียวกัน = ALPL ตัวเดียวกันในคิว):
+  //   telemetryQueue    — ลำดับ ALPL ทั้งหมดของ session (มาจาก sessions.queue_state)
+  //   telemetryResults  — 'OK'/'NG' ของตัวที่วัดแล้ว, undefined ถ้ายังไม่ได้วัด
+  //   telemetryMeasIds  — measurement_id ไว้เปิด Report modal ตอนกดชิป
+  // ใช้ index แทนการ map ด้วยเลข ALPL เพราะคิวมี ALPL ซ้ำกันได้ (วัดตัวเดิม 2 รอบ)
+  let telemetryQueue = [], telemetryResults = [], telemetryMeasIds = [];
+
+  function clearQueueStrip() {
+    telemetryQueue = []; telemetryResults = []; telemetryMeasIds = [];
+    renderQueueStrip();
+  }
+
+  function renderQueueStrip() {
+    const wrap  = document.getElementById('telemetry-queue');
+    const strip = document.getElementById('telemetry-queue-strip');
+    if (!wrap || !strip) return;
+
+    // คิวตัวเดียว (IPM ชิ้นเดียว) ไม่มีอะไรให้ดู — ซ่อนไปเลยไม่ให้เปลืองที่
+    if (telemetryQueue.length <= 1) { wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
+
+    // จำนวนที่วัดไปแล้ว = ตำแหน่งของตัวที่กำลังวัดอยู่ตอนนี้พอดี (0-based)
+    const done = telemetryResults.filter(r => r != null).length;
+
+    strip.innerHTML = telemetryQueue.map((alpl, i) => {
+      const res = telemetryResults[i];
+      if (res) {
+        const cls  = res === 'OK' ? 'ok' : 'ng';
+        const ico  = res === 'OK' ? '✓' : '✕';
+        const mid  = telemetryMeasIds[i];
+        const clic = mid != null ? ` onclick="openReportModal(${mid})"` : '';
+        return `<button type="button" class="tq-chip ${cls}"${clic} title="ALPL ${alpl} — ${res} (กดเพื่อดูรายละเอียด)"><span class="tq-ico">${ico}</span>${alpl}</button>`;
+      }
+      // ตัวที่กำลังจะวัด — ตอน running มีจุดกะพริบ ตอน paused ใช้ไอคอนพักแทน
+      // (ยังคงไฮไลต์ไว้ให้รู้ว่าค้างอยู่ตรงไหน ไม่ปล่อยให้กลายเป็นชิปเทาธรรมดา)
+      if (i === done && session.state === 'running') {
+        return `<span class="tq-chip now" title="กำลังวัด ALPL ${alpl}"><span class="tq-dot"></span>${alpl}</span>`;
+      }
+      if (i === done && session.state === 'paused') {
+        return `<span class="tq-chip now" title="พักไว้ที่ ALPL ${alpl}"><span class="tq-ico">⏸</span>${alpl}</span>`;
+      }
+      return `<span class="tq-chip wait" title="รอคิว ALPL ${alpl}">${alpl}</span>`;
+    }).join('');
+
+    // เลื่อนให้ชิปที่กำลังวัดอยู่กลางแถบเสมอ — คิวยาวๆ จะได้ไม่ต้องเลื่อนหาเอง
+    const cur = strip.querySelector('.tq-chip.now');
+    if (cur) cur.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }
+
+  // โหลดคิว + ผลที่วัดไปแล้วของ session ปัจจุบันจาก backend ใหม่ทั้งชุด
+  // เรียกตอน: เปิดหน้า, SSE reconnect, และตอน session ใหม่เริ่ม — ทำให้แถบนี้
+  // รอดการ refresh หน้าเว็บกลาง session (ไม่ต้องพึ่ง event ที่วิ่งผ่านไปแล้ว)
+  async function syncQueueStrip() {
+    telemetryQueue = []; telemetryResults = []; telemetryMeasIds = [];
+    const sid = session.session_id;
+    if (sid == null) { renderQueueStrip(); return; }
+    try {
+      const r = await fetch(`${API}/api/session/state`);
+      if (r.ok) {
+        const s = await r.json();
+        let qs = s.queue_state;
+        if (typeof qs === 'string') { try { qs = JSON.parse(qs); } catch { qs = null; } }
+        telemetryQueue = (qs && Array.isArray(qs.queue)) ? qs.queue : [];
+      }
+      if (telemetryQueue.length) {
+        const m = await fetch(`${API}/api/measurements?session_id=${sid}&limit=1000`);
+        if (m.ok) {
+          const items = (await m.json()).items || [];
+          // API เรียงจากใหม่→เก่า แต่แถบคิวต้องเรียงตามลำดับที่วัดจริง (เก่า→ใหม่)
+          items.sort((a, b) => a.measurement_id - b.measurement_id);
+          items.forEach((x, i) => {
+            telemetryResults[i] = x.result;
+            telemetryMeasIds[i] = x.measurement_id;
+          });
+        }
+      }
+    } catch (e) { console.warn('syncQueueStrip:', e); }
+    renderQueueStrip();
+  }
+
   function resetTelemetry() {
     document.getElementById('telemetry-alpl-badge').textContent = 'ALPL —';
     document.getElementById('telemetry-x').innerHTML = '—<span> mm</span>';
     document.getElementById('telemetry-y').innerHTML = '—<span> mm</span>';
+    ['x', 'y'].forEach(a => {
+      const badge = document.getElementById(`telemetry-${a}-axis`);
+      const range = document.getElementById(`telemetry-${a}-range`);
+      if (badge) { badge.textContent = ''; badge.className = 'tc-axis'; }
+      if (range) range.textContent = '';
+    });
     document.getElementById('telemetry-result-value').textContent = '—';
     document.getElementById('telemetry-result-value').className   = 'telemetry-result-value';
     document.getElementById('telemetry-result-col').className     = 'telemetry-result-col';
@@ -1544,8 +1901,11 @@
       const r = await fetch(`${API}/api/image-url/${measurementId}`);
       if (!r.ok) return;
       const data = await r.json();
+      const src = mediaUrl(data.url);
       document.getElementById('camera-preview-box').innerHTML =
-        `<img src="${data.url}" alt="Latest capture (measurement #${measurementId})" />`;
+        `<a href="${src}" target="_blank" rel="noopener" title="คลิกเพื่อดูขนาดเต็ม" ` +
+        `style="position:absolute;inset:0">` +
+        `<img src="${src}" alt="Latest capture (measurement #${measurementId})" /></a>`;
       lastImageMeasurementId = measurementId;
       savePartEntryState();
     } catch (e) { console.warn('updateCameraPreview:', e); }
@@ -1553,24 +1913,149 @@
 
   function resetCameraPreview() {
     document.getElementById('camera-preview-box').innerHTML =
-      '<span class="camera-preview-icon">🖼</span><span>No image yet</span>';
+      '<span>No image yet</span>';
     lastImageMeasurementId = null;
   }
 
   function onSessionStarted(d) {
     resetTelemetry();
+    clearQueueStrip();  // ล้างคิวของ session ก่อนหน้าทิ้งก่อนโหลดชุดใหม่
     updateSession({ state: 'running', session_id: d.session_id, measured_count: 0, target_count: d.target_count });
     renderPartEntrySummary(); // ซ่อนปุ่ม Edit ทันทีที่ session เริ่มรัน
+    syncQueueStrip();   // ดึงคิว ALPL ชุดใหม่จาก backend มาวาดแถบ
   }
 
   // ── [แก้ไข] 3 handler นี้เรียก clearAllQueuesAndForms() เพื่อเคลียร์คิว+ฟอร์ม ─
-  function onSessionStopped(d)  { resetTelemetry(); updateSession({ state: 'stopped' }); clearAllQueuesAndForms(); }
-  function onSessionComplete(d) { resetTelemetry(); updateSession({ state: 'stopped', measured_count: d.measured, target_count: d.target }); clearAllQueuesAndForms(); }
-  function onSessionTimeout(d)  { resetTelemetry(); updateSession({ state: 'timeout' }); clearAllQueuesAndForms(); }
+  // หมายเหตุ: ไม่ล้างแถบคิวตอน session จบ — ตั้งใจให้ผู้ปฏิบัติงานยังเห็นสรุป
+  // OK/NG ของรอบที่เพิ่งวัดเสร็จได้อยู่ (แค่ re-render ให้จุด "กำลังวัด" หายไป)
+  // จะถูกล้างจริงตอนกด Start รอบใหม่ (ดู onSessionStarted)
+  // Pause/Resume ไม่แตะคิวหรือฟอร์มเลย — session ยังมีชีวิตอยู่ ค่าที่วัดล่าสุด
+  // กับแถบคิวคงไว้เหมือนเดิม เปลี่ยนแค่สถานะ (ซึ่งไปสลับปุ่มใน renderSessionUI)
+  // renderQueueStrip() เรียกเพื่อให้จุด "กำลังวัด" หายไประหว่างพัก แล้วกลับมาตอน resume
+  function onSessionPaused(d)   { updateSession({ state: 'paused' });  renderQueueStrip(); }
+  function onSessionResumed(d)  { updateSession({ state: 'running' }); renderQueueStrip(); }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // สรุปผล IPM ตอนวัดครบ — ตารางสำหรับคัดลอกไปวางใน Excel
+  // ══════════════════════════════════════════════════════════════════════════
+  let ipmSummaryRows = [];   // [{x, y}] เรียงตามลำดับที่วัดจริง
+
+  /**
+   * ดึงผลของ session ที่เพิ่งจบมาแสดงเป็นตาราง 2 คอลัมน์ (เฉพาะโหมด IPM)
+   *
+   * ⚠ ตั้งใจเช็คโหมดจาก measure_type "ในข้อมูลที่ดึงมา" ไม่ใช่จากตัวแปร ipmQueue
+   *   ฝั่งหน้าเว็บ เพราะ ipmQueue เป็น state ในหน่วยความจำที่หายได้หลายทาง:
+   *   refresh หน้ากลาง session · เปิดจากอีกเครื่อง · clearAllQueuesAndForms()
+   *   ทำงานก่อน — พอหายแล้วจะแยกไม่ออกว่ารอบที่จบเป็นโหมดอะไร แล้ว popup
+   *   จะไม่เด้งโดยไม่มีอะไรบอกสาเหตุ
+   */
+  async function showIpmSummary(sessionId) {
+    if (sessionId == null) return;
+    try {
+      const r = await fetch(`${API}/api/measurements?session_id=${sessionId}&limit=1000`);
+      if (!r.ok) return;
+      const items = (await r.json()).items || [];
+      if (!items.length || items[0].measure_type !== 'IPM') return;
+      // API เรียงใหม่→เก่า แต่ตารางต้องเรียงตามลำดับที่วัดจริง (เก่า→ใหม่)
+      items.sort((a, b) => a.measurement_id - b.measurement_id);
+      ipmSummaryRows = items.map(m => ({ x: m.value_x, y: m.value_y }));
+    } catch (e) {
+      console.warn('showIpmSummary:', e);
+      return;
+    }
+    if (!ipmSummaryRows.length) return;
+
+    document.getElementById('ipm-summary-count').textContent =
+      `วัดครบ ${ipmSummaryRows.length} ชิ้น`;
+    document.getElementById('ipm-summary-body').innerHTML = ipmSummaryRows.map((row, i) =>
+      `<tr><td>ALPL${i + 1}X=${fmtMm(row.x)}mm</td><td>Y=${fmtMm(row.y)}mm</td></tr>`
+    ).join('');
+    document.getElementById('ipm-summary-modal').classList.add('open');
+  }
+
+  /** ทศนิยม 3 ตำแหน่งเสมอ — ให้ตรงกับความละเอียดที่ TM-X ส่งมา (+0005.047) */
+  function fmtMm(v) {
+    return v == null ? '' : Number(v).toFixed(3);
+  }
+
+  /**
+   * คัดลอกเป็น TSV — คั่นคอลัมน์ด้วย Tab ขึ้นแถวด้วย \n
+   * วางใน Excel แล้วจะแตกเป็น 2 คอลัมน์ × N แถวอัตโนมัติ (ไม่ต้องใช้ Text to Columns)
+   */
+  async function copyIpmSummary() {
+    const tsv = ipmSummaryRows
+      .map((row, i) => `ALPL${i + 1}X=${fmtMm(row.x)}mm\tY=${fmtMm(row.y)}mm`)
+      .join('\n');
+    try {
+      await navigator.clipboard.writeText(tsv);
+      showToast(`คัดลอกแล้ว ${ipmSummaryRows.length} แถว — วางใน Excel ได้เลย`);
+    } catch (e) {
+      // clipboard API ใช้ไม่ได้ถ้าเปิดผ่าน http บนเครื่องอื่น (ต้อง https หรือ localhost)
+      // ถอยไปใช้วิธีเดิมที่ทำงานได้ทุกที่
+      const ta = document.createElement('textarea');
+      ta.value = tsv;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        showToast(`คัดลอกแล้ว ${ipmSummaryRows.length} แถว — วางใน Excel ได้เลย`);
+      } catch (err) {
+        showToast('คัดลอกไม่สำเร็จ — ลากเลือกข้อความในตารางแล้วกด Ctrl+C แทน', 5000);
+      }
+      document.body.removeChild(ta);
+    }
+  }
+
+  // ปิด modal "ไม่ได้รับค่าการวัด" ที่อาจค้างอยู่ — ต้องเรียกทุกครั้งที่ session
+  // จบจากทางอื่น (เครื่องอื่นกด Stop / heartbeat timeout / วัดครบเอง) ไม่งั้น
+  // modal จะค้างบนจอทั้งที่ไม่มี session ให้ตอบแล้ว แล้วกดปุ่มไหนก็ 404
+  function dismissMeasureTimeoutModal() {
+    document.getElementById('mt-modal').classList.remove('open');
+    mtSessionId = null;
+  }
+
+  function onSessionStopped(d)  { dismissMeasureTimeoutModal(); resetTelemetry(); updateSession({ state: 'stopped' }); clearAllQueuesAndForms(); renderQueueStrip(); }
+  function onSessionComplete(d) {
+    dismissMeasureTimeoutModal();
+    resetTelemetry();
+    updateSession({ state: 'stopped', measured_count: d.measured, target_count: d.target });
+    clearAllQueuesAndForms();
+    renderQueueStrip();
+    // เด้งเฉพาะ IPM ที่วัดครบตามเป้า — กด Stop กลางคันจะมาทาง onSessionStopped
+    // ซึ่งไม่เรียกตัวนี้ จึงไม่เด้ง (ตามที่ตกลงกันไว้)
+    showIpmSummary(d.session_id);
+  }
+  function onSessionTimeout(d)  { dismissMeasureTimeoutModal(); resetTelemetry(); updateSession({ state: 'timeout' }); clearAllQueuesAndForms(); renderQueueStrip(); }
   function onStationOnline(d)   { resetTelemetry(); setStationBadge('online'); updateSession({ state: 'idle' }); }
 
-  document.getElementById('btn-start').onclick = () => {
+  document.getElementById('btn-start').onclick = async () => {
+    // ปุ่มเดียวทำ 2 หน้าที่ตามสถานะ: ตอนพักอยู่ = "วัดต่อ" (resume session เดิม)
+    // ตอนว่าง = เริ่ม session ใหม่จากคิวที่ Save ไว้
+    if (session.state === 'paused') {
+      try {
+        const r = await fetch(`${API}/api/session/resume`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: session.session_id }),
+        });
+        if (!r.ok) alert(`สั่งวัดต่อไม่สำเร็จ: ${(await r.json().catch(() => ({}))).detail ?? r.status}`);
+      } catch (e) { alert(`Error: ${e.message}`); }
+      return;
+    }
     if (ipmQueue || newQueue || reworkQueue) startFromQueue();
+  };
+
+  document.getElementById('btn-pause').onclick = async () => {
+    try {
+      const r = await fetch(`${API}/api/session/pause`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ session_id: session.session_id }),
+      });
+      if (!r.ok) alert(`พัก session ไม่สำเร็จ: ${(await r.json().catch(() => ({}))).detail ?? r.status}`);
+    } catch (e) { alert(`Error: ${e.message}`); }
   };
 
   async function startFromQueue() {
@@ -1597,9 +2082,7 @@
         Measure_Type: 'New',
         number_alpl:  numberAlplStrList,
         Operator:       queue.operator,
-        Note:           queue.note ?? null,
         part_number:    queue.fields.part_number,
-        handler:        queue.fields.handler,
         description:    queue.fields.description,
         vendor:         queue.fields.vendor,
         po_number:      queue.fields.po_number,
@@ -1609,14 +2092,13 @@
       };
     } else {
       // Rework: จำกัดทีละ 1 ALPL เสมอ (บังคับตอน onSubmitRework แล้ว) — ไม่มี
-      // Note เหมือน IPM/New เพราะฟอร์ม Rework ไม่มีช่อง Note (ตามที่ระบุไว้)
+      // Note/Handler เหมือน New (ตัดออกจากทั้ง 2 ฟอร์มแล้วตามที่ตกลงกันไว้)
       body = {
         'จำนวนชิ้นงานที่ต้องวัด': list.length,
         Measure_Type: 'Rework',
         number_alpl:  numberAlplStrList,
         Operator:       queue.operator,
         part_number:    queue.fields.part_number,
-        handler:        queue.fields.handler,
         description:    queue.fields.description,
         vendor:         queue.fields.vendor,
         po_number:      queue.fields.po_number,
@@ -1656,8 +2138,11 @@
     } catch (e) { alert(`Error: ${e.message}`); }
   }
 
-  document.getElementById('btn-stop').onclick = async () => {
-    if (!confirm('Stop the current session?')) return;
+  /** หยุด session — ใช้ร่วมกันระหว่างปุ่ม Stop กับ modal "ไม่ได้รับค่าการวัด"
+   *  ตั้งใจให้มีทางเดียวจริงๆ เพื่อให้ทั้งสองเส้นทางล้างสถานะเหมือนกันเป๊ะ
+   *  (backend เป็นคนอัปเดต DB + เคลียร์คิว + แจ้ง Agent + broadcast SSE
+   *  ส่วนหน้าเว็บรอ event session_stopped มา reset UI เองอยู่แล้ว) */
+  async function stopSession() {
     try {
       await fetch(`${API}/api/session/stop`, {
         method: 'POST',
@@ -1665,7 +2150,56 @@
         body: JSON.stringify({ session_id: session.session_id }),
       });
     } catch (e) { alert(`Error: ${e.message}`); }
+  }
+
+  document.getElementById('btn-stop').onclick = async () => {
+    if (!confirm('Stop the current session?')) return;
+    await stopSession();
   };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Measure timeout — Pi ไม่ได้รับค่าการวัดกลับมา
+  // ══════════════════════════════════════════════════════════════════════════
+  // Pi ยิง T1 แล้วรอ measured_count ขยับ ถ้าครบเวลาแล้วไม่ขยับ มันจะแจ้ง backend
+  // ซึ่ง broadcast event นี้มา — ระหว่างนี้ Pi "ค้างรอคำตอบอยู่จริง" จึงต้อง
+  // ตอบให้ครบทุกครั้ง ไม่มีทางปิด modal ทิ้งเฉยๆ
+  let mtSessionId = null;
+
+  function onMeasureTimeout(d) {
+    mtSessionId = d.session_id;
+    const piece  = d.piece  ?? '—';
+    const target = d.target ?? '—';
+    document.getElementById('mt-modal-message').innerHTML =
+      `ส่งคำสั่งวัด <strong>ชิ้นที่ ${piece} จาก ${target}</strong> ไปแล้ว ` +
+      `แต่ไม่ได้รับค่าการวัดกลับมาภายในเวลาที่กำหนด<br>ต้องการวัดชิ้นถัดไปต่อหรือไม่?`;
+    document.getElementById('mt-modal').classList.add('open');
+  }
+
+  async function resolveMeasureTimeout(action) {
+    const sid = mtSessionId;
+    document.getElementById('mt-modal').classList.remove('open');
+    mtSessionId = null;
+    if (sid == null) return;
+    try {
+      await fetch(`${API}/api/measure-timeout/${sid}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+    } catch (e) {
+      // บอก Pi ไม่สำเร็จ — Pi มี fallback เป็น "stop" อยู่แล้ว แจ้งให้ผู้ใช้รู้ตัว
+      showToast(`ส่งคำตอบไม่สำเร็จ: ${e.message} — เครื่องจะหยุดวัดเอง`, 6000);
+    }
+    // ผู้ใช้เลือกหยุด → เดินเส้นทางเดียวกับปุ่ม Stop ทุกประการ
+    if (action === 'stop') await stopSession();
+  }
+
+  document.getElementById('ipm-summary-copy').onclick  = copyIpmSummary;
+  document.getElementById('ipm-summary-close').onclick =
+    () => document.getElementById('ipm-summary-modal').classList.remove('open');
+
+  document.getElementById('mt-modal-continue').onclick = () => resolveMeasureTimeout('continue');
+  document.getElementById('mt-modal-stop').onclick     = () => resolveMeasureTimeout('stop');
 
   // ══════════════════════════════════════════════════════════════════════════
   // Part Entry
@@ -1711,6 +2245,8 @@
         if (dirtyMode && !confirmDiscard(modeLabels[mode], modeLabels[dirtyMode])) return;
         ENTRY_MODES.filter(m => m !== mode).forEach(m => clearFormCompletely(m));
         switchEntryMode(mode);
+        // เข้าโหมด IPM ต้องเช็คใหม่ว่า ALPL ที่ค้างอยู่ลงทะเบียนแล้วหรือยัง
+        if (mode === 'ipm') updateIpmPackageSizeLock();
       };
     });
 
@@ -1718,8 +2254,23 @@
     modeForms.ipm.addEventListener('submit', onSubmitIpm);
     modeForms.new.addEventListener('submit', onSubmitNew);
     modeForms.rework.addEventListener('submit', onSubmitRework);
-    document.getElementById('ipm-number_alpl').addEventListener('blur', updateIpmPackageSizeLock);
+    // ต้องคำนวณทั้งตอน input (debounce) และ blur — ผูกแค่ blur จะค้างสถานะเก่า
+    // ถ้าผู้ใช้พิมพ์แล้วกด Save เลยโดยไม่คลิกออกจากช่อง
+    let ipmLockTimer = null;
+    const ipmAlplEl = document.getElementById('ipm-number_alpl');
+    ipmAlplEl.addEventListener('blur', updateIpmPackageSizeLock);
+    ipmAlplEl.addEventListener('input', () => {
+      clearTimeout(ipmLockTimer);
+      ipmLockTimer = setTimeout(updateIpmPackageSizeLock, 400);
+    });
     document.getElementById('rework-number_alpl').addEventListener('blur', updateReworkPrefill);
+    // Package Size → Part Number cascading dropdown ทั้ง 3 ฟอร์ม — ต้องเลือก
+    // Package Size ก่อนถึงจะเลือก Part Number ได้ (debounce กันยิง fetch รัวๆ
+    // ตอนพิมพ์ package size เอง แทนที่จะเลือกจาก datalist โดยตรง)
+    ENTRY_MODES.forEach(mode => {
+      const pkgInput = document.getElementById(`${mode}-package_size`);
+      if (pkgInput) pkgInput.addEventListener('input', () => schedulePartNumberUpdate(mode));
+    });
     ENTRY_MODES.forEach(mode => {
       document.getElementById(`btn-edit-${mode}`).onclick = () => unlockFormFields(mode);
     });
@@ -1740,6 +2291,8 @@
       document.getElementById('entry-mode-rework').click();
     }
     document.getElementById('pe-modal').classList.add('open');
+    // เปิด modal ขึ้นมาแล้วอาจมีค่าเดิมค้างอยู่ในฟอร์ม — เช็คสถานะล็อกใหม่เสมอ
+    if (document.getElementById('entry-mode-ipm').classList.contains('active')) updateIpmPackageSizeLock();
   }
   function closePeModal() {
     document.getElementById('pe-modal').classList.remove('open');
@@ -1783,10 +2336,8 @@
       ? [
           ['Number ALPL',      queue.list.join(', ')],
           ['Operator',          queue.operator],
-          ['Note',              queue.note || '—'],
           null,
           ['Part Number',       queue.fields.part_number],
-          ['Handler',           queue.fields.handler        || '—'],
           ['Description',       queue.fields.description    || '—'],
           ['Vendor',            queue.fields.vendor         || '—'],
           null,
@@ -1800,7 +2351,6 @@
           ['Operator',          queue.operator],
           null,
           ['Part Number',       queue.fields.part_number],
-          ['Handler',           queue.fields.handler        || '—'],
           ['Description',       queue.fields.description    || '—'],
           ['Vendor',            queue.fields.vendor         || '—'],
           null,
@@ -1818,9 +2368,10 @@
     // Toggle bar โชว์แค่ ALPL (ทั้ง IPM และ New)
     const summaryText = `ALPL: ${queue.list.join(', ')}`;
 
-    // ปุ่ม Edit หายไปทันทีที่ session เริ่มรัน (state === 'running') — กันแก้ไข
-    // คิวระหว่างที่ Agent กำลังวัดตามคิวเดิมอยู่ ซึ่งจะทำให้ตำแหน่ง/ข้อมูลไม่ตรงกัน
-    const canEdit = session.state !== 'running';
+    // ปุ่ม Edit หายไปทันทีที่ session เริ่มรัน — กันแก้ไขคิวระหว่างที่ Agent
+    // กำลังวัดตามคิวเดิมอยู่ ซึ่งจะทำให้ตำแหน่ง/ข้อมูลไม่ตรงกัน
+    // รวม 'paused' ด้วย เพราะกด Start เมื่อไหร่ก็วัดต่อจากคิวเดิมทันที
+    const canEdit = !['running', 'paused'].includes(session.state);
     el.innerHTML = `
       <div class="pe-summary-dropdown">
         <button class="pe-summary-toggle" id="pe-toggle-btn" type="button">
@@ -1856,7 +2407,7 @@
 
   function formHasData(prefix) {
     const form = document.getElementById(`form-${prefix}`);
-    return Array.from(form.querySelectorAll('input, textarea')).some(el => el.value.trim() !== '');
+    return Array.from(form.querySelectorAll('input, textarea, select')).some(el => el.value.trim() !== '');
   }
 
   function confirmDiscard(targetLabel, currentLabel) {
@@ -1874,7 +2425,7 @@
 
   function lockFormFields(prefix) {
     const form = document.getElementById(`form-${prefix}`);
-    form.querySelectorAll('input, textarea').forEach(el => { el.disabled = true; });
+    form.querySelectorAll('input, textarea, select').forEach(el => { el.disabled = true; });
     document.getElementById(`btn-submit-${prefix}`).style.display = 'none';
     document.getElementById(`btn-edit-${prefix}`).style.display = '';
     otherPrefixes(prefix).forEach(p => {
@@ -1886,7 +2437,7 @@
 
   function unlockFormFields(prefix) {
     const form = document.getElementById(`form-${prefix}`);
-    form.querySelectorAll('input, textarea').forEach(el => { el.disabled = false; });
+    form.querySelectorAll('input, textarea, select').forEach(el => { el.disabled = false; });
     document.getElementById(`btn-edit-${prefix}`).style.display = 'none';
     document.getElementById(`btn-submit-${prefix}`).style.display = '';
     otherPrefixes(prefix).forEach(p => {
@@ -1894,6 +2445,11 @@
       otherBtn.disabled = false;
       otherBtn.title = '';
     });
+    // Part Number เป็น dropdown ที่ cascade จาก Package Size — หลัง unlock ต้อง
+    // sync สถานะ disabled/ตัวเลือกใหม่ตามค่า Package Size ปัจจุบันเสมอ (กัน
+    // เปิดให้กดได้ทั้งที่ Package Size ว่างอยู่ หรือโชว์ตัวเลือกเก่าค้างจาก
+    // package size อื่น) — ฟังก์ชันนี้จะพยายามคงค่าที่เลือกไว้เดิมให้ถ้ายังมีอยู่
+    if (document.getElementById(`${prefix}-part_number`)) updatePartNumberOptions(prefix);
   }
 
   function renderIpmOrderHint() {
@@ -1913,7 +2469,7 @@
   // แล้วใช้ `prefix` ตรงๆ ไปเลย (form id คือ `form-${prefix}` อยู่แล้วทุกโหมด)
   function clearFieldErrors(prefix) {
     document.querySelectorAll(`[id^="err-${prefix}-"]`).forEach(el => el.textContent = '');
-    document.querySelectorAll(`#form-${prefix} input, #form-${prefix} textarea`)
+    document.querySelectorAll(`#form-${prefix} input, #form-${prefix} textarea, #form-${prefix} select`)
       .forEach(el => el.classList.remove('invalid'));
   }
 
@@ -1937,15 +2493,38 @@
     return { list };
   }
 
+  // ── ดึง parts "ทั้งหมด" ────────────────────────────────────────────────
+  // หน้านี้ต้องรู้ว่า ALPL ตัวไหนลงทะเบียนแล้ว (ใช้ตอนเช็ค IPM/New/Rework และ
+  // ตอนล็อกช่อง Package Size) ถ้าได้มาไม่ครบจะตัดสินผิด
+  //
+  // ⚠ เดิมขอ `?limit=100000` ทีเดียว ซึ่งพังเงียบตอน backend เพิ่มเพดาน le=1000
+  // เข้ามา — ได้ HTTP 422 กลับมา แล้ว `if (r.ok)` กลืน error ทิ้ง ทำให้ parts
+  // ว่างเปล่าตลอด ทุกอย่างที่พึ่งข้อมูลนี้เลยเงียบไปหมดโดยไม่มีอะไรเตือน
+  // ตอนนี้ไล่ดึงทีละหน้าตามเพดานจริง และแจ้งเตือนถ้าดึงไม่สำเร็จ
+  const PARTS_PAGE = 1000;              // ต้องไม่เกินเพดานของ /api/parts
+
+  async function fetchAllParts() {
+    const out = [];
+    for (let offset = 0, total = Infinity; offset < total; offset += PARTS_PAGE) {
+      const r = await fetch(`${API}/api/parts?limit=${PARTS_PAGE}&offset=${offset}`);
+      if (!r.ok) throw new Error(await errText(r, `ดึงรายการ Part ไม่สำเร็จ (HTTP ${r.status})`));
+      const d = await r.json();
+      const items = d.items ?? [];
+      out.push(...items);
+      total = d.total ?? out.length;
+      if (!items.length) break;         // กันวนไม่จบถ้า backend คืน total เพี้ยน
+    }
+    return out;
+  }
+
   async function refreshParts() {
     try {
-      // /api/parts เปลี่ยนเป็น pagination แล้ว (คืน {items, total}, default limit=10)
-      // แต่หน้านี้ต้องใช้ parts "ทั้งหมด" เพื่อเช็คว่า ALPL ลงทะเบียนแล้วหรือยัง
-      // (checkAlplExistence) — ถ้าได้มาแค่ 10 ตัวแรกจะเช็คผิด จึงขอ limit สูงๆ
-      // เพื่อดึงมาทุกตัว แล้วอ่านจาก .items ตาม shape ใหม่
-      const r = await fetch(`${API}/api/parts?limit=100000`);
-      if (r.ok) { const d = await r.json(); parts = d.items ?? []; }
-    } catch (e) { console.warn('refreshParts:', e); }
+      parts = await fetchAllParts();
+    } catch (e) {
+      // ห้ามเงียบ — ถ้า parts ไม่ครบ การตัดสินว่า ALPL ลงทะเบียนแล้วหรือยังจะผิด
+      console.error('refreshParts:', e);
+      showToast(`โหลดรายการ Part ไม่สำเร็จ — การตรวจ ALPL อาจไม่ถูกต้อง (${e.message})`);
+    }
     return parts;
   }
 
@@ -1986,12 +2565,29 @@
     await refreshParts();
     const registeredSet = new Set(parts.map(p => p.number_alpl));
     const allRegistered = list.every(n => registeredSet.has(n));
-    pkgInput.disabled = allRegistered;
-    if (allRegistered) {
+    setIpmPkgLock(allRegistered);
+  }
+
+  /** ล็อก/ปลดล็อก Package Size + Part Number ของฟอร์ม IPM พร้อมข้อความอธิบาย
+
+      โหมด IPM ไม่ต้องใช้ 2 ช่องนี้เลยถ้า ALPL ลงทะเบียนไว้แล้วทุกตัว — backend
+      หา template_name จาก part_number ที่ผูกกับ ALPL ในฐานข้อมูลเอง ค่าที่กรอก
+      ไปจะถูกละทิ้ง ปล่อยให้กรอกได้จึงชวนให้เข้าใจผิดว่าจำเป็น */
+  function setIpmPkgLock(locked) {
+    const pkgInput = document.getElementById('ipm-package_size');
+    const pnSelect = document.getElementById('ipm-part_number');
+    pkgInput.disabled = locked;
+    if (locked) {
       pkgInput.value = '';
       pkgInput.placeholder = 'ไม่ต้องกรอก — ALPL ทุกตัวลงทะเบียนแล้ว';
+      pnSelect.disabled = true;
+      pnSelect.innerHTML = '<option value="">ไม่ต้องเลือก — ใช้ของที่ลงทะเบียนไว้</option>';
     } else {
       pkgInput.placeholder = 'ต้องกรอกถ้ามี ALPL ที่ยังไม่เคยลงทะเบียน';
+      if (!pkgInput.value.trim()) {
+        pnSelect.disabled = true;
+        pnSelect.innerHTML = '<option value="">-- เลือก Package Size ก่อน --</option>';
+      }
     }
   }
 
@@ -2012,8 +2608,6 @@
       return;
     }
     clearFieldErrors('rework');
-    document.getElementById('rework-part_number').value  = found.part_number ?? '';
-    document.getElementById('rework-handler').value      = found.handler ?? '';
     document.getElementById('rework-vendor').value       = found.vendor ?? '';
     document.getElementById('rework-description').value  = found.description ?? '';
     document.getElementById('rework-po_number').value    = found.po_number ?? '';
@@ -2022,6 +2616,12 @@
     // Receive Date เว้นว่างเสมอ — ผู้ใช้ต้องกรอกวันที่รับชิ้นงานกลับมาใหม่เอง
     // ไม่ใช่ค่าเดิมตอนที่เคยลงทะเบียนผ่าน New ครั้งแรก
     document.getElementById('rework-receive_date').value = '';
+    // Part Number เป็น dropdown ที่ cascade จาก Package Size แล้ว — ต้องโหลด
+    // ตัวเลือกตาม package_size ที่เพิ่ง prefill ไปก่อน แล้วค่อยตั้งค่าที่เลือกไว้
+    // (ทำไม่ได้ตรงๆ แบบ .value = ... เหมือน field อื่นเพราะ <select> นี้ยังไม่มี
+    // <option> ของ part_number เดิมอยู่จนกว่าจะ fetch เสร็จ)
+    await updatePartNumberOptions('rework');
+    document.getElementById('rework-part_number').value = found.part_number ?? '';
   }
 
   async function onSubmitIpm(ev) {
@@ -2031,6 +2631,7 @@
     const numberAlplRaw = document.getElementById('ipm-number_alpl').value.trim();
     const operator      = document.getElementById('ipm-operator').value.trim();
     const packageSize   = document.getElementById('ipm-package_size').value.trim();
+    const partNumber    = document.getElementById('ipm-part_number').value.trim();
 
     const { list: numberAlplList, error: alplError } = parseAlplList(numberAlplRaw);
 
@@ -2083,7 +2684,7 @@
           const r = await fetch(`${API}/api/parts`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ number_alpl: alpl, package_size: packageSize }),
+            body: JSON.stringify({ number_alpl: alpl, package_size: packageSize, part_number: partNumber || null }),
           });
           if (!r.ok) {
             const d = await r.json().catch(() => ({}));
@@ -2163,9 +2764,9 @@
       setFieldError('new', 'package_size', 'กรอก Package Size (จะ map nominal/tolerance/template ให้อัตโนมัติ)');
       hasError = true;
     }
-    // ทุก field ใน New บังคับกรอกหมด ยกเว้น Note (ตามที่ระบุไว้ — Note เป็น
-    // หมายเหตุอิสระ ไม่ใช่ข้อมูลของ part เอง จึงปล่อยว่างได้)
-    if (!val('handler')) { setFieldError('new', 'handler', 'เลือก Handler'); hasError = true; }
+    // ทุก field ใน New บังคับกรอกหมด (ตัด Handler/Note ออกจากฟอร์มนี้แล้ว
+    // ตามที่ตกลงกันไว้ — Handler ไม่ใช่ field ที่ต้องกรอกตอนลงทะเบียน New อีก
+    // ต่อไป ส่วน Note เป็นหมายเหตุอิสระที่ไม่จำเป็นอยู่แล้ว เลยตัดออกไปเลย)
     if (!val('vendor')) { setFieldError('new', 'vendor', 'เลือก Vendor'); hasError = true; }
     if (!val('description')) { setFieldError('new', 'description', 'กรอก Description'); hasError = true; }
     if (!val('owner')) { setFieldError('new', 'owner', 'เลือก Owner'); hasError = true; }
@@ -2187,7 +2788,6 @@
     const payload = {
       number_alpl:    numberAlplList,
       part_number:    partNumber,
-      handler:        toStrOrNull('handler'),
       description:    toStrOrNull('description'),
       vendor:         toStrOrNull('vendor'),
       po_number:      toNumOrNull('po_number'),
@@ -2195,14 +2795,13 @@
       owner:          toStrOrNull('owner'),
       recieve_date:   toStrOrNull('receive_date'),
     };
-    const note = val('note') || null;
     console.log('[New part submit — frontend only]', payload);
 
     updateSession({ target_count: numberAlplList.length, measured_count: 0 });
 
     ipmQueue = null;
     reworkQueue = null;
-    newQueue = { list: numberAlplList, fields: payload, note, operator };
+    newQueue = { list: numberAlplList, fields: payload, operator };
     savePartEntryState();
     renderSessionUI();
     renderPartEntrySummary();
@@ -2253,8 +2852,7 @@
 
     let hasError = alplHasError;
     if (!operator) { setFieldError('rework', 'operator', 'กรอกชื่อ Operator'); hasError = true; }
-    if (!val('part_number'))  { setFieldError('rework', 'part_number', 'กรอก Part Number'); hasError = true; }
-    if (!val('handler'))      { setFieldError('rework', 'handler', 'เลือก Handler'); hasError = true; }
+    if (!val('part_number'))  { setFieldError('rework', 'part_number', 'เลือก Part Number'); hasError = true; }
     if (!val('vendor'))       { setFieldError('rework', 'vendor', 'เลือก Vendor'); hasError = true; }
     if (!val('description'))  { setFieldError('rework', 'description', 'กรอก Description'); hasError = true; }
     if (!val('package_size')) { setFieldError('rework', 'package_size', 'กรอก Package Size'); hasError = true; }
@@ -2280,7 +2878,6 @@
     const payload = {
       number_alpl:    numberAlplList,
       part_number:    val('part_number'),
-      handler:        toStrOrNull('handler'),
       description:    toStrOrNull('description'),
       vendor:         toStrOrNull('vendor'),
       po_number:      toNumOrNull('po_number'),
@@ -2337,7 +2934,9 @@
   }
 
   function imgBtn(id) {
-    return `<button class="img-btn-inner" title="View report" onclick="event.stopPropagation(); openReportModal(${id})"></button>`;
+    return `<button class="img-btn-inner" title="View report" onclick="event.stopPropagation(); openReportModal(${id})">` +
+           `<svg viewBox="0 0 100 100" width="100%" height="100%" preserveAspectRatio="xMidYMid meet" ` +
+           `aria-hidden="true"><use href="#icon-alpl" x="0" y="0" width="100" height="100"/></svg></button>`;
   }
 
   // ── img-cell ──────────────────────────────────────────────────────────
@@ -2349,7 +2948,10 @@
     if (m.image_upload_failed) {
       return '<span class="no-img upload-failed" title="Agent อัปโหลดรูปขึ้น MinIO ไม่สำเร็จหลังลอง 3 ครั้ง">⚠ Failed</span>';
     }
-    return '<span class="no-img">—</span>';
+    // ยังไม่มีรูป → ปล่อยว่างไปเลย ไม่ใส่ขีด — คอลัมน์นี้มีแค่ "มีรูป/ไม่มีรูป"
+    // การมีไอคอนโผล่มาเฉพาะแถวที่มีรูปอ่านง่ายกว่าการมีขีดจางๆ เต็มคอลัมน์
+    // (ต่างจากคอลัมน์ Note ที่ขีดสื่อว่า "ช่องนี้กรอกได้แต่ยังไม่ได้กรอก")
+    return '';
   }
 
   function measPageInfoText() {
@@ -2367,13 +2969,23 @@
       (measPage - 1) * MEAS_PAGE_SIZE + measurements.length >= measTotal;
   }
 
+  // ค่าที่วัดได้ 1 ช่องในตาราง — ระบายสีเขียวถ้าอยู่ในสเปคของแกนนั้น แดงถ้าหลุด
+  // ถ้าไม่มี nominal/tolerance (part ยังไม่ได้ตั้ง Part Number) แสดงสีปกติเฉยๆ
+  function valueCell(v, nominal, upperTol, lowerTol) {
+    if (v == null) return '—';
+    const ok = axisOk(v, nominal, upperTol, lowerTol);
+    const txt = v.toFixed(3);
+    if (ok == null) return txt;
+    return `<span class="${ok ? 'val-ok' : 'val-ng'}" title="รับได้ ${(nominal - lowerTol).toFixed(3)} – ${(nominal + upperTol).toFixed(3)}">${txt}</span>`;
+  }
+
   function renderTable(highlightId = null) {
     const rows = measurements;
     const tbody = document.getElementById('meas-body');
     renderMeasPagination();
     if (!rows.length) {
       const msg = (measFilterAlpl || measFilterDate) ? 'ไม่พบ Measurement ที่ตรงกับตัวกรอง' : 'No measurements';
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="8">${msg}</td></tr>`;
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${msg}</td></tr>`;
       return;
     }
     tbody.innerHTML = rows.map(m => {
@@ -2385,9 +2997,12 @@
         <td>${m.measurement_id}</td>
         <td>${m.session_id ?? '—'}</td>
         <td>${m.number_alpl}</td>
-        <td>${m.value_x != null ? m.value_x.toFixed(3) : '—'}</td>
-        <td>${m.value_y != null ? m.value_y.toFixed(3) : '—'}</td>
+        <td>${valueCell(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol)}</td>
+        <td>${valueCell(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol)}</td>
         <td><span class="result-badge ${cls}">${res}</span></td>
+        <td>${m.note ?? ''}</td>
+        <td>${m.operator_name ?? '—'}</td>
+        <td>${m.measure_type ?? '—'}</td>
         <td class="img-cell">${imgCell(m)}</td>
         <td style="white-space:nowrap">${ts}</td>
       </tr>`;
@@ -2397,41 +3012,44 @@
   // Stats cards (Total/OK/NG) ต้องนับจาก "ทุก" measurement ของ session ปัจจุบัน ไม่ใช่
   // แค่หน้าที่กำลังแสดงในตาราง (ตอนนี้ตารางแบ่งหน้าแค่ทีละ 10 แถวแล้ว) จึงยิง request
   // แยกไปนับที่ backend ตรงๆ ผ่าน total ของแต่ละ filter (limit=1 พอ เพราะสนใจแค่ total)
+  // สถิติ OK/NG ของ session ปัจจุบัน — ย้ายมาแสดงในแถบล่างของการ์ด Live
+  // Telemetry แล้ว (Total เดิมซ้ำกับ "x / y measured" จึงตัดออก) พร้อมแถบสัดส่วน
+  // เขียว/แดง/เทา ที่คิดเทียบกับ target_count ของ session ไม่ใช่แค่ที่วัดไปแล้ว
+  function renderTelemetryStats(ok, ng) {
+    const elOk = document.getElementById('telemetry-count-ok');
+    const elNg = document.getElementById('telemetry-count-ng');
+    if (elOk) elOk.textContent = `${ok} OK`;
+    if (elNg) elNg.textContent = `${ng} NG`;
+    const target = Number(session.target_count) || 0;
+    const barOk  = document.getElementById('telemetry-bar-ok');
+    const barNg  = document.getElementById('telemetry-bar-ng');
+    if (barOk && barNg) {
+      const pct = n => (target > 0 ? Math.min(100, (n / target) * 100) : 0);
+      barOk.style.width = `${pct(ok)}%`;
+      barNg.style.width = `${pct(ng)}%`;
+    }
+  }
+
   async function updateStats() {
     const sid = session.session_id;
-    if (sid == null) {
-      document.getElementById('stat-total').textContent = 0;
-      document.getElementById('stat-ok').textContent    = 0;
-      document.getElementById('stat-ng').textContent    = 0;
-      return;
-    }
+    if (sid == null) { renderTelemetryStats(0, 0); return; }
     try {
-      const [totalD, okD, ngD] = await Promise.all([
-        fetch(`${API}/api/measurements?session_id=${sid}&limit=1`).then(r => r.ok ? r.json() : { total: 0 }),
+      const [okD, ngD] = await Promise.all([
         fetch(`${API}/api/measurements?session_id=${sid}&result=OK&limit=1`).then(r => r.ok ? r.json() : { total: 0 }),
         fetch(`${API}/api/measurements?session_id=${sid}&result=NG&limit=1`).then(r => r.ok ? r.json() : { total: 0 }),
       ]);
-      document.getElementById('stat-total').textContent = totalD.total ?? 0;
-      document.getElementById('stat-ok').textContent    = okD.total ?? 0;
-      document.getElementById('stat-ng').textContent    = ngD.total ?? 0;
+      renderTelemetryStats(okD.total ?? 0, ngD.total ?? 0);
     } catch (e) { console.warn('updateStats:', e); }
   }
 
-  async function loadParts() {
-    try {
-      // เช่นเดียวกับ refreshParts — หน้านี้ต้องการ parts ทั้งหมด (ไม่ใช่ทีละหน้า)
-      // จึงขอ limit สูงๆ แล้วอ่านจาก .items ตาม shape ใหม่ {items, total}
-      const r = await fetch(`${API}/api/parts?limit=100000`);
-      if (r.ok) { const d = await r.json(); parts = d.items ?? []; }
-    } catch (e) { console.warn('loadParts:', e); }
-  }
+  const loadParts = refreshParts;   // เดิมเป็นโค้ดซ้ำกันเป๊ะ 2 ตัว — รวมเป็นตัวเดียว
 
   async function showImage(measurementId) {
     try {
       const r = await fetch(`${API}/api/image-url/${measurementId}`);
       if (!r.ok) throw new Error('Not found');
       const data = await r.json();
-      document.getElementById('modal-img').src = data.url;
+      document.getElementById('modal-img').src = mediaUrl(data.url);
       document.getElementById('modal').classList.add('open');
     } catch (e) { alert('Image not available yet.'); }
   }
@@ -2448,6 +3066,89 @@
   // ด้วย number_alpl จาก `parts` ที่โหลดไว้แล้ว) มาแสดงในหน้าต่างเดียว
   function findPartByAlpl(numberAlpl) {
     return parts.find(p => p.number_alpl === numberAlpl) || null;
+  }
+
+  // สร้างการ์ดผลของ 1 แกน (X หรือ Y) พร้อมแถบเทียบสเปค
+  //
+  // เรขาคณิตของแถบ (ตายตัว เพื่อให้ตัวเลขใต้แถบตรงกับโซนเขียวเสมอ):
+  //   0%..25%   = โซน "ต่ำกว่าสเปค"
+  //   25%..75%  = โซนเขียว "ช่วงที่รับได้"  (25% = ขอบล่าง, 50% = nominal, 75% = ขอบบน)
+  //   75%..100% = โซน "สูงกว่าสเปค"
+  // ค่าที่อยู่ในสเปค → map ลงช่วง 25-75% ตามสัดส่วนจริง
+  // ค่าที่หลุด → map ลงโซนข้างเคียงตามสัดส่วนของ "หลุดไปกี่เท่าของความกว้างสเปค"
+  //   แต่ตรึงไม่ให้เกิน 3%/97% ถ้าหลุดไปไกลเกิน 1 เท่า แล้วขึ้นสัญลักษณ์ ≫/≪
+  //   บอกว่า "ไกลกว่าที่แถบจะแสดงไหว" ให้ไปอ่านตัวเลขจริงใต้แถบแทน
+  function renderAxisReport(axis, value, nominal, upperTol, lowerTol) {
+    const fmt = v => (v != null && !isNaN(v)) ? Number(v).toFixed(3) : '—';
+    const hasSpec = value != null && nominal != null && upperTol != null && lowerTol != null;
+
+    if (!hasSpec) {
+      return `<div class="rax">
+        <div class="rax-head"><span class="rax-name">Actual ${axis}</span></div>
+        <div class="rax-value">${fmt(value)} <span class="unit">mm</span></div>
+        <div class="rax-dev ok">ยังไม่ได้ตั้ง Part Number ให้ ALPL นี้ — เทียบสเปคไม่ได้</div>
+      </div>`;
+    }
+
+    const lo = Number(nominal) - Number(lowerTol);
+    const hi = Number(nominal) + Number(upperTol);
+    const span = hi - lo;
+    const ok = axisOk(value, nominal, upperTol, lowerTol);
+
+    let pos, farSym = '';
+    if (ok) {
+      pos = 25 + ((value - lo) / span) * 50;
+    } else if (value > hi) {
+      const over = (value - hi) / span;           // หลุดไปกี่เท่าของความกว้างสเปค
+      pos = Math.min(97, 75 + over * 25);
+      if (over > 1) farSym = `<span class="rax-far" style="left:${pos}%;transform:translateX(-160%)">≫</span>`;
+    } else {
+      const under = (lo - value) / span;
+      pos = Math.max(3, 25 - under * 25);
+      if (under > 1) farSym = `<span class="rax-far" style="left:${pos}%;transform:translateX(60%)">≪</span>`;
+    }
+
+    // ข้อความบอกระยะห่าง — ตอนผ่านบอก "ห่างขอบที่ใกล้ที่สุดเท่าไหร่"
+    // (ใกล้ขอบมากแปลว่าเสี่ยง ควรรู้) ตอนไม่ผ่านบอกว่าเกินไปเท่าไหร่
+    let dev;
+    if (ok) {
+      const margin = Math.min(value - lo, hi - value);
+      dev = `<div class="rax-dev ok">อยู่ในสเปค — ห่างขอบที่ใกล้สุด ${margin.toFixed(3)} mm</div>`;
+    } else if (value > hi) {
+      dev = `<div class="rax-dev ng">↗ เกินขอบบน ${(value - hi).toFixed(3)} mm</div>`;
+    } else {
+      dev = `<div class="rax-dev ng">↙ ต่ำกว่าขอบล่าง ${(lo - value).toFixed(3)} mm</div>`;
+    }
+
+    // ตำแหน่งของ nominal บนแถบ — ต้องคำนวณตามสัดส่วนจริง ไม่ใช่ตรึงไว้ที่ 50%
+    // เพราะ upper_tol กับ lower_tol ไม่เท่ากัน (เช่น +0.020/-0.010) nominal จึง
+    // ไม่ได้อยู่กึ่งกลางช่วงสเปค ถ้าตรึงไว้ 50% เส้นกับตัวเลขจะไม่ตรงกับความจริง
+    const nomPos = 25 + ((Number(nominal) - lo) / span) * 50;
+    // ซ่อนตัวเลข nominal ถ้าใกล้ตัวเลขขอบเกินไปจนซ้อนกัน (เส้นยังอยู่)
+    const showNomTick = Math.abs(nomPos - 25) > 10 && Math.abs(nomPos - 75) > 10;
+
+    const cls = ok ? 'ok' : 'ng';
+    return `<div class="rax">
+      <div class="rax-head">
+        <span class="rax-name">Actual ${axis} · nominal ${fmt(nominal)}</span>
+        <span class="rax-tag ${cls}">${ok ? 'OK' : 'NG'}</span>
+      </div>
+      <div class="rax-value ${cls}">${fmt(value)} <span class="unit">mm</span></div>
+      <div class="rax-bar">
+        <div class="rax-track"></div>
+        <div class="rax-zone"></div>
+        <div class="rax-nom" style="left:${nomPos}%"></div>
+        <div class="rax-mark ${cls}" style="left:${pos}%"></div>
+        ${farSym}
+        <span class="rax-zlabel" style="left:12.5%">ต่ำกว่าสเปค</span>
+        <span class="rax-zlabel mid" style="left:50%">ช่วงที่รับได้</span>
+        <span class="rax-zlabel" style="left:87.5%">สูงกว่าสเปค</span>
+        <span class="rax-tick" style="left:25%">${fmt(lo)}</span>
+        ${showNomTick ? `<span class="rax-tick" style="left:${nomPos}%">${fmt(nominal)}</span>` : ''}
+        <span class="rax-tick" style="left:75%">${fmt(hi)}</span>
+      </div>
+      ${dev}
+    </div>`;
   }
 
   async function openReportModal(measurementId) {
@@ -2476,49 +3177,31 @@
     const resCls = res === 'OK' ? 'ok' : res === 'NG' ? 'ng' : '';
     const statusVal = document.getElementById('report-status-value');
     statusVal.textContent = res;
-    statusVal.className = `report-status-value ${resCls}`;
+    statusVal.className = `report-verdict ${resCls}`;
 
-    // Part specifications — โชว์ทุกคอลัมน์ของ Part ที่เกี่ยวข้องกับ ALPL นี้
+    // ── การ์ดผลรายแกน + แถบเทียบสเปค ──────────────────────────────────
+    // upper_tol/lower_tol เป็นค่าเดียวใช้ร่วมกันทั้งแกน X/Y (schema part_number)
+    const nomX = part?.nominal_x, nomY = part?.nominal_y;
+    const upTol = part?.upper_tol, loTol = part?.lower_tol;
+    document.getElementById('report-axes').innerHTML =
+      renderAxisReport('X', m.value_x, nomX, upTol, loTol) +
+      renderAxisReport('Y', m.value_y, nomY, upTol, loTol);
+
+    // ── ข้อมูล Part (อ้างอิง) ────────────────────────────────────────────
     const specsGrid = document.getElementById('report-specs-grid');
     const specRows = [
-      ['Part number',  part?.part_number  || '—'],
-      ['Handler',      part?.handler      || '—'],
       ['Vendor',       part?.vendor       || '—'],
-      ['Package size', part?.package_size || '—'],
       ['Owner',        part?.owner        || '—'],
       ['PO number',    part?.po_number != null ? part.po_number : '—'],
-      ['Receive date', part?.recieve_date ? new Date(part.recieve_date).toLocaleDateString() : '—'],
       ['Template',     part?.template_name || '—'],
+      ['Receive date', part?.recieve_date ? new Date(part.recieve_date).toLocaleDateString() : '—'],
+      ['Operator',     m.operator_name || '—'],
+      ['Measure type', m.measure_type  || '—'],
+      ['Note',         m.note          || '—'],
     ];
     specsGrid.innerHTML = specRows.map(([label, value]) =>
       `<div><div class="rs-label">${label}</div><div class="rs-value">${value}</div></div>`
     ).join('') + `<div class="rs-full"><div class="rs-label">Description</div><div class="rs-value">${part?.description || '—'}</div></div>`;
-
-    // Dimensions & tolerances — upper_tol/lower_tol เป็นค่าเดียวใช้ร่วมกันทั้งแกน
-    // X/Y ตาม schema package_size ปัจจุบัน (ดู PARTS_SELECT ใน main.py) กล่อง
-    // Upper/Lower โชว์เป็นค่าขอบเขตจริง (nominal ± tol) ไม่ใช่ค่า delta ดิบ
-    const dimsGrid = document.getElementById('report-dims-grid');
-    const fmt = v => v != null && !isNaN(v) ? Number(v).toFixed(3) : '—';
-    const nomX = part?.nominal_x, nomY = part?.nominal_y;
-    const upTol = part?.upper_tol, loTol = part?.lower_tol;
-    const bound = (nom, tol, sign) => (nom != null && tol != null) ? fmt(Number(nom) + sign * Number(tol)) : '—';
-    dimsGrid.innerHTML = `
-      <div>
-        <div class="report-dim-label">Actual X${nomX != null ? ` · nom ${fmt(nomX)}` : ''}</div>
-        <div class="report-dim-value x">${fmt(m.value_x)} mm</div>
-        <div class="report-tol-box">
-          <div class="tol-row"><span>Upper</span><span>${bound(nomX, upTol, 1)}</span></div>
-          <div class="tol-row"><span>Lower</span><span>${bound(nomX, loTol, -1)}</span></div>
-        </div>
-      </div>
-      <div>
-        <div class="report-dim-label">Actual Y${nomY != null ? ` · nom ${fmt(nomY)}` : ''}</div>
-        <div class="report-dim-value y">${fmt(m.value_y)} mm</div>
-        <div class="report-tol-box">
-          <div class="tol-row"><span>Upper</span><span>${bound(nomY, upTol, 1)}</span></div>
-          <div class="tol-row"><span>Lower</span><span>${bound(nomY, loTol, -1)}</span></div>
-        </div>
-      </div>`;
 
     // รูปภาพ — ขอ presigned URL สดใหม่เสมอ (เหมือน showImage) ไม่มีรูปก็โชว์ placeholder
     const imageCell = document.getElementById('report-image-cell');
@@ -2528,7 +3211,10 @@
         const r = await fetch(`${API}/api/image-url/${measurementId}`);
         if (r.ok) {
           const data = await r.json();
-          imageCell.innerHTML = `<img src="${data.url}" alt="Measurement #${measurementId} image" />`;
+          const src = mediaUrl(data.url);
+          imageCell.innerHTML =
+            `<a href="${src}" target="_blank" rel="noopener" title="คลิกเพื่อดูขนาดเต็ม">` +
+            `<img src="${src}" alt="Measurement #${measurementId} image" /></a>`;
         } else {
           imageCell.innerHTML = '<span class="report-no-image">No image</span>';
         }
@@ -2541,6 +3227,7 @@
 
     document.getElementById('report-modal').classList.add('open');
   }
+
 
   document.getElementById('report-modal-close').onclick = closeReportModal;
   document.getElementById('report-modal').onclick = e => { if (e.target.id === 'report-modal') closeReportModal(); };

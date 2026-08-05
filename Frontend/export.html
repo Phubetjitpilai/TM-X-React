@@ -1,132 +1,1068 @@
 <!DOCTYPE html>
 <!-- Frontend/export.html — TM-X Data Export (single file, no frameworks)
-     เปิดตรงผ่าน browser: Frontend/export.html
-     ตอนนี้เป็นแค่โครงหน้า + topbar menu — เนื้อหา export จริงยังไม่ทำ (placeholder)
-     CSS variable + topbar ใช้ชุดเดียวกับ index.html / edit.html เพื่อให้เป็นระบบเดียวกัน -->
+     เปิดผ่าน backend ที่ http://localhost:8000/export.html
+
+     หน้านี้เป็น wizard 3 ขั้น:
+       1. เลือก Template  — ชุดคอลัมน์ที่จะ export (จัดการ Add/Edit/Duplicate/Delete ได้)
+       2. กรองข้อมูล      — ช่วงวันที่ / ALPL / Result / Operator / Measure Type
+       3. ตรวจสอบ+Export  — ดูตัวอย่างข้อมูลจริงก่อนดาวน์โหลด
+
+     Template เก็บใน DB (ตาราง export_template) ไม่ใช่ localStorage — ทีมงาน
+     หลายคนจึงใช้ template ร่วมกันได้ และไม่หายตอนล้าง cache เบราว์เซอร์
+     ตัวที่ is_default = 1 ถูกล็อกไว้: แก้/ลบไม่ได้ ทำได้แค่ Duplicate
+
+     CSS variable + topbar ใช้ชุดเดียวกับ index.html / edit.html -->
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TM-X Export</title>
-  <style>
+  <title>TM-X Control System</title>
+  <!-- สไตล์/โค้ดที่ทุกหน้าใช้ร่วมกัน — โหลดก่อนเสมอ เพื่อให้ของเฉพาะหน้าทับได้ -->
+<link rel="stylesheet" href="shared.css" />
+<script src="shared.js"></script>
+<style>
     /* ── Variables (ชุดเดียวกับ index.html / edit.html) ───────────────── */
-    :root {
-      --bg:        #f4f3ef;
-      --surface:   #ffffff;
-      --surface2:  #f7f6f3;
-      --border:    #e3e1da;
-      --accent:    #378ade;
-      --accent2:   #7f77dd;
-      --ok:        #3b6d11;
-      --ok-bg:     #eaf3de;
-      --ng:        #a32d2d;
-      --ng-bg:     #fcebeb;
-      --warn:      #854f0b;
-      --warn-bg:   #faeeda;
-      --text:      #1a1a18;
-      --muted:     #5f5e5a;
-      --radius:    8px;
-    }
+    /* ── ตัวแปรสี, ปุ่ม/อินพุตพื้นฐาน, แถบเมนูบน, ป้ายสถานะ, toast ──
+       ย้ายไปที่ shared.css แล้ว (โหลดไว้ใน <head> ก่อนบล็อกนี้)
+       เขียนทับเฉพาะที่ต้องต่างจากส่วนกลางได้ที่นี่ */
 
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Segoe UI', system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-    }
-    a { color: var(--accent); text-decoration: none; }
+    /* หน้านี้ช่องกรอกอยู่ในกริดตัวกรอง 5 คอลัมน์ ต้องกว้างเต็มช่องทุกอัน ไม่งั้น
+       ช่อง date จะกว้างกว่าช่อง text ตามค่า default ของเบราว์เซอร์ แล้วกริดดูเหลื่อม
+       (กติกานี้เป็นของหน้านี้เท่านั้น หน้าอื่นไม่ต้องการ จึงไม่ย้ายไป shared.css)
+       checkbox มี width:auto ทับไว้ด้านล่างแล้ว (.ms-opt / .latest-toggle / .pk-item) */
+    input, select, textarea { width: 100%; }
 
-    /* ── Top bar (เหมือน index.html / edit.html) ──────────────────────── */
-    .topbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      background: var(--surface);
-      border-bottom: 1px solid var(--border);
-      padding: 0 1.5rem;
-      height: 52px;
-      position: sticky;
-      top: 0;
-      z-index: 100;
-    }
-    .topbar-left { display: flex; align-items: center; gap: 1.5rem; }
-    .topbar-title {
-      font-size: 1.1rem;
-      font-weight: 700;
-      letter-spacing: .03em;
-      color: var(--text);
-    }
-    .topbar-title span { color: var(--accent); }
-    /* แถบเมนูนำทาง — "ข้อความล้วน" (ไม่ใช่ปุ่ม) สี --muted ปกติ เปลี่ยนเป็น
-       --accent ตอน hover พร้อม transition นุ่มๆ (.15s) ให้เหมือนกันทุกหน้า */
-    .topbar-nav { display: flex; align-items: center; gap: 1.25rem; }
+    /* เมนู Export ที่มี dropdown ย่อย — ชุดเดียวกับ index.html / edit.html */
+    /* line-height:1 ทั้งตัวเมนูและลูกศร — ไม่งั้นลูกศรจะดันให้คำว่า Export
+       ลอยสูง/ต่ำกว่า Home กับ Edit ที่เป็น <a> ธรรมดา */
+    /* แถบบนแบ่ง 3 โซน: โลโก้ซ้าย · เมนูกึ่งกลาง · ป้ายสถานะขวา
+       ฝั่งซ้าย/ขวาใช้ flex:1 เท่ากัน เมนูตรงกลางไม่ยืด (flex:0 0 auto) —
+       ทำแบบนี้เมนูจะอยู่กึ่งกลางจอ "เป๊ะ" เสมอ ไม่ขยับตามความยาวของชื่อระบบ
+       หรือป้ายสถานะที่เปลี่ยนข้อความได้ (Online / Connecting / Offline)
+       ถ้าใช้ justify-content:center เฉยๆ เมนูจะเลื่อนไปมาเวลาสองข้างยาวไม่เท่ากัน */
+    .topbar-left, .topbar-right { display: flex; align-items: center; gap: 1rem; flex: 1; min-width: 0; }
+    .topbar-right { justify-content: flex-end; }
+    .topbar-nav { display: flex; align-items: center; gap: 0.4rem; flex: 0 0 auto; }
     .topbar-link {
       font-size: 0.85rem;
       font-weight: normal;
       color: var(--muted);
-      transition: color .15s;
+      padding: 0.4rem 0.9rem;
+      border-radius: 7px;
+      transition: color .15s, background .15s;
+      white-space: nowrap;
     }
-    .topbar-link:hover { color: var(--accent); }
-    .station-badge {
-      font-size: 0.8rem;
-      font-weight: 600;
-      padding: 0.3rem 0.85rem;
-      border-radius: 999px;
-      border: 1px solid var(--border);
-    }
-    .station-badge.online     { background: var(--ok-bg);   border-color: var(--ok);   color: var(--ok); }
-    .station-badge.offline    { background: var(--ng-bg);   border-color: var(--ng);   color: var(--ng); }
-    .station-badge.connecting { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+    .topbar-link:hover { color: var(--accent); background: var(--surface2); }
+    /* หน้าที่เปิดอยู่ — พื้นหลังฟ้าอ่อน + ตัวเข้ม ให้เห็นชัดตอนมองผ่านๆ
+       (ใช้โทนเดียวกับตัวที่เลือกอยู่ใน dropdown ของ Export) */
+    .topbar-link.active { background: rgba(55,138,222,.12); color: var(--accent); font-weight: 700; }
 
-    .main {
-      padding: 3rem 2rem;
-      display: flex;
-      justify-content: center;
+    .topbar-menu { position: relative; display: flex; align-items: center; }
+    .topbar-menu > .topbar-link {
+      cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem;
     }
-    .placeholder { color: var(--muted); font-size: 1rem; }
+    .topbar-caret { font-size: 0.55rem; line-height: 1; transition: transform .15s; display: inline-block; }
+    .topbar-menu.open > .topbar-link { background: rgba(55,138,222,.12); color: var(--accent); }
+    .topbar-menu.open .topbar-caret { transform: rotate(180deg); }
+    .topbar-dropdown {
+      display: none;
+      position: absolute;
+      left: -0.65rem;
+      top: 1.75rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      min-width: 158px;
+      overflow: hidden;
+      z-index: 200;
+    }
+    .topbar-menu.open .topbar-dropdown { display: block; }
+    .topbar-dropdown a, .topbar-dropdown span {
+      display: flex; align-items: center; justify-content: space-between; gap: 0.6rem;
+      padding: 0.55rem 0.8rem; font-size: 0.83rem; color: var(--text);
+    }
+    .topbar-dropdown a + a, .topbar-dropdown a + span, .topbar-dropdown span + span { border-top: 1px solid var(--surface2); }
+    .topbar-dropdown a:hover { background: var(--surface2); }
+    .topbar-dropdown a.active { background: rgba(55,138,222,.1); color: var(--accent); }
+    .topbar-dropdown .soon { color: var(--muted); cursor: not-allowed; }
+    .topbar-dropdown .soon small { font-size: 0.68rem; }
+
+    /* ── Layout ───────────────────────────────────────────────────────── */
+    /* ความกว้างต้องตรงกับหน้าอื่น — เดิมหน้านี้ตั้งไว้ 1100px ตอนที่มีแต่ CSV
+       (เนื้อหาน้อย) แต่หน้าตัวแก้ผังรายงานใช้ 1500px ส่วน Home/Edit เต็มจอ
+       สลับหน้าไปมาแล้วกล่องเนื้อหาขยับความกว้างไม่นิ่ง — ปรับให้เท่ากับ
+       report-template.html เพราะ 2 หน้านี้ทำงานคู่กัน (ขั้นที่ 1 กดไปแก้ผัง) */
+    .main { padding: 1.5rem 2rem 3rem; width: 100%; max-width: 1500px; margin: 0 auto; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.5rem;
+    }
+    .card-head {
+      font-size: 0.8rem; font-weight: 700; letter-spacing: .06em;
+      text-transform: uppercase; color: var(--muted); margin-bottom: 1rem;
+    }
+
+    /* ── Step indicator ───────────────────────────────────────────────── */
+    /* ── Preview ของรายงาน PDF/Excel ────────────────────────────────────
+       วาดจากผังจริง เส้นขอบหนาเฉพาะช่องที่มีเนื้อหา — ตรงกับกติกาที่ตกลงไว้ว่า
+       หน้าแก้ไขไม่ต้องโชว์เส้น แต่ตอน preview/export ต้องมี */
+    .rpt-wrap { overflow: auto; background: #fff; padding: 1rem; }
+    #rpt-sheet table { border-collapse: collapse; margin: 0 auto; background: #fff; }
+    #rpt-sheet td { padding: 3px 8px; font-size: 0.8rem; white-space: nowrap;
+                    font-family: Tahoma, sans-serif; color: #000; }
+    #rpt-sheet td.bx { border: 2px solid #000; }
+    #print-root { display: none; }
+    @media print {
+      @page { size: landscape; margin: 12mm; }
+      /* บังคับให้พิมพ์สีพื้นออกมาด้วย — ปกติเบราว์เซอร์ตัดสีพื้นหลังทิ้งเพื่อ
+         ประหยัดหมึก ทำให้เซลล์ที่ลงสีไว้กลายเป็นขาวหมดในไฟล์ PDF
+         ⚠ ใส่เฉพาะใน #print-root เท่านั้น ห้ามใส่ที่ html/body — ไม่งั้นสีพื้น
+         ของหน้าเว็บ (--bg สีเทาอมครีม) จะถูกพิมพ์เป็นพื้นเทาเต็มหน้ากระดาษด้วย */
+      #print-root, #print-root * {
+        -webkit-print-color-adjust: exact !important;
+        print-color-adjust: exact !important;
+      }
+      /* กระดาษต้องขาวล้วน — ล้างพื้นและระยะขอบของหน้าเว็บออกให้หมด
+         (ระยะขอบใช้ของ @page แทน) */
+      html, body {
+        background: #fff !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+      body > *:not(#print-root) { display: none !important; }
+      #print-root { display: block !important; background: #fff !important; }
+      #print-root table { border-collapse: collapse; margin: 0 auto; }
+      /* border: 0 กับทุกช่อง แล้วค่อยใส่คืนเฉพาะช่องที่มีเนื้อหา (.bx) —
+         กันเส้นจางๆ ของช่องเปล่าโผล่มาในไฟล์ */
+      #print-root td { padding: 4px 10px; white-space: nowrap; border: 0;
+                       font-family: Tahoma, sans-serif; color: #000; }
+      #print-root td.bx { border: 2px solid #000; }
+    }
+    .steps { display: flex; align-items: center; gap: 0.6rem; font-size: 0.8rem; color: var(--muted); margin-bottom: 1.1rem; flex-wrap: wrap; }
+    .step { display: flex; align-items: center; gap: 0.4rem; }
+    .step .num {
+      width: 20px; height: 20px; border-radius: 50%;
+      background: var(--surface2); color: var(--muted);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.7rem; font-weight: 700;
+    }
+    .step.on { color: var(--text); font-weight: 600; }
+    .step.on .num { background: var(--accent); color: #fff; }
+    .step.done .num { background: var(--ok-bg); color: var(--ok); }
+
+    /* ── Template list ────────────────────────────────────────────────── */
+    .tpl {
+      border: 1px solid var(--border); border-radius: 9px;
+      padding: 0.85rem 1rem; margin-bottom: 0.65rem; cursor: pointer;
+    }
+    .tpl.sel { border-color: var(--accent); background: rgba(55,138,222,.045); }
+    .tpl-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.55rem; flex-wrap: wrap; }
+    .tpl-name { font-size: 0.92rem; font-weight: 600; }
+    .badge { font-size: 0.7rem; padding: 0.12rem 0.55rem; border-radius: 999px; background: var(--surface2); color: var(--muted); }
+    .badge.lock { background: var(--warn-bg); color: var(--warn); }
+    .tpl-acts { margin-left: auto; display: flex; gap: 0.35rem; }
+    .btn-mini {
+      font-size: 0.75rem; padding: 0.25rem 0.6rem;
+      border: 1px solid var(--border); background: var(--surface); color: var(--text);
+      border-radius: 6px; font-weight: 500;
+    }
+    .btn-mini:disabled { color: #b4b2a9; background: var(--surface2); }
+    .btn-mini.del:not(:disabled) { color: var(--ng); border-color: #f7c1c1; }
+    .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+    .chip { font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 5px; background: var(--surface2); color: var(--muted); }
+    .chip.meas { background: #eeedfe; color: #534ab7; }
+    .btn-add-tpl {
+      width: 100%; padding: 0.65rem; margin-top: 0.3rem;
+      border: 1px dashed #d3d1c7; background: var(--surface);
+      color: var(--muted); font-size: 0.85rem;
+    }
+
+    /* ── Filter ───────────────────────────────────────────────────────── */
+    /* ── กล่องตัวกรอง ─────────────────────────────────────────────────
+       ล็อกไว้ 5 คอลัมน์ตายตัว (ไม่ใช้ auto-fit) เพราะมี 15 ช่องพอดี → ได้ 3 แถว
+       เป๊ะทุกครั้ง ของเดิมใช้ auto-fit minmax(160px) แล้วบนจอกว้างมันยัดได้ 8
+       คอลัมน์ เหลือ 2 แถวที่ช่องแคบจนป้ายชื่อกับ placeholder เบียดกันอ่านยาก
+       minmax(0,1fr) กัน content ที่ยาว (เช่น multi-select ที่ติ๊กหลายค่า) ดัน
+       คอลัมน์ให้ล้นออกนอกกรอบ */
+    .filters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.9rem 1.1rem; }
+    .filters-actions { display: flex; justify-content: flex-end; margin-top: 0.9rem; }
+    @media (max-width: 1250px) { .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+    @media (max-width: 1000px) { .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+    @media (max-width: 760px)  { .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 520px)  { .filters { grid-template-columns: 1fr; } }
+    .fg label { display: block; font-size: 0.72rem; color: var(--muted); margin-bottom: 0.25rem; }
+    .fg label .hint {
+      font-size: 0.65rem; color: var(--accent);
+      background: rgba(55,138,222,.1); border-radius: 4px; padding: 0 0.3rem; margin-left: 0.2rem;
+    }
+    /* ช่องที่กรอกผิดรูปแบบ — ขอบแดง + ข้อความบอกใต้ช่อง */
+    .fg input.bad { border-color: var(--ng); }
+    .fg .err { font-size: 0.68rem; color: var(--ng); margin-top: 0.2rem; min-height: 1em; }
+
+    /* ── Multi-select (ติ๊กเลือกได้หลายค่า) ────────────────────────────── */
+    .ms { position: relative; }
+    .ms-btn {
+      width: 100%; text-align: left; background: var(--bg);
+      border: 1px solid var(--border); border-radius: var(--radius);
+      padding: 0.4rem 0.6rem; font-size: 0.875rem; font-weight: normal;
+      color: var(--text); display: flex; align-items: center; gap: 0.35rem;
+    }
+    .ms-btn .ms-txt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ms-btn .ms-txt.none { color: #8a8985; }
+    .ms-btn .ms-n {
+      background: var(--accent); color: #fff; font-size: 0.65rem;
+      border-radius: 999px; padding: 0.05rem 0.4rem; flex-shrink: 0;
+    }
+    .ms-btn:disabled { background: var(--surface2); color: #b4b2a9; cursor: not-allowed; }
+    .ms-panel {
+      display: none; position: absolute; z-index: 150; top: calc(100% + 3px); left: 0; right: 0;
+      background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+      max-height: 230px; overflow-y: auto; padding: 0.3rem;
+      box-shadow: 0 2px 8px rgba(0,0,0,.08);
+    }
+    .ms.open .ms-panel { display: block; }
+    .ms-opt {
+      display: flex; align-items: center; gap: 0.45rem;
+      padding: 0.3rem 0.4rem; font-size: 0.82rem; cursor: pointer; border-radius: 5px;
+    }
+    .ms-opt:hover { background: var(--surface2); }
+    .ms-opt input { width: auto; }
+    .ms-empty { font-size: 0.75rem; color: var(--muted); padding: 0.5rem 0.4rem; }
+    .ms-tools {
+      display: flex; gap: 0.4rem; padding: 0.2rem 0.4rem 0.4rem;
+      border-bottom: 1px solid var(--surface2); margin-bottom: 0.25rem;
+    }
+    .ms-tools button {
+      font-size: 0.7rem; padding: 0.15rem 0.45rem; background: transparent;
+      border: 1px solid var(--border); border-radius: 5px; color: var(--muted); font-weight: normal;
+    }
+    .latest-toggle {
+      display: flex; align-items: center; gap: 0.6rem;
+      background: var(--surface2); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 0.6rem 0.85rem; margin-bottom: 0.85rem;
+      cursor: pointer;
+    }
+    .latest-toggle input { width: auto; }
+    .latest-toggle strong { font-size: 0.85rem; font-weight: 600; display: block; }
+    .latest-toggle small { font-size: 0.72rem; color: var(--muted); }
+
+    /* ── Preview ──────────────────────────────────────────────────────── */
+    .count { font-size: 0.82rem; color: var(--muted); margin: 0.9rem 0 0.6rem; }
+    .count strong { color: var(--text); }
+    .pv-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+    table { border-collapse: collapse; font-size: 0.8rem; white-space: nowrap; width: 100%; }
+    th {
+      text-align: left; padding: 0.5rem 0.75rem; font-size: 0.68rem;
+      color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+      border-bottom: 1px solid var(--border); background: var(--surface2);
+    }
+    td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--surface2); }
+    tr:last-child td { border-bottom: none; }
+    .empty { text-align: center; color: var(--muted); padding: 2rem; font-size: 0.85rem; }
+
+    .actions { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 1.1rem; flex-wrap: wrap; }
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+
+    /* ── Modal (สร้าง/แก้ Template) ───────────────────────────────────── */
+    .overlay {
+      display: none; position: fixed; inset: 0; background: rgba(0,0,0,.6);
+      z-index: 300; align-items: center; justify-content: center; padding: 1rem;
+    }
+    .overlay.open { display: flex; }
+    .modal {
+      background: var(--surface); border-radius: 12px; padding: 1.5rem;
+      width: 100%; max-width: 780px; max-height: 92vh; overflow-y: auto;
+    }
+    .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+    .modal-close { background: transparent; color: var(--muted); font-size: 1.3rem; padding: 0.2rem 0.5rem; }
+    .picker { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+    @media (max-width: 720px) { .picker { grid-template-columns: 1fr; } }
+    .pk-box { border: 1px solid var(--border); border-radius: 8px; padding: 0.75rem 0.9rem; max-height: 340px; overflow-y: auto; }
+    .pk-title { font-size: 0.7rem; color: var(--muted); margin-bottom: 0.5rem; }
+    .pk-group { font-size: 0.7rem; color: var(--accent2); font-weight: 700; margin: 0.6rem 0 0.3rem; }
+    .pk-item { display: flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; padding: 0.2rem 0; cursor: pointer; }
+    .pk-item input { width: auto; }
+    .ord-item {
+      display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem;
+      padding: 0.35rem 0.5rem; border: 1px solid var(--border); border-radius: 6px;
+      margin-bottom: 0.3rem; background: var(--surface); cursor: grab;
+    }
+    .ord-item.drag { opacity: .4; }
+    .ord-grip { color: #b4b2a9; }
+    .ord-x { margin-left: auto; color: var(--muted); font-size: 0.9rem; background: transparent; padding: 0 0.25rem; }
+
+    .toast {
+      position: fixed; bottom: 1.5rem; left: 50%;
+      transform: translateX(-50%) translateY(12px);
+      background: var(--text); color: #fff; padding: 0.65rem 1.25rem;
+      border-radius: var(--radius); font-size: 0.85rem;
+      opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 400;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   </style>
 </head>
 <body>
 
 <header class="topbar">
   <div class="topbar-left">
-    <div class="topbar-title">TM-X <span>Export</span></div>
-    <nav class="topbar-nav">
+    <div class="topbar-brand">
+      <img class="topbar-logo" src="assets/adi-logo.svg" alt="Analog Devices"
+           onerror="this.style.display='none'" />
+      <div class="topbar-title">TM-X <span>Control System</span></div>
+    </div>
+  </div>
+
+  <nav class="topbar-nav">
       <a class="topbar-link" href="index.html">Home</a>
       <a class="topbar-link" href="edit.html">Edit</a>
-      <a class="topbar-link" href="export.html">Export</a>
-    </nav>
+      <span class="topbar-menu open" id="export-menu">
+        <span class="topbar-link active" id="export-menu-btn" role="button" tabindex="0" aria-haspopup="true" aria-expanded="true">Export<span class="topbar-caret">▼</span></span>
+        <span class="topbar-dropdown">
+          <a href="export.html?format=csv">CSV</a>
+          <a href="export.html?format=pdf">PDF</a>
+          <a href="export.html?format=excel">Excel</a>
+        </span>
+      </span>
+  </nav>
+  <div class="topbar-right">
+    <span class="station-badge connecting" id="station-badge">🟡 Connecting</span>
   </div>
-  <span class="station-badge connecting" id="station-badge">🟡 Connecting</span>
 </header>
 
 <main class="main">
-  <p class="placeholder">Export — Coming soon</p>
+  <div class="card">
+    <div class="card-head">Export · CSV</div>
+
+    <div class="steps" id="steps">
+      <span class="step on" data-step="1"><span class="num">1</span>เลือก Template</span><span>→</span>
+      <span class="step" data-step="2"><span class="num">2</span>กรองข้อมูล</span><span>→</span>
+      <span class="step" data-step="3"><span class="num">3</span>ตรวจสอบและ Export</span>
+    </div>
+
+    <!-- ── ขั้นที่ 1 — เลือก Template ─────────────────────────────────── -->
+    <section id="panel-1">
+      <div id="tpl-list"></div>
+      <button class="btn-add-tpl" id="btn-new-tpl">+ สร้าง Template ใหม่</button>
+      <div class="actions">
+        <span></span>
+        <button class="btn-primary" id="btn-to-2" disabled>ถัดไป · กรองข้อมูล</button>
+      </div>
+    </section>
+
+    <!-- ── ขั้นที่ 2–3 — กรอง + ตรวจสอบ ──────────────────────────────── -->
+    <section id="panel-2" style="display:none">
+      <!-- ตัวเลือกสำคัญที่สุดของหน้านี้ ยกไว้บนสุดแยกจาก filter อื่น —
+           ค่าเริ่มต้นคือเอาเฉพาะการวัดล่าสุดของแต่ละ ALPL (สถานะปัจจุบัน)
+           ติ๊กออกถ้าอยากได้ประวัติทุกครั้งที่เคยวัด -->
+      <label class="latest-toggle">
+        <input type="checkbox" id="f-latest" checked />
+        <span>
+          <strong>เฉพาะการวัดล่าสุดของแต่ละ ALPL</strong>
+          <small>ติ๊กออกเพื่อเอาประวัติการวัดทุกครั้ง</small>
+        </span>
+      </label>
+
+      <div class="filters">
+        <div class="fg"><label for="f-date-from">วันที่วัด — ตั้งแต่</label><input type="date" id="f-date-from" /></div>
+        <div class="fg"><label for="f-date-to">วันที่วัด — ถึง</label><input type="date" id="f-date-to" /></div>
+        <div class="fg"><label for="f-recv-from">วันที่รับ — ตั้งแต่</label><input type="date" id="f-recv-from" /></div>
+        <div class="fg"><label for="f-recv-to">วันที่รับ — ถึง</label><input type="date" id="f-recv-to" /></div>
+        <!-- type=text ไม่ใช่ number — ต้องพิมพ์ "-" กับ "," ได้ (ดู _parse_int_ranges
+             ฝั่ง backend) รับได้ทั้ง 400 / 400,500,600 / 400-407 / 400-407,500-507 -->
+        <div class="fg">
+          <label for="f-alpl">ALPL <span class="hint">ระบุช่วงได้</span></label>
+          <input type="text" id="f-alpl" placeholder="เช่น 400-407,500" />
+          <div class="err" id="f-alpl-err"></div>
+        </div>
+        <!-- ช่องแบบติ๊กเลือกได้หลายค่า สร้างด้วย JS (ดู buildMulti) — ค่าที่เลือก
+             ในช่องเดียวกันเป็น "หรือ" ต่างช่องกันเป็น "และ"
+             Package Size อยู่ก่อน Part Number เพราะต้องเลือกขนาดก่อน
+             แล้วรายการ Part Number จะถูกกรองตามขนาดที่เลือก -->
+        <div class="fg" id="w-result"></div>
+        <div class="fg" id="w-package-size"></div>
+        <div class="fg" id="w-part-number"></div>
+        <div class="fg" id="w-handler"></div>
+        <div class="fg" id="w-operator"></div>
+        <div class="fg" id="w-mtype"></div>
+        <div class="fg" id="w-vendor"></div>
+        <div class="fg" id="w-owner"></div>
+        <div class="fg"><label for="f-po">PO Number</label><input type="number" id="f-po" placeholder="ทั้งหมด" /></div>
+        <div class="fg"><label for="f-desc">Description</label><input type="text" id="f-desc" placeholder="พิมพ์บางส่วนได้" /></div>
+      </div>
+      <div class="filters-actions">
+        <button class="btn-ghost" id="btn-clear-filters">✕ ล้างตัวกรอง</button>
+      </div>
+
+      <div class="count" id="pv-count">—</div>
+      <div class="pv-wrap" id="pv-csv"><table><thead><tr id="pv-head"></tr></thead><tbody id="pv-body"></tbody></table></div>
+      <!-- preview ของ PDF/Excel วาดผังจริงพร้อมข้อมูลจริง (ตัวเดียวกับที่ export) -->
+      <div class="pv-wrap rpt-wrap" id="pv-report" style="display:none"><div id="rpt-sheet"></div></div>
+
+      <div class="actions">
+        <button class="btn-ghost" id="btn-back-1">← เปลี่ยน Template</button>
+        <button class="btn-primary" id="btn-download">⤓ ดาวน์โหลด CSV</button>
+      </div>
+    </section>
+  </div>
 </main>
 
+<!-- ที่วาดรายงานตอนสั่งพิมพ์เป็น PDF — ซ่อนไว้ตลอด โผล่เฉพาะตอน print -->
+<div id="print-root"></div>
+
+<!-- ── Modal สร้าง/แก้ Template ─────────────────────────────────────────── -->
+<div class="overlay" id="tpl-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <div class="card-head" style="margin:0" id="tpl-modal-title">Template ใหม่</div>
+      <button class="modal-close" id="tpl-modal-close">✕</button>
+    </div>
+    <div class="fg"><label for="tpl-name">ชื่อ Template</label><input type="text" id="tpl-name" placeholder="เช่น รายงานประจำวัน" /></div>
+    <div class="picker">
+      <div class="pk-box">
+        <div class="pk-title">เลือกคอลัมน์ที่ต้องการ</div>
+        <div id="pk-available"></div>
+      </div>
+      <div class="pk-box">
+        <div class="pk-title">ลำดับคอลัมน์ในไฟล์ (ลากสลับได้)</div>
+        <div id="pk-order"></div>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="btn-ghost" id="tpl-cancel">ยกเลิก</button>
+      <button class="btn-primary" id="tpl-save">บันทึก Template</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
-  // ── สถานะการเชื่อมต่อ Backend (เหมือน index.html / edit.html) ──────────
-  const API = 'http://localhost:8000';
-  let sse = null;
 
-  function setStationBadge(status) {
-    const el = document.getElementById('station-badge');
-    const map = { online: '🟢 Online', offline: '🔴 Offline', connecting: '🟡 Connecting' };
-    el.textContent = map[status] || status;
-    el.className = `station-badge ${status}`;
+  let columnCatalog = [];      // [{key,label,group}] จาก /api/export/columns
+  let templates     = [];      // [{export_template_id,name,columns,is_default}]
+  // หน้านี้ใช้ร่วมกันทั้ง CSV / PDF / Excel — ต่างกันแค่ชนิดของเทมเพลตที่
+  // เลือกในขั้นที่ 1 และไฟล์ที่ได้ตอนขั้นที่ 3 ส่วนขั้นกรองข้อมูลใช้ตัวเดียวกัน
+  // ทั้งหมด (ไม่ก๊อปโค้ด filter ไปไว้อีกหน้า ไม่งั้นแก้ทีต้องแก้ 3 ที่)
+  //   csv          → เทมเพลตชนิด 'csv'    (เลือกคอลัมน์ในหน้านี้เลย)
+  //   pdf / excel  → เทมเพลตชนิด 'report' (ผังตาราง แก้ที่ report-template.html)
+  const FORMAT = (new URLSearchParams(location.search).get('format') || 'csv').toLowerCase();
+  const FORMATS = { csv: 'CSV', pdf: 'PDF', excel: 'Excel' };
+  const FMT_LABEL = FORMATS[FORMAT] || 'CSV';
+  const TPL_KIND  = FORMAT;          // csv / pdf / excel — แยกลิสต์กันคนละชนิด
+  let selectedTplId = null;
+  let editingTplId  = null;    // null = โหมดสร้างใหม่
+  let draftColumns  = [];      // ลำดับคอลัมน์ที่กำลังแก้อยู่ใน modal
+
+  const labelOf = key => columnCatalog.find(c => c.key === key)?.label
+    ?? columnCatalog.flatMap(c => c.block?.data || []).find(d => d.key === key)?.label
+    ?? key;
+  const groupOf = key => columnCatalog.find(c => c.key === key)?.group
+    ?? (columnCatalog.find(c => c.block?.data?.some(d => d.key === key))?.group ?? '');
+  // ถ้า key เป็นลูกของบล็อก คืน key ของบล็อกนั้น (value_x → tolerance_spec)
+  const ownerOf = key => columnCatalog.find(c => c.block?.data?.some(d => d.key === key))?.key ?? key;
+
+  /** ช่องข้อมูลที่ถูกใช้ในผังรายงาน เรียงตามลำดับที่เจอในตาราง (ซ้าย→ขวา บน→ล่าง)
+      เทมเพลตชนิด report ไม่มีรายการคอลัมน์เรียงเป็นแถวแบบ CSV — มันกระจายอยู่
+      ในเซลล์ ต้องไล่อ่านจากผังเอง แล้วยุบ value_x/value_y ให้เป็นบล็อก
+      Tolerance ตัวเดียวเหมือนที่เห็นในหน้าแก้ไข */
+  function layoutFields(layout) {
+    const out = [];
+    (layout?.grid || []).forEach(row => (row || []).forEach(cell => {
+      const key = cell && (cell.hdr || cell.spec || cell.f);
+      if (!key) return;
+      const owner = ownerOf(key);
+      if (!out.includes(owner)) out.push(owner);
+    }));
+    return out;
   }
 
-  function connectSSE() {
-    if (sse) { sse.close(); sse = null; }
-    setStationBadge('connecting');
-    sse = new EventSource(`${API}/api/stream`);
-    sse.onopen  = () => setStationBadge('online');
-    sse.onerror = () => { setStationBadge('offline'); setTimeout(connectSSE, 3000); };
+  document.addEventListener('DOMContentLoaded', async () => {
+    document.querySelector('.card-head').textContent = `Export · ${FMT_LABEL}`;
+    // ไฮไลต์รูปแบบที่กำลังเปิดอยู่ในเมนู Export (CSV/PDF/Excel)
+    document.querySelectorAll('#export-menu .topbar-dropdown a').forEach(a =>
+      a.classList.toggle('active', a.getAttribute('href') === `export.html?format=${FORMAT}`));
+    document.title = `TM-X · Export ${FMT_LABEL}`;
+    initTopbar();
+    connectSSE();
+    buildMulti();
+    bindHandlers();
+    await Promise.all([loadColumns(), loadTemplates(), loadFilterOptions()]);
+    renderTemplates();
+  });
+
+  // debounce ร่วมของทุก filter — กันยิง preview รัวตอนพิมพ์/ติ๊กถี่ๆ
+  let previewTimer = null;
+  function schedulePreview() {
+    clearTimeout(previewTimer);
+    previewTimer = setTimeout(refreshPreview, 300);
   }
 
-  document.addEventListener('DOMContentLoaded', connectSSE);
+  // ── โหลดข้อมูลตั้งต้น ────────────────────────────────────────────────
+  async function loadColumns() {
+    try {
+      const r = await fetch(`${API}/api/export/columns?kind=${TPL_KIND}`);
+      columnCatalog = r.ok ? await r.json() : [];
+    } catch (e) { /* สถานะการเชื่อมต่อดูจากป้ายบนหัว (connectSSE) แทน */ }
+  }
+
+  async function loadTemplates() {
+    try {
+      const r = await fetch(`${API}/api/export/templates?kind=${TPL_KIND}`);
+      templates = r.ok ? await r.json() : [];
+      // เลือกตัว default ให้อัตโนมัติตอนเปิดหน้าครั้งแรก
+      if (selectedTplId == null && templates.length) {
+        selectedTplId = (templates.find(t => t.is_default) ?? templates[0]).export_template_id;
+      }
+    } catch (e) { templates = []; }
+  }
+
+  // เติมตัวเลือกของ multi-select ทุกช่องจาก lookup table จริงใน DB
+  // (ถ้าดึงตัวไหนไม่ได้ ก็แค่ช่องนั้นว่าง ช่องอื่นยังใช้ได้ปกติ)
+  async function loadFilterOptions() {
+    const get = async path => { try { const r = await fetch(`${API}${path}`); return r.ok ? await r.json() : []; } catch { return []; } };
+    const [ops, vendors, owners, handlers, pkgs, parts] = await Promise.all([
+      get('/api/operators'), get('/api/vendors'), get('/api/owners'),
+      get('/api/handlers'), get('/api/package-sizes'), get('/api/part-numbers/all'),
+    ]);
+    partNumberCatalog = parts.map(p => ({ part_number_name: p.part_number_name, package_size: p.package_size }));
+
+    // Measure Type มีแค่ IPM กับ New — โหมด Rework ถูกบันทึกเป็น New + note
+    // ส่วน "Manual" ไม่มีทางเกิดแล้ว (ไม่มีปุ่มเพิ่ม measurement เองใน UI)
+    setMultiOptions('result',       ['OK', 'NG']);
+    setMultiOptions('measure_type', ['IPM', 'New']);
+    setMultiOptions('operator',     ops.map(o => o.operator_name));
+    setMultiOptions('vendor',       vendors.map(v => v.vendor_name));
+    setMultiOptions('owner',        owners.map(o => o.owner_name));
+    setMultiOptions('handler',      handlers.map(h => h.handler_name));
+    setMultiOptions('package_size', pkgs.map(p => p.package_size));
+    refreshPartNumberOptions();   // ว่างไว้ก่อนจนกว่าจะเลือก Package Size
+  }
+
+  // ป้ายสถานะการเชื่อมต่อ — ใช้ชุดเดียวกับ index.html / edit.html
+  // หน้านี้ไม่ต้องใช้ SSE ขับข้อมูล (ไม่มีอะไรอัปเดตสด) แต่เปิดค้างไว้เพื่อรู้ว่า
+  // backend ยังตอบสนองอยู่ไหม แล้วขึ้นป้ายให้เหมือนหน้าอื่น
+
+
+  // ── ขั้นที่ 1 — รายการ Template ──────────────────────────────────────
+  function renderTemplates() {
+    const wrap = document.getElementById('tpl-list');
+    if (!templates.length) {
+      wrap.innerHTML = '<div class="empty">ยังไม่มี Template — กดปุ่มด้านล่างเพื่อสร้าง</div>';
+      document.getElementById('btn-to-2').disabled = true;
+      return;
+    }
+    wrap.innerHTML = templates.map(t => {
+      const sel  = t.export_template_id === selectedTplId ? 'sel' : '';
+      const lock = t.is_default;
+      // ทั้ง csv และ report โชว์ชิปว่ามีคอลัมน์อะไรบ้าง ต่างกันแค่ที่มาของรายชื่อ:
+      //   csv    → columns_json (รายการเรียงตามลำดับในไฟล์)
+      //   report → ไล่อ่านจากผังตาราง เพราะคอลัมน์กระจายอยู่ในเซลล์
+      const keys = TPL_KIND === 'csv' ? t.columns : layoutFields(t.layout);
+      const chips = keys.map(k =>
+        `<span class="chip ${groupOf(k) === 'ข้อมูลการวัด' ? 'meas' : ''}">${labelOf(k)}</span>`
+      ).join('');
+      const size = TPL_KIND === 'csv'
+        ? `${t.columns.length} คอลัมน์`
+        : `${keys.length} คอลัมน์ · ${t.layout?.nRows ?? 0} แถว × ${t.layout?.nCols ?? 0} ช่อง`;
+      return `<div class="tpl ${sel}" onclick="selectTemplate(${t.export_template_id})">
+        <div class="tpl-head">
+          <span class="tpl-name">${t.name}</span>
+          ${lock ? '<span class="badge lock">🔒 ค่าเริ่มต้น</span>' : ''}
+          <span class="badge">${size}</span>
+          <span class="tpl-acts" onclick="event.stopPropagation()">
+            <button class="btn-mini" ${lock ? 'disabled title="เทมเพลตค่าเริ่มต้นแก้ไขไม่ได้"' : ''} onclick="editTemplate(${t.export_template_id})">Edit</button>
+            <button class="btn-mini" onclick="duplicateTemplate(${t.export_template_id})">Duplicate</button>
+            <button class="btn-mini del" ${lock ? 'disabled title="เทมเพลตค่าเริ่มต้นลบไม่ได้"' : ''} onclick="deleteTemplate(${t.export_template_id}, '${t.name.replace(/'/g, "\\'")}')">Delete</button>
+          </span>
+        </div>
+        <div class="chips">${chips}</div>
+      </div>`;
+    }).join('');
+    document.getElementById('btn-to-2').disabled = selectedTplId == null;
+  }
+
+  function selectTemplate(id) {
+    selectedTplId = id;
+    renderTemplates();
+  }
+
+  // เทมเพลตชนิด report แก้ที่หน้าตัวแก้ไขผัง (สเปรดชีต) ไม่ใช่ modal เลือกคอลัมน์
+  // ส่ง format กลับไปด้วย เพื่อให้หน้านั้นรู้ว่าเซฟเสร็จต้องพากลับมาที่ไหน
+  function newTemplate()      { TPL_KIND === 'csv' ? openTplModal(null) : gotoLayoutEditor(null); }
+  function editTemplate(id)   { TPL_KIND === 'csv' ? openTplModal(id)   : gotoLayoutEditor(id); }
+  function gotoLayoutEditor(id) {
+    const q = new URLSearchParams({ format: FORMAT });
+    if (id != null) q.set('id', id);
+    location.href = `report-template.html?${q}`;
+  }
+
+  async function duplicateTemplate(id) {
+    try {
+      const r = await fetch(`${API}/api/export/templates/${id}/duplicate`, { method: 'POST' });
+      if (!r.ok) { showToast(await errText(r, 'ทำสำเนาไม่สำเร็จ')); return; }
+      const d = await r.json();
+      await loadTemplates();
+      selectedTplId = d.export_template_id;   // เลือกตัวสำเนาให้เลย
+      renderTemplates();
+      showToast(`สร้าง "${d.name}" แล้ว`);
+    } catch (e) { showToast('เกิดข้อผิดพลาด'); }
+  }
+
+  async function deleteTemplate(id, name) {
+    if (!confirm(`ลบ Template "${name}" ใช่ไหม?`)) return;
+    try {
+      const r = await fetch(`${API}/api/export/templates/${id}`, { method: 'DELETE' });
+      if (!r.ok) { showToast(await errText(r, 'ลบไม่สำเร็จ')); return; }
+      if (selectedTplId === id) selectedTplId = null;
+      await loadTemplates();
+      renderTemplates();
+      showToast('ลบแล้ว');
+    } catch (e) { showToast('เกิดข้อผิดพลาด'); }
+  }
+
+  // ── Modal สร้าง/แก้ Template ─────────────────────────────────────────
+  function openTplModal(id = null) {
+    editingTplId = id;
+    const tpl = id != null ? templates.find(t => t.export_template_id === id) : null;
+    document.getElementById('tpl-modal-title').textContent = tpl ? `แก้ไข — ${tpl.name}` : 'Template ใหม่';
+    document.getElementById('tpl-name').value = tpl ? tpl.name : '';
+    draftColumns = tpl ? [...tpl.columns] : [];
+    renderPicker();
+    document.getElementById('tpl-modal').classList.add('open');
+  }
+
+  function closeTplModal() {
+    document.getElementById('tpl-modal').classList.remove('open');
+    editingTplId = null;
+  }
+
+  function renderPicker() {
+    // ฝั่งซ้าย — checkbox ทั้งหมด จัดกลุ่มตามแหล่งข้อมูล
+    const groups = {};
+    columnCatalog.forEach(c => { (groups[c.group] ||= []).push(c); });
+    document.getElementById('pk-available').innerHTML = Object.entries(groups).map(([g, cols]) =>
+      `<div class="pk-group">${g}</div>` + cols.map(c =>
+        `<label class="pk-item">
+           <input type="checkbox" value="${c.key}" ${draftColumns.includes(c.key) ? 'checked' : ''} onchange="toggleColumn('${c.key}', this.checked)" />
+           ${c.label}
+         </label>`
+      ).join('')
+    ).join('');
+
+    // ฝั่งขวา — ลำดับคอลัมน์จริงในไฟล์ (ลากสลับได้)
+    const ord = document.getElementById('pk-order');
+    ord.innerHTML = draftColumns.length
+      ? draftColumns.map((k, i) =>
+          `<div class="ord-item" draggable="true" data-idx="${i}">
+             <span class="ord-grip">⠿</span>${labelOf(k)}
+             <button class="ord-x" onclick="toggleColumn('${k}', false)" title="เอาออก">✕</button>
+           </div>`
+        ).join('')
+      : '<div style="font-size:0.78rem;color:var(--muted);padding:0.5rem 0">ยังไม่ได้เลือกคอลัมน์</div>';
+    bindDrag();
+  }
+
+  function toggleColumn(key, on) {
+    if (on) { if (!draftColumns.includes(key)) draftColumns.push(key); }
+    else    { draftColumns = draftColumns.filter(k => k !== key); }
+    renderPicker();
+  }
+
+  // ลากสลับลำดับคอลัมน์ — ใช้ HTML5 drag and drop ธรรมดา ไม่ต้องพึ่ง library
+  function bindDrag() {
+    let from = null;
+    document.querySelectorAll('#pk-order .ord-item').forEach(el => {
+      el.addEventListener('dragstart', () => { from = +el.dataset.idx; el.classList.add('drag'); });
+      el.addEventListener('dragend',   () => el.classList.remove('drag'));
+      el.addEventListener('dragover',  e => e.preventDefault());
+      el.addEventListener('drop', e => {
+        e.preventDefault();
+        const to = +el.dataset.idx;
+        if (from == null || from === to) return;
+        const [moved] = draftColumns.splice(from, 1);
+        draftColumns.splice(to, 0, moved);
+        renderPicker();
+      });
+    });
+  }
+
+  async function saveTemplate() {
+    const name = document.getElementById('tpl-name').value.trim();
+    if (!name) { showToast('ตั้งชื่อ Template ก่อน'); return; }
+    if (!draftColumns.length) { showToast('เลือกอย่างน้อย 1 คอลัมน์'); return; }
+    const body = JSON.stringify({ name, columns: draftColumns });
+    try {
+      const r = editingTplId != null
+        ? await fetch(`${API}/api/export/templates/${editingTplId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body })
+        : await fetch(`${API}/api/export/templates`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      if (!r.ok) { showToast(await errText(r, 'บันทึกไม่สำเร็จ')); return; }
+      const d = await r.json().catch(() => ({}));
+      await loadTemplates();
+      if (d.export_template_id) selectedTplId = d.export_template_id;
+      renderTemplates();
+      closeTplModal();
+      showToast('บันทึกแล้ว');
+    } catch (e) { showToast('เกิดข้อผิดพลาด'); }
+  }
+
+  // ── ขั้นที่ 2–3 — filter + preview ───────────────────────────────────
+  // ── Multi-select ─────────────────────────────────────────────────────
+  // ช่องที่ติ๊กเลือกได้หลายค่า — เก็บสถานะไว้ใน multi[key].selected (Set)
+  // ค่าที่เลือกในช่องเดียวกันส่งเป็น query param ซ้ำๆ (?vendor=A&vendor=B)
+  // backend จะแปลงเป็น IN (...) ให้เอง (ดู eq() ใน _export_filters)
+  const MULTI = [
+    { key: 'result',       wrap: 'w-result',       label: 'Result' },
+    { key: 'package_size', wrap: 'w-package-size', label: 'Package Size' },
+    { key: 'part_number',  wrap: 'w-part-number',  label: 'Part Number' },
+    { key: 'handler',      wrap: 'w-handler',      label: 'Handler' },
+    { key: 'operator',     wrap: 'w-operator',     label: 'Operator' },
+    { key: 'measure_type', wrap: 'w-mtype',        label: 'Measure Type' },
+    { key: 'vendor',       wrap: 'w-vendor',       label: 'Vendor' },
+    { key: 'owner',        wrap: 'w-owner',        label: 'Owner' },
+  ];
+  const multi = {};                 // key → {options:[], selected:Set}
+  let partNumberCatalog = [];       // [{part_number_name, package_size}] ใช้ cascade
+  let previewTotal = 0;             // จำนวนแถวล่าสุดจาก preview — ใช้ในข้อความยืนยัน
+
+  function buildMulti() {
+    MULTI.forEach(m => { multi[m.key] = multi[m.key] || { options: [], selected: new Set() }; });
+    MULTI.forEach(m => {
+      const wrap = document.getElementById(m.wrap);
+      if (!wrap) return;
+      // Part Number ต้องเลือก Package Size ก่อน — บอกไว้ที่ label ให้รู้ล่วงหน้า
+      const gated = m.key === 'part_number';
+      wrap.innerHTML = `
+        <label>${m.label}${gated ? ' <span class="hint">เลือก Package Size ก่อน</span>' : ''}</label>
+        <div class="ms" id="ms-${m.key}">
+          <button type="button" class="ms-btn" id="msbtn-${m.key}">
+            <span class="ms-txt none">ทั้งหมด</span>
+          </button>
+          <div class="ms-panel" id="mspanel-${m.key}"></div>
+        </div>`;
+      document.getElementById(`msbtn-${m.key}`).onclick = e => {
+        e.stopPropagation();
+        const el = document.getElementById(`ms-${m.key}`);
+        const wasOpen = el.classList.contains('open');
+        closeAllMulti();
+        if (!wasOpen) el.classList.add('open');
+      };
+    });
+    document.addEventListener('click', closeAllMulti);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeAllMulti(); });
+  }
+
+  function closeAllMulti() {
+    document.querySelectorAll('.ms.open').forEach(el => el.classList.remove('open'));
+  }
+
+  function setMultiOptions(key, options) {
+    multi[key].options = options;
+    // ตัดค่าที่เลือกไว้แต่ไม่มีในตัวเลือกใหม่ออก (เช่น Part Number หลังเปลี่ยน
+    // Package Size) ไม่งั้นจะกรองด้วยค่าที่ผู้ใช้มองไม่เห็นแล้ว
+    multi[key].selected = new Set([...multi[key].selected].filter(v => options.includes(v)));
+    renderMulti(key);
+  }
+
+  function renderMulti(key) {
+    const { options, selected } = multi[key];
+    const panel = document.getElementById(`mspanel-${key}`);
+    const btn   = document.getElementById(`msbtn-${key}`);
+    if (!panel || !btn) return;
+
+    const gatedEmpty = key === 'part_number' && multi.package_size.selected.size === 0;
+    btn.disabled = gatedEmpty || options.length === 0;
+
+    panel.innerHTML = gatedEmpty
+      ? '<div class="ms-empty">เลือก Package Size ก่อน</div>'
+      : (options.length
+          ? `<div class="ms-tools">
+               <button type="button" onclick="multiAll('${key}', true)">เลือกทั้งหมด</button>
+               <button type="button" onclick="multiAll('${key}', false)">ล้าง</button>
+             </div>` +
+            options.map(o => `<label class="ms-opt">
+               <input type="checkbox" value="${o}" ${selected.has(o) ? 'checked' : ''} onchange="multiToggle('${key}', this.value, this.checked)" />
+               ${o}
+             </label>`).join('')
+          : '<div class="ms-empty">ไม่มีตัวเลือก</div>');
+
+    const txt = btn.querySelector('.ms-txt');
+    if (selected.size === 0) { txt.textContent = gatedEmpty ? 'เลือก Package Size ก่อน' : 'ทั้งหมด'; txt.className = 'ms-txt none'; }
+    else { txt.textContent = [...selected].join(', '); txt.className = 'ms-txt'; }
+    const old = btn.querySelector('.ms-n');
+    if (old) old.remove();
+    if (selected.size > 1) btn.insertAdjacentHTML('beforeend', `<span class="ms-n">${selected.size}</span>`);
+  }
+
+  function multiToggle(key, value, on) {
+    on ? multi[key].selected.add(value) : multi[key].selected.delete(value);
+    renderMulti(key);
+    if (key === 'package_size') refreshPartNumberOptions();
+    schedulePreview();
+  }
+
+  function multiAll(key, on) {
+    multi[key].selected = on ? new Set(multi[key].options) : new Set();
+    renderMulti(key);
+    if (key === 'package_size') refreshPartNumberOptions();
+    schedulePreview();
+  }
+
+  // Part Number แสดงเฉพาะตัวที่อยู่ใน Package Size ที่เลือกไว้ (cascade)
+  function refreshPartNumberOptions() {
+    const sizes = multi.package_size.selected;
+    const names = sizes.size === 0 ? [] :
+      [...new Set(partNumberCatalog.filter(p => sizes.has(p.package_size)).map(p => p.part_number_name))].sort();
+    setMultiOptions('part_number', names);
+  }
+
+  function filterParams() {
+    const p = new URLSearchParams({ export_template_id: selectedTplId });
+    const v = id => document.getElementById(id).value.trim();
+
+    if (v('f-alpl')) p.set('number_alpl', v('f-alpl'));
+    if (v('f-po'))   p.set('po_number',   v('f-po'));
+    if (v('f-desc')) p.set('description', v('f-desc'));
+
+    // ครอบให้เต็มวัน — เลือก "ถึง 26/07" ต้องรวมข้อมูลของวันที่ 26 ทั้งวันด้วย
+    if (v('f-date-from')) p.set('date_from', `${v('f-date-from')} 00:00:00`);
+    if (v('f-date-to'))   p.set('date_to',   `${v('f-date-to')} 23:59:59`);
+    if (v('f-recv-from')) p.set('recv_from', `${v('f-recv-from')} 00:00:00`);
+    if (v('f-recv-to'))   p.set('recv_to',   `${v('f-recv-to')} 23:59:59`);
+
+    // multi-select → query param ซ้ำๆ (append ไม่ใช่ set)
+    MULTI.forEach(m => multi[m.key].selected.forEach(val => p.append(m.key, val)));
+
+    p.set('latest_only', document.getElementById('f-latest').checked ? 'true' : 'false');
+    return p;
+  }
+
+  // มีการกรองอะไรอยู่ไหม — ใช้ถามยืนยันตอนกด Export ทั้งก้อนโดยไม่กรองเลย
+  function hasAnyFilter() {
+    const v = id => document.getElementById(id).value.trim();
+    if (['f-alpl','f-po','f-desc','f-date-from','f-date-to','f-recv-from','f-recv-to'].some(id => v(id))) return true;
+    return MULTI.some(m => multi[m.key].selected.size > 0);
+  }
+
+  // ── วาดผังรายงานจากผลลัพธ์ของ /api/export/report-preview ──────────────
+  // เซลล์ที่มีเนื้อหาได้เส้นขอบหนา (class bx) เหมือนที่ openpyxl ใส่ให้ในไฟล์ .xlsx
+  // สไตล์ทุกตัวมาจากผังที่ผู้ใช้จัดไว้ ไม่ได้ hardcode ที่นี่
+  function cellStyle(s = {}) {
+    return [
+      s.font ? `font-family:${s.font}` : '',
+      `font-size:${s.size || 11}pt`,
+      s.bold ? 'font-weight:700' : '',
+      s.italic ? 'font-style:italic' : '',
+      s.underline ? 'text-decoration:underline' : '',
+      s.fill ? `background:${s.fill}` : '',
+      s.color ? `color:${s.color}` : '',
+      `text-align:${s.align || 'center'}`,
+      `vertical-align:${s.valign || 'middle'}`,
+      s.indent ? `padding-left:${0.4 + s.indent * 0.7}rem` : '',
+    ].filter(Boolean).join(';');
+  }
+
+  function reportTableHtml(d) {
+    if (!d.rows.length) return '<div class="empty">ไม่มีข้อมูลที่ตรงกับตัวกรอง</div>';
+    const rows = d.rows.map(row => {
+      const tds = row.map(cell => {
+        if (cell.hidden) return '';                       // ถูกกลืนจากการผสาน
+        const sp = cell.span || { r: 1, c: 1 };
+        const attrs = [
+          sp.r > 1 ? `rowspan="${sp.r}"` : '',
+          sp.c > 1 ? `colspan="${sp.c}"` : '',
+        ].filter(Boolean).join(' ');
+        const filled = (cell.v && String(cell.v).trim()) || cell.data || cell.head;
+        return `<td class="${filled ? 'bx' : ''}" ${attrs} style="${cellStyle(cell.s)}">${escapeHtml(cell.v || '')}</td>`;
+      }).join('');
+      return `<tr>${tds}</tr>`;
+    }).join('');
+    return `<table>${rows}</table>`;
+  }
+
+
+  async function refreshReportPreview() {
+    const cnt = document.getElementById('pv-count');
+    const btn = document.getElementById('btn-download');
+    document.getElementById('pv-csv').style.display = 'none';
+    document.getElementById('pv-report').style.display = '';
+    cnt.textContent = 'กำลังโหลด…';
+    try {
+      const r = await fetch(`${API}/api/export/report-preview?${filterParams()}`);
+      if (!r.ok) { cnt.textContent = await errText(r, 'ดึงตัวอย่างไม่สำเร็จ'); btn.disabled = true; return; }
+      const d = await r.json();
+      reportData = d;
+      document.getElementById('rpt-sheet').innerHTML = reportTableHtml(d);
+      previewTotal = d.total;
+      cnt.innerHTML = `Template <strong>${d.template_name}</strong> · พบ <strong>${d.total}</strong> รายการ` +
+        ` · แบ่ง <strong>${d.groups || 0}</strong> กลุ่มตามสเปก Tolerance` +
+        (d.truncated ? ` · <span style="color:var(--warn)">ตัวอย่างแสดงแค่ ${d.shown} แถวแรก (ไฟล์จริงได้ครบทุกแถว)</span>` : '');
+      btn.disabled = d.total === 0;
+      btn.textContent = d.total
+        ? (FORMAT === 'pdf' ? `🖨 พิมพ์เป็น PDF (${d.total} แถว)` : `⤓ ดาวน์โหลด Excel (${d.total} แถว)`)
+        : '⤓ ไม่มีข้อมูลให้ดาวน์โหลด';
+    } catch (e) { cnt.textContent = 'ต่อ Backend ไม่ได้'; }
+  }
+
+  let reportData = null;
+
+  // ดาวน์โหลด Excel ผ่าน fetch แทนการเปลี่ยน location ตรงๆ — จะได้อ่านข้อความ
+  // error จาก backend มาโชว์เป็น toast ได้ (เช่นตอนข้อมูลเกินเพดานของรายงาน)
+  // ถ้าเปลี่ยน location เลย ผู้ใช้จะเจอหน้า error ดิบๆ ของเบราว์เซอร์แทน
+  async function downloadXlsx() {
+    const cnt = document.getElementById('pv-count');
+    const prev = cnt.innerHTML;
+    cnt.textContent = 'กำลังสร้างไฟล์ Excel…';
+    try {
+      const r = await fetch(`${API}/api/export/xlsx?${filterParams()}`);
+      if (!r.ok) { showToast(await errText(r, 'สร้างไฟล์ไม่สำเร็จ')); cnt.innerHTML = prev; return; }
+      const blob = await r.blob();
+      const name = (r.headers.get('Content-Disposition') || '').match(/filename=([^;]+)/)?.[1]?.trim()
+                   || 'report.xlsx';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = name; a.click();
+      URL.revokeObjectURL(url);
+      cnt.innerHTML = prev;
+    } catch (e) { showToast('ต่อ Backend ไม่ได้'); cnt.innerHTML = prev; }
+  }
+
+  // ── พิมพ์เป็น PDF ────────────────────────────────────────────────────
+  // ใช้ตัวพิมพ์ของเบราว์เซอร์แทนการสร้าง PDF ฝั่ง backend เพราะภาษาไทยแสดงถูก
+  // แน่นอน (ไลบรารี PDF ฝั่ง server ต้องฝังฟอนต์ไทยเอง ไม่งั้นได้สี่เหลี่ยม)
+  // และสิ่งที่เห็นใน preview = สิ่งที่ได้ในไฟล์ เพราะวาดด้วย HTML ก้อนเดียวกัน
+  //
+  // วาดลง #print-root ในหน้านี้แล้วสั่ง print เลย ไม่เปิดหน้าต่างใหม่ เพราะ
+  //   1) ไม่โดน pop-up blocker
+  //   2) ไม่ต้องเก็บ HTML ทั้งหน้าไว้เป็นสตริงในสคริปต์ — สตริงที่มีแท็กปิด
+  //      ของ style/body/script ปนอยู่ในไฟล์ HTML ไฟล์เดียวเป็นระเบิดเวลา
+  //      พลาดนิดเดียว parser จะปิดสคริปต์กลางทาง แล้วโค้ดที่เหลือโผล่เป็น
+  //      ข้อความดิบเต็มหน้าจอ (เคยเกิดมาแล้ว)
+  // ส่วน @media print ด้านบนซ่อนทุกอย่างยกเว้น #print-root ตอนสั่งพิมพ์
+  async function printReport() {
+    const cnt = document.getElementById('pv-count');
+    const prev = cnt.innerHTML;
+    cnt.textContent = 'กำลังเตรียมไฟล์สำหรับพิมพ์…';
+    try {
+      // preview ตัดแค่ 300 แถว — ตอนพิมพ์จริงต้องเอาครบทุกแถว
+      const r = await fetch(`${API}/api/export/report-preview?${filterParams()}&full=1`);
+      if (!r.ok) { showToast(await errText(r, 'เตรียมไฟล์ไม่สำเร็จ')); cnt.innerHTML = prev; return; }
+      const d = await r.json();
+      const root = document.getElementById('print-root');
+      root.innerHTML = reportTableHtml(d);
+      const restore = document.title;
+      document.title = d.template_name || 'report';   // เบราว์เซอร์ใช้เป็นชื่อไฟล์ PDF
+      window.print();
+      document.title = restore;
+      cnt.innerHTML = prev;
+    } catch (e) { showToast('ต่อ Backend ไม่ได้'); cnt.innerHTML = prev; }
+  }
+
+  async function refreshPreview() {
+    if (FORMAT !== 'csv') return refreshReportPreview();
+    document.getElementById('pv-csv').style.display = '';
+    document.getElementById('pv-report').style.display = 'none';
+    const head = document.getElementById('pv-head');
+    const body = document.getElementById('pv-body');
+    const cnt  = document.getElementById('pv-count');
+    cnt.textContent = 'กำลังโหลด…';
+    const alplEl  = document.getElementById('f-alpl');
+    const alplErr = document.getElementById('f-alpl-err');
+    try {
+      const r = await fetch(`${API}/api/export/preview?${filterParams()}`);
+      if (!r.ok) {
+        const msg = await errText(r, 'ดึงตัวอย่างไม่สำเร็จ');
+        // backend ตรวจรูปแบบ ALPL ให้ — ถ้าผิดให้ชี้ที่ช่องนั้นตรงๆ ไม่ใช่
+        // ขึ้นข้อความรวมๆ ให้ผู้ใช้ไล่หาเองว่าพิมพ์อะไรผิด
+        if (msg.includes('ALPL')) { alplEl.classList.add('bad'); alplErr.textContent = msg; cnt.textContent = '—'; }
+        else { cnt.textContent = msg; }
+        document.getElementById('btn-download').disabled = true;
+        return;
+      }
+      alplEl.classList.remove('bad'); alplErr.textContent = '';
+      const d = await r.json();
+      head.innerHTML = d.columns.map(c => `<th>${c}</th>`).join('');
+      body.innerHTML = d.rows.length
+        ? d.rows.map(row => `<tr>${row.map(cell => `<td>${cell ?? ''}</td>`).join('')}</tr>`).join('')
+        : `<tr><td class="empty" colspan="${d.columns.length || 1}">ไม่มีข้อมูลที่ตรงกับตัวกรอง</td></tr>`;
+      cnt.innerHTML = `Template <strong>${d.template_name}</strong> · พบ <strong>${d.total}</strong> รายการ` +
+                      (d.rows.length ? ` · แสดงตัวอย่าง ${d.rows.length} แถวแรก` : '');
+      previewTotal = d.total;
+      const btn = document.getElementById('btn-download');
+      btn.disabled = d.total === 0;
+      btn.textContent = d.total ? `⤓ ดาวน์โหลด ${FMT_LABEL} (${d.total} แถว)` : '⤓ ไม่มีข้อมูลให้ดาวน์โหลด';
+    } catch (e) { cnt.textContent = 'ต่อ Backend ไม่ได้'; }
+  }
+
+  function gotoStep(n) {
+    document.getElementById('panel-1').style.display = n === 1 ? '' : 'none';
+    document.getElementById('panel-2').style.display = n === 2 ? '' : 'none';
+    document.querySelectorAll('#steps .step').forEach(el => {
+      const s = +el.dataset.step;
+      el.classList.toggle('on', n === 1 ? s === 1 : s === 3);
+      el.classList.toggle('done', n === 2 ? s < 3 : false);
+    });
+    if (n === 2) refreshPreview();
+  }
+
+  // ── Plumbing ─────────────────────────────────────────────────────────
+  function bindHandlers() {
+    document.getElementById('btn-new-tpl').onclick = () => newTemplate();
+    document.getElementById('btn-to-2').onclick    = () => gotoStep(2);
+    document.getElementById('btn-back-1').onclick  = () => gotoStep(1);
+    document.getElementById('tpl-save').onclick    = saveTemplate;
+    document.getElementById('tpl-cancel').onclick  = closeTplModal;
+    document.getElementById('tpl-modal-close').onclick = closeTplModal;
+    document.getElementById('tpl-modal').onclick = e => { if (e.target.id === 'tpl-modal') closeTplModal(); };
+
+    // เปลี่ยน filter แล้ว refresh ตัวอย่างทันที (debounce กันยิงรัวตอนพิมพ์)
+    // ส่วน multi-select เรียก schedulePreview() เองใน multiToggle/multiAll
+    const TEXT_FILTER_IDS = [
+      'f-alpl', 'f-po', 'f-desc',
+      'f-date-from', 'f-date-to', 'f-recv-from', 'f-recv-to', 'f-latest',
+    ];
+    TEXT_FILTER_IDS.forEach(id => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('input',  schedulePreview);
+      el.addEventListener('change', schedulePreview);
+    });
+
+    document.getElementById('btn-clear-filters').onclick = () => {
+      TEXT_FILTER_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (el.type === 'checkbox') el.checked = true;   // กลับไปเป็น "เฉพาะล่าสุด"
+        else el.value = '';
+      });
+      MULTI.forEach(m => { multi[m.key].selected = new Set(); renderMulti(m.key); });
+      refreshPartNumberOptions();
+      document.getElementById('f-alpl').classList.remove('bad');
+      document.getElementById('f-alpl-err').textContent = '';
+      refreshPreview();
+    };
+
+    document.getElementById('btn-download').onclick = () => {
+      // ไม่ได้กรองอะไรเลย = กำลังจะดึงข้อมูลทั้งระบบ — ถามยืนยันก่อน กันเผลอกด
+      // แล้วได้ไฟล์ใหญ่เกินคาด (โดยเฉพาะตอนติ๊ก "เฉพาะล่าสุด" ออกด้วย)
+      if (!hasAnyFilter()) {
+        const scope = document.getElementById('f-latest').checked
+          ? 'การวัดล่าสุดของทุก ALPL'
+          : 'ประวัติการวัดทั้งหมดทุกครั้ง';
+        if (!confirm(`ยังไม่ได้ตั้งตัวกรองไว้เลย\n\nต้องการ Export ${scope} จำนวน ${previewTotal.toLocaleString()} แถว ใช่หรือไม่?`)) return;
+      }
+      if (FORMAT === 'excel') { downloadXlsx(); return; }
+      if (FORMAT === 'pdf')   { printReport(); return; }
+      // ให้เบราว์เซอร์โหลดไฟล์ตรงๆ จาก endpoint (ได้ชื่อไฟล์จาก Content-Disposition)
+      window.location.href = `${API}/api/export/csv?${filterParams()}`;
+    };
+  }
+
+
+
+  let toastTimer = null;
 </script>
-
 </body>
 </html>

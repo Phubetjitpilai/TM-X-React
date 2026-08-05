@@ -1,0 +1,1315 @@
+<!DOCTYPE html>
+<!-- Frontend/report-template.html — ตัวออกแบบเทมเพลตรายงาน PDF / Excel
+     เปิดผ่าน backend ที่ http://localhost:8000/report-template.html
+
+     หน้านี้เป็น "ตัวแก้ไขแบบสเปรดชีต" สำหรับออกแบบหน้าตารายงานที่จะ export
+     ออกไปเป็น PDF หรือ Excel — ต่างจาก export.html (CSV) ที่เลือกได้แค่ว่าจะเอา
+     คอลัมน์ไหนบ้าง หน้านี้กำหนดได้ถึงระดับว่าเซลล์ไหนอยู่ตรงไหน หน้าตาเป็นยังไง
+
+     แนวคิดหลัก 3 อย่าง
+       1. เซลล์เก็บได้ 2 แบบ — ข้อความที่พิมพ์เอง (หัวตาราง) กับ "ช่องข้อมูล"
+          (token) ที่ลากมาจากแผงซ้าย ตอน export ระบบจะเอาข้อมูลจริงมาแทน token
+       2. แถวข้อมูล (dataRow) — แถวที่ทำเครื่องหมายไว้จะถูกทำซ้ำ 1 แถวต่อ
+          1 การวัด ส่วนแถวอื่นพิมพ์ครั้งเดียว/ซ้ำทุกกลุ่ม
+       3. แบ่งกลุ่ม (groupBy) — ตัดรายงานเป็นก้อนตามค่าของฟิลด์ที่เลือก แล้ว
+          พิมพ์หัวตารางซ้ำทุกก้อน (เหมือนรายงาน Excel เดิมที่แบ่งตาม Tolerance)
+
+     ทำไมเขียนเองไม่ใช้ library สเปรดชีตสำเร็จรูป: เครื่อง PC หน้างานอาจไม่มี
+     อินเทอร์เน็ต โหลด library จาก CDN ไม่ได้ และ convention ของโปรเจกต์คือ
+     1 หน้า = 1 ไฟล์ HTML (ดู CLAUDE.md) จึงทำเท่าที่งานนี้ต้องใช้จริง
+
+     CSS variable + topbar ใช้ชุดเดียวกับหน้าอื่น -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TM-X Control System</title>
+  <!-- สไตล์/โค้ดที่ทุกหน้าใช้ร่วมกัน — โหลดก่อนเสมอ เพื่อให้ของเฉพาะหน้าทับได้ -->
+<link rel="stylesheet" href="shared.css" />
+<script src="shared.js"></script>
+<style>
+    /* ── ตัวแปรสี, ปุ่ม/อินพุตพื้นฐาน, แถบเมนูบน, ป้ายสถานะ, toast ──
+       ย้ายไปที่ shared.css แล้ว (โหลดไว้ใน <head> ก่อนบล็อกนี้)
+       เขียนทับเฉพาะที่ต้องต่างจากส่วนกลางได้ที่นี่ */
+
+    /* ช่องกรอกของหน้านี้ต้องเล็กกว่าค่ากลาง เพราะอยู่ในแถบเครื่องมือที่พื้นที่จำกัด
+       ถ้าใช้ขนาดกลาง (0.875rem + padding มากกว่า) แถบเครื่องมือจะสูงขึ้นจนขึ้น
+       บรรทัดใหม่ และพื้นสีเทาของค่ากลางทำให้ dropdown จมหายไปกับพื้นแถบ */
+    input, select {
+      background: var(--surface);
+      border-radius: 6px;
+      padding: 0.35rem 0.55rem;
+      font-size: 0.82rem;
+    }
+
+    .main{padding:1.25rem 1.5rem 3rem;width:100%;max-width:1500px;margin:0 auto}
+    .app{background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden}
+
+    /* ── หัวเครื่องมือ ────────────────────────────────────────────────── */
+    .hd{padding:.6rem .85rem;border-bottom:1px solid var(--border);background:var(--surface2);display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;font-size:.82rem;color:var(--muted)}
+    /* ── Ribbon แบบ Excel — จัดเป็นกลุ่ม มีชื่อกลุ่มกำกับด้านล่าง ───────── */
+    .ribbon{display:flex;align-items:stretch;gap:0;background:var(--surface);border-bottom:1px solid var(--border);padding:.3rem .5rem 0;flex-wrap:wrap}
+    .rgroup{display:flex;flex-direction:column;padding:0 .7rem;border-right:1px solid var(--border)}
+    .rgroup:last-child{border-right:none}
+    .rrow{display:flex;align-items:center;gap:.2rem;min-height:28px}
+    .rname{font-size:.6rem;color:var(--muted);text-align:center;padding:.15rem 0 .25rem;letter-spacing:.02em}
+    .tb{border:1px solid transparent;background:var(--surface);border-radius:4px;padding:.22rem .38rem;font-size:.8rem;color:var(--text);display:inline-flex;align-items:center;gap:.15rem;line-height:1;min-width:26px;justify-content:center}
+    .tb:hover{background:var(--surface2)}
+    .tb.on{background:rgba(55,138,222,.14);border-color:var(--accent);color:var(--accent)}
+    .tb small{font-size:.7rem;color:var(--text)}
+    .tb b{font-weight:700}.tb i{font-style:italic}.tb u{text-decoration:underline}
+    .tb .car{font-size:.5rem;color:var(--muted)}
+    /* ปุ่มสีแบบ Excel — แถบสีอยู่ใต้ตัวอักษร กดที่ตัวอักษร = ใช้สีล่าสุด
+       กดที่ลูกศร = เปิด color picker */
+    .colorbtn{position:relative;display:inline-flex;align-items:center;border:1px solid transparent;border-radius:4px}
+    .colorbtn:hover{background:var(--surface2)}
+    .colorbtn .main{padding:.22rem .3rem .1rem;display:flex;flex-direction:column;align-items:center;gap:1px;cursor:pointer;font-size:.8rem;line-height:1}
+    .colorbtn .bar{width:15px;height:4px;border-radius:1px;border:1px solid rgba(0,0,0,.12)}
+    .colorbtn .car{border:none;background:transparent;cursor:pointer;font-size:.55rem;color:var(--muted);padding:.22rem .2rem;line-height:1}
+    .colorbtn .car:hover{color:var(--text)}
+    .colorbtn input[type=color]{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
+    /* จานสีแบบ Excel — Theme Colors (สีหลัก + เฉดอ่อน/เข้ม) และ Standard Colors */
+    .cpanel{position:absolute;top:calc(100% + 4px);left:0;z-index:70;display:none;
+            background:var(--surface);border:1px solid var(--border);border-radius:8px;
+            box-shadow:0 12px 30px rgba(0,0,0,.18);padding:.55rem;width:214px}
+    .cpanel.open{display:block}
+    .cpl{font-size:.66rem;font-weight:700;color:var(--muted);margin:.1rem 0 .3rem;letter-spacing:.02em}
+    .cgrid{display:grid;grid-template-columns:repeat(10,1fr);gap:2px}
+    .cgrid.tint{margin-top:4px}
+    .sw{width:100%;aspect-ratio:1/1;border:1px solid rgba(0,0,0,.18);border-radius:2px;
+        cursor:pointer;padding:0;display:block}
+    .sw:hover{outline:2px solid var(--accent);outline-offset:1px}
+    .crow{display:flex;align-items:center;gap:.45rem;padding:.35rem .3rem;border-radius:4px;
+          cursor:pointer;font-size:.78rem;color:var(--text)}
+    .crow:hover{background:var(--surface2)}
+    .crow .box{width:15px;height:15px;border:1px solid var(--border);border-radius:2px;flex:none}
+    .cpanel hr{border:none;border-top:1px solid var(--border);margin:.45rem 0}
+    .sep{width:1px;height:19px;background:var(--border);margin:0 .25rem}
+    /* ไอคอน SVG ในแถบเครื่องมือ — เส้นบางสีเดียวกับตัวอักษรของปุ่ม
+       ใช้ SVG เพราะไอคอนจัดวาง 3 แบบต้องดูต่างกันชัดๆ ตัวอักษร ≡ ใช้ไม่ได้ */
+    .ic{width:15px;height:15px;stroke:currentColor;stroke-width:1.5;
+        stroke-linecap:round;fill:none;display:block}
+    .tb.del{color:var(--ng)}
+    .tb.del:hover{background:var(--ng-bg)}
+    /* Format Painter กำลังทำงาน — ปุ่มค้างสว่างและเคอร์เซอร์เปลี่ยนทั้งตาราง */
+    .tb.armed{background:var(--warn-bg);border-color:var(--warn);color:var(--warn)}
+    .sheet.painting td.cell{cursor:copy}
+
+    /* ── แถบสูตร ─────────────────────────────────────────────────────── */
+    .fbar{display:flex;border-bottom:1px solid var(--border);font-size:.8rem;align-items:stretch}
+    .nbox{width:62px;border-right:1px solid var(--border);padding:.35rem .5rem;color:var(--muted);background:var(--surface2);font-weight:600;text-align:center}
+    .fx{flex:1;padding:.35rem .6rem;display:flex;align-items:center;gap:.35rem;min-width:0}
+    .fx input{border:none;flex:1;padding:.1rem;font-size:.8rem;background:transparent}
+    .fx input:focus{outline:none}
+
+    /* ── ตัวตาราง ────────────────────────────────────────────────────── */
+    .body{display:grid;grid-template-columns:190px 1fr;min-height:340px}
+    .pal{border-right:1px solid var(--border);background:var(--surface2);padding:.6rem;overflow-y:auto;max-height:520px}
+    .palt{font-size:.66rem;color:var(--muted);font-weight:700;margin:.6rem 0 .3rem;text-transform:uppercase;letter-spacing:.04em}
+    .palt:first-child{margin-top:0}
+    .pc{display:flex;align-items:center;gap:.3rem;background:#eeedfe;color:#534ab7;border-radius:5px;padding:.2rem .45rem;font-size:.72rem;margin-bottom:.25rem;cursor:grab;user-select:none}
+    .pc.gray{background:#e8e6df;color:var(--muted)}
+    .pc:active{cursor:grabbing}
+    .pc .gp{opacity:.5;font-size:.7rem}
+    .sheet{overflow:auto;max-height:520px}
+    table{border-collapse:separate;border-spacing:0;font-size:.72rem;white-space:nowrap}
+    .ch td,td.rn{background:var(--surface2);border:1px solid #d3d1c7;text-align:center;color:var(--muted);font-size:.62rem;padding:.1rem .2rem;position:relative;user-select:none;cursor:pointer}
+    .ch td{min-width:92px}
+    td.rn,.ch td.rn{min-width:26px;width:26px}
+    .ch td.hi,td.rn.hi{background:rgba(55,138,222,.15);color:var(--accent)}
+    .cell{border:1px solid var(--border);padding:.25rem .4rem;background:var(--surface);height:26px;vertical-align:middle;cursor:cell;overflow:hidden;max-width:220px}
+    .cell.sel{outline:2px solid #185FA5;outline-offset:-2px}
+    /* เซลล์อื่นในช่วงที่คลุมด้วย Shift+คลิก — ฟ้าอ่อนแบบ Excel */
+    .cell.inrange{background:rgba(55,138,222,.13)!important}
+    .cell.drop{outline:2px dashed var(--accent);outline-offset:-2px;background:rgba(55,138,222,.1)}
+    .cell.datarow{background:#fbfaff}
+    /* ช่องข้อมูลในเซลล์ — แสดงเป็น "ตัวอักษรธรรมดาสีดำ" เหมือนข้อความที่พิมพ์เอง
+       ไม่ใส่พื้นหลัง/สีพิเศษ เพราะรูปแบบที่เห็นตรงนี้คือรูปแบบที่จะออกไปในไฟล์จริง
+       (ผู้ใช้ปรับสี/ตัวหนา/ขนาดเองได้ทีหลังด้วย ribbon) — cursor:grab บอกว่าลากได้ */
+    .tok{cursor:grab;white-space:nowrap}
+    /* ห่อด้วย inline-flex ไม่ใช่ flex ที่ตัว td — display:flex บน td ทำให้
+       เส้นขอบตารางเพี้ยน (เคยเจอมาแล้วตอนทำคอลัมน์ Action หน้า Edit) */
+    .vwrap{display:inline-flex;align-items:center;gap:.25rem;max-width:100%}
+    .vsel{height:19px;padding:0 .1rem;font-size:.62rem;border-radius:3px;
+          border:1px solid var(--border);background:var(--surface);color:var(--muted);
+          cursor:pointer;flex:none}
+    .vsel:hover{border-color:var(--accent);color:var(--accent)}
+    .vsel.wide{max-width:86px}
+    .tok:active{cursor:grabbing}
+    /* ช่องกรอกตอนพิมพ์ในเซลล์ — ทับพอดีกับเซลล์ ไม่ให้ตารางกระตุก */
+    .cellinput{width:100%;border:none;outline:none;background:transparent;font:inherit;color:inherit;text-align:inherit;padding:0}
+    /* ชิปที่ถูกวางไปแล้ว — จางลงและลากซ้ำไม่ได้ */
+    .pc.used{opacity:.45;cursor:not-allowed}
+    .pc.used .gp{visibility:hidden}
+    .rowbadge{position:absolute;left:-2px;top:-1px;bottom:-1px;width:3px;background:var(--accent2);border-radius:2px}
+
+    .legend{padding:.55rem .85rem;border-top:1px solid var(--border);background:var(--surface2);font-size:.72rem;color:var(--muted);line-height:1.7}
+    .pill{background:#eeedfe;color:#534ab7;font-size:.65rem;padding:.1rem .45rem;border-radius:999px}
+    .btn-primary{background:var(--accent);color:#fff}
+    .btn-ghost{background:transparent;border:1px solid var(--border);color:var(--muted)}
+    .btn-danger{background:transparent;border:1px solid #f7c1c1;color:var(--ng)}
+
+    /* ── รายการเทมเพลต ───────────────────────────────────────────────── */
+    .tpl{border:1px solid var(--border);border-radius:9px;padding:.75rem .9rem;margin-bottom:.6rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap}
+    .tpl-name{font-size:.9rem;font-weight:600}
+    .badge{font-size:.68rem;padding:.1rem .5rem;border-radius:999px;background:var(--surface2);color:var(--muted)}
+    .btn-mini{font-size:.72rem;padding:.2rem .55rem;border:1px solid var(--border);background:var(--surface);color:var(--text);border-radius:6px}
+    .btn-mini.del{color:var(--ng);border-color:#f7c1c1}
+    .btn-add{width:100%;padding:.6rem;border:1px dashed #d3d1c7;background:var(--surface);color:var(--muted);font-size:.83rem}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1.1rem 1.35rem}
+    .card-head{font-size:.78rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:.9rem}
+    .toast{position:fixed;bottom:1.5rem;left:50%;transform:translateX(-50%) translateY(12px);background:var(--text);color:#fff;padding:.6rem 1.2rem;border-radius:var(--radius);font-size:.85rem;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;z-index:400}
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  </style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="topbar-left">
+    <div class="topbar-brand">
+      <img class="topbar-logo" src="assets/adi-logo.svg" alt="Analog Devices" onerror="this.style.display='none'" />
+      <div class="topbar-title">TM-X <span>Control System</span></div>
+    </div>
+  </div>
+  <nav class="topbar-nav">
+    <a class="topbar-link" href="index.html">Home</a>
+    <a class="topbar-link" href="edit.html">Edit</a>
+    <span class="topbar-menu" id="export-menu">
+      <span class="topbar-link active" id="export-menu-btn" role="button" tabindex="0" aria-haspopup="true" aria-expanded="false">Export<span class="topbar-caret">▼</span></span>
+      <span class="topbar-dropdown">
+        <a href="export.html?format=csv">CSV</a>
+        <a href="export.html?format=pdf">PDF</a>
+        <a href="export.html?format=excel">Excel</a>
+      </span>
+    </span>
+  </nav>
+  <div class="topbar-right">
+    <span class="station-badge connecting" id="station-badge">🟡 Connecting</span>
+  </div>
+</header>
+
+<main class="main">
+  <!-- ── หน้าตัวแก้ไข ──────────────────────────────────────────────── -->
+  <section class="app" id="panel-editor">
+    <div class="hd">
+      <span id="editor-kind">Export · PDF</span>
+      <input id="tpl-name" placeholder="ชื่อเทมเพลต" style="width:200px" />
+      <span style="margin-left:auto;display:flex;gap:.4rem">
+        <button class="btn-ghost" id="btn-cancel">ยกเลิก</button>
+        <button class="btn-primary" id="btn-save">บันทึกเทมเพลต</button>
+      </span>
+    </div>
+
+    <!-- Ribbon จัดกลุ่มแบบ Excel — Font / Alignment / Report
+         ไม่มีปุ่ม Border เพราะเซลล์ที่มีเนื้อหาจะได้เส้นขอบหนารอบด้าน
+         อัตโนมัติอยู่แล้ว (ดู renderGrid) ไม่ต้องให้ผู้ใช้มาตีเส้นเอง -->
+    <div class="ribbon">
+      <div class="rgroup">
+        <div class="rrow">
+          <select id="t-font" style="width:112px" title="แบบอักษร">
+            <option>Calibri</option><option>Arial</option><option selected>Tahoma</option>
+            <option>Segoe UI</option><option>Times New Roman</option>
+          </select>
+          <select id="t-size" style="width:54px" title="ขนาดอักษร">
+            <option>8</option><option>9</option><option>10</option><option selected>11</option>
+            <option>12</option><option>14</option><option>16</option><option>18</option><option>20</option>
+            <option>22</option><option>24</option><option>26</option><option>28</option>
+            <option>36</option><option>48</option><option>72</option>
+          </select>
+          <button class="tb" id="t-size-up" title="เพิ่มขนาดอักษร">A<span style="font-size:.62rem">▲</span></button>
+          <button class="tb" id="t-size-down" title="ลดขนาดอักษร">A<span style="font-size:.62rem">▼</span></button>
+        </div>
+        <div class="rrow">
+          <button class="tb" id="t-bold" title="ตัวหนา"><b>B</b></button>
+          <button class="tb" id="t-italic" title="ตัวเอียง"><i>I</i></button>
+          <button class="tb" id="t-underline" title="ขีดเส้นใต้"><u>U</u></button>
+          <span class="sep"></span>
+          <!-- Format Painter — คัดลอกรูปแบบของช่องที่เลือก แล้วคลิก/ลากคลุมช่องอื่น
+               เพื่อทาทับ กดปุ่มนี้อีกครั้ง (หรือ Esc) เพื่อเลิก -->
+          <button class="tb" id="t-painter" title="Format Painter — คัดลอกรูปแบบไปทาช่องอื่น">
+            <svg class="ic" viewBox="0 0 16 16" style="fill:currentColor;stroke:none">
+              <path d="M2 1.6h9.2v3.2H2zM3.4 4.8h6.4v1.9H3.4zM6.1 6.7h1.9v2.4a1 1 0 0 1-.5.9v3.9a1 1 0 0 1-1 1 1 1 0 0 1-1-1v-3.9a1 1 0 0 1-.4-.9V6.7z"/>
+            </svg></button>
+          <span class="colorbtn">
+            <span class="main" id="t-fill" title="สีพื้น (ใช้สีล่าสุด)">🪣<span class="bar" id="sw-fill" style="background:#ffff00"></span></span>
+            <button class="car" id="t-fill-arrow" title="เลือกสีพื้น">▼</button>
+            <input type="color" id="t-fill-color" value="#ffff00" />
+            <div class="cpanel" id="cp-fill"></div>
+          </span>
+          <span class="colorbtn">
+            <span class="main" id="t-color" title="สีตัวอักษร (ใช้สีล่าสุด)"><b>A</b><span class="bar" id="sw-color" style="background:#c00000"></span></span>
+            <button class="car" id="t-color-arrow" title="เลือกสีตัวอักษร">▼</button>
+            <input type="color" id="t-font-color" value="#c00000" />
+            <div class="cpanel" id="cp-color"></div>
+          </span>
+        </div>
+        <div class="rname">Font</div>
+      </div>
+
+      <div class="rgroup">
+        <div class="rrow">
+          <button class="tb" data-valign="top" title="ชิดบน">⎺</button>
+          <button class="tb" data-valign="middle" title="กึ่งกลางแนวตั้ง">⎼</button>
+          <button class="tb" data-valign="bottom" title="ชิดล่าง">⎽</button>
+        </div>
+        <div class="rrow">
+          <button class="tb" data-align="left" title="ชิดซ้าย">
+            <svg class="ic" viewBox="0 0 16 16"><path d="M1 3h14M1 6.3h9M1 9.6h14M1 12.9h9"/></svg></button>
+          <button class="tb" data-align="center" title="กึ่งกลาง">
+            <svg class="ic" viewBox="0 0 16 16"><path d="M1 3h14M3.5 6.3h9M1 9.6h14M3.5 12.9h9"/></svg></button>
+          <button class="tb" data-align="right" title="ชิดขวา">
+            <svg class="ic" viewBox="0 0 16 16"><path d="M1 3h14M6 6.3h9M1 9.6h14M6 12.9h9"/></svg></button>
+          <span class="sep"></span>
+          <button class="tb" id="t-indent-dec" title="ลดระยะย่อหน้า">⇤</button>
+          <button class="tb" id="t-indent-inc" title="เพิ่มระยะย่อหน้า">⇥</button>
+          <span class="sep"></span>
+          <button class="tb" id="t-merge" title="ผสานเซลล์ที่เลือกไว้และจัดกึ่งกลาง (กดซ้ำที่ก้อนที่ผสานแล้ว = ยกเลิกการผสาน)"><small>⊞ Merge &amp; Center</small></button>
+        </div>
+        <div class="rname">Alignment</div>
+      </div>
+
+      <!-- ── แทรก/ลบ แถวและคอลัมน์ ────────────────────────────────────
+           เดิมทำได้ผ่านการคลิกหัวคอลัมน์/เลขแถวแล้วขึ้น prompt() ให้พิมพ์เลข
+           ซึ่งไม่มีใครเดาได้ว่ามีฟีเจอร์นี้อยู่ — ยกมาเป็นปุ่มบนแถบเครื่องมือ
+           (การคลิกหัวคอลัมน์ยังใช้ได้เหมือนเดิม ไม่ได้เอาออก) -->
+      <div class="rgroup">
+        <div class="rrow">
+          <button class="tb" id="t-col-left"  title="แทรกคอลัมน์ทางซ้ายของช่องที่เลือก"><small>⇤ แทรกซ้าย</small></button>
+          <button class="tb" id="t-col-right" title="แทรกคอลัมน์ทางขวาของช่องที่เลือก"><small>แทรกขวา ⇥</small></button>
+          <button class="tb del" id="t-col-del" title="ลบคอลัมน์ที่เลือก"><small>✕ ลบคอลัมน์</small></button>
+        </div>
+        <div class="rrow">
+          <button class="tb" id="t-row-up"   title="แทรกแถวด้านบนของช่องที่เลือก"><small>⤒ แทรกบน</small></button>
+          <button class="tb" id="t-row-down" title="แทรกแถวด้านล่างของช่องที่เลือก"><small>⤓ แทรกล่าง</small></button>
+          <button class="tb del" id="t-row-del" title="ลบแถวที่เลือก"><small>✕ ลบแถว</small></button>
+        </div>
+        <div class="rname">Rows &amp; Columns</div>
+      </div>
+
+    </div>
+
+    <div class="fbar">
+      <span class="nbox" id="namebox">A1</span>
+      <span class="fx">
+        <input id="formula" placeholder="พิมพ์ข้อความ หรือลากช่องข้อมูลจากซ้ายมาวางในเซลล์" />
+      </span>
+    </div>
+
+    <div class="body">
+      <div class="pal" id="palette"></div>
+      <div class="sheet"><table id="grid"></table></div>
+    </div>
+
+    <div class="legend">
+      <span class="pill">↻ แถบม่วงซ้ายมือ = แถวข้อมูล</span>
+      ทำซ้ำหนึ่งแถวต่อหนึ่งการวัด · แถวอื่นเป็นหัวตารางที่พิมพ์ซ้ำทุกกลุ่ม ·
+      รายงานถูกแบ่งกลุ่มด้วยสเปก <strong>Tolerance</strong> เสมอ<br>
+      <strong>ลาก 1 ครั้งได้ทั้งบล็อก</strong> — ชื่อคอลัมน์ผสาน 2 แถวตรงที่วาง แล้ว “ข้อมูล …” ลงแถวถัดไปอัตโนมัติ ·
+      <strong>Tolerance</strong> กว้าง 2 คอลัมน์ (หัว / สเปก / ข้อมูล Value X + Value Y) ·
+      รูปแบบที่ตั้งให้เซลล์ “ข้อมูล …” จะถูกใช้กับทุกแถวตอน export<br>
+      คลิกหัวคอลัมน์/หมายเลขแถวเพื่อแทรกหรือลบ · Shift+คลิกเพื่อคลุมหลายช่องก่อนกด Merge · ลากข้อความออกไปทิ้งที่แผงซ้ายเพื่อเอาออก
+    </div>
+  </section>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+
+  // kind มาจาก query string (?kind=pdf|excel) — เก็บเทมเพลตร่วมกันใน DB ชนิด
+  // 'report' ทั้งคู่ เพราะผังตารางเหมือนกันหมด ต่างแค่ตอน render ปลายทาง
+  const Q = new URLSearchParams(location.search);
+  // รับ format ทั้งแบบใหม่ (?format=) และแบบเก่า (?kind=) กัน bookmark เดิมพัง
+  const FORMAT = (Q.get('format') || Q.get('kind') || 'pdf').toLowerCase();
+  const OUTPUT = FORMAT === 'excel' ? 'Excel' : 'PDF';
+  // ?id=N → เข้ามาแก้ของเดิม, ไม่มี → สร้างใหม่
+  const OPEN_ID = Q.get('id') != null ? Number(Q.get('id')) : null;
+  // กลับไปหน้า wizard เสมอ — หน้านี้ไม่มีรายการเทมเพลตของตัวเองแล้ว
+  const backToWizard = () => { location.href = `export.html?format=${FORMAT}`; };
+
+  const ROWS0 = 5, COLS0 = 10;          // ขนาดเริ่มต้นตามที่กำหนด
+  let columnCatalog = [];               // ช่องข้อมูลที่ลากได้ (จาก /api/export/columns)
+  let templates = [];
+  let editingId = null;
+  let lockedDefault = false;   // เปิดตัวที่ระบบล็อกไว้อยู่ → บันทึกเป็นตัวใหม่แทนการทับ
+
+  // ── โครงสร้างข้อมูลของผัง ────────────────────────────────────────────
+  // grid[r][c] = {v:'ข้อความ', f:'key ของช่องข้อมูล', s:{...รูปแบบ}, span:{r,c}, hidden:true}
+  //   v กับ f ใช้อย่างใดอย่างหนึ่ง — f มาก่อนถ้ามีทั้งคู่
+  //   hidden = เซลล์ที่ถูกกลืนไปเพราะเซลล์ข้างบน/ซ้ายผสานทับ
+  let grid = [], nRows = ROWS0, nCols = COLS0;
+  let dataRow = 2;                      // แถวที่ทำซ้ำ (index 0-based)
+  // รายงานถูกแบ่งกลุ่มด้วยสเปก Tolerance เสมอ (ไม่มีตัวเลือกให้ผู้ใช้เปลี่ยน) —
+  // เพราะรายงานที่ห้อง PM Kit ใช้จริงพิมพ์ทีละสเปก ชิ้นงานคนละสเปกอยู่คนละก้อน
+  const GROUP_BY = 'tolerance_spec';
+  let groupBy = GROUP_BY;
+  // การเลือกเป็น "ช่วง" เสมอ — คลิกธรรมดา anchor = focus (ช่วง 1 ช่อง)
+  // Shift+คลิก ขยับ focus ไปเรื่อยๆ โดย anchor อยู่กับที่ → ได้สี่เหลี่ยมคลุม
+  let anchor = { r: 0, c: 0 }, focusCell = { r: 0, c: 0 };
+  let dragField = null;                 // ลากชิปจากแผงซ้าย
+  let dragFrom = null;                  // ลากข้อความที่อยู่ในเซลล์ (ย้าย/เอาออก)
+  let editing = null;                   // {r,c} ของเซลล์ที่กำลังพิมพ์อยู่
+
+  // ขอบเขตช่วงที่เลือกอยู่ (normalize ให้ r1<=r2, c1<=c2 เสมอ)
+  function range() {
+    return {
+      r1: Math.min(anchor.r, focusCell.r), r2: Math.max(anchor.r, focusCell.r),
+      c1: Math.min(anchor.c, focusCell.c), c2: Math.max(anchor.c, focusCell.c),
+    };
+  }
+  function inRange(r, c) {
+    const g = range();
+    return r >= g.r1 && r <= g.r2 && c >= g.c1 && c <= g.c2;
+  }
+  // เซลล์ทั้งหมดในช่วง — ใช้ตอนกดปุ่มจัดรูปแบบให้มีผลทั้งช่วง
+  function selectedCells() {
+    const g = range(), out = [];
+    for (let r = g.r1; r <= g.r2; r++)
+      for (let c = g.c1; c <= g.c2; c++) out.push(grid[r][c]);
+    return out;
+  }
+  const hasContent = cell => !!(cell.f || cell.spec || (cell.v && cell.v.trim()));
+
+  // v   = ข้อความที่พิมพ์เอง
+  // f   = ช่องข้อมูล (เซลล์นี้จะกลายเป็นค่าจริงทีละแถวตอน export)
+  // hdr = เซลล์นี้เป็น "หัวตาราง" ของช่องข้อมูลตัวไหน — ผูกไว้เพื่อให้ลบทีเดียว
+  //       แล้วหายไปพร้อมกันทั้งคู่ และรู้ว่าฟิลด์ไหนถูกใช้ไปแล้ว (กันลากซ้ำ)
+  //       เก็บแยกจาก v เพราะผู้ใช้แก้ข้อความหัวตารางเป็นอย่างอื่นได้ (เช่น
+  //       "Number ALPL") แต่ความผูกพันกับฟิลด์ต้องไม่หายไปด้วย
+  // spec = เซลล์ "สเปกของกลุ่ม" ของบล็อก (เช่น 9.030 +0.020 -0.010 ของ Tolerance)
+  //        พิมพ์ครั้งเดียวต่อกลุ่ม ต่างจาก f ที่ทำซ้ำทุกแถว
+  // variants = หน้าตาแยกตามค่าของเซลล์ข้อมูล เช่น Result มี {OK:{...}, NG:{...}}
+  //            แต่ละชุดเก็บรูปแบบครบชุดของตัวเอง (สีพื้น/สีอักษร/หนา/ขนาด/จัดวาง)
+  // vsel     = ตอนนี้กำลังแก้หน้าตาของค่าไหนอยู่ (เรื่องของหน้าจอล้วนๆ ไม่มีผลกับไฟล์
+  //            แต่เก็บลงเทมเพลตด้วย เพื่อให้เปิดกลับมาเห็นค่าเดิมที่ค้างไว้)
+  // fmt = รูปแบบการแสดงผลที่ผู้ใช้ติ๊กไว้ (ตอนนี้มีแค่ช่องวันเวลา: date/time/datetime)
+  //       ต่างจาก variants ที่เป็น "หน้าตา" — fmt เปลี่ยน "ข้อความ" ที่ออกมาจริง
+  const blank = () => ({ v: '', f: '', hdr: '', spec: '', s: {}, span: null, hidden: false,
+                         variants: null, vsel: '', fmt: '' });
+
+  // ── หน้าตาแยกตามค่า ─────────────────────────────────────────────────
+  // คอลัมน์ที่ backend บอกมาว่ามีค่าตายตัวไม่กี่ค่า (ตอนนี้มีแค่ Result: OK/NG)
+  // เซลล์ข้อมูลของมันจะจัดรูปแบบแยกได้ทีละค่า แทนที่จะมีหน้าตาเดียวใช้ทุกแถว
+  const valuesOf = k => columnCatalog.find(c => c.key === k)?.values
+    ?? columnCatalog.flatMap(c => c.block?.data || []).find(d => d.key === k)?.values
+    ?? null;
+  // รูปแบบที่ติ๊กเลือกได้ของช่องนี้ — [{key,label}] หรือ null ถ้าไม่มีให้เลือก
+  const formatsOf = k => columnCatalog.find(c => c.key === k)?.formats
+    ?? columnCatalog.flatMap(c => c.block?.data || []).find(d => d.key === k)?.formats
+    ?? null;
+  // ตั้งรูปแบบเริ่มต้นให้เซลล์ถ้าช่องนี้มีให้เลือก (ตัวแรกในลิสต์ = ค่าเริ่มต้น)
+  function initFmt(cell) {
+    const fs = cell.f ? formatsOf(cell.f) : null;
+    if (fs && !fs.some(x => x.key === cell.fmt)) cell.fmt = fs[0].key;
+    return fs;
+  }
+
+  // หัวตารางของช่องที่เลือกรูปแบบได้ ต้องเปลี่ยนตามที่ติ๊ก — ติ๊ก Date หัวเป็น
+  // "Date", ติ๊ก Time หัวเป็น "Time"
+  //
+  // ⚠ แต่ต้องไม่ทับข้อความที่ผู้ใช้พิมพ์เองไว้ — เปลี่ยนให้เฉพาะตอนที่หัวยังเป็น
+  // ข้อความอัตโนมัติอยู่ (ตรงกับชื่อรูปแบบใดรูปแบบหนึ่ง หรือชื่อตั้งต้นของช่อง)
+  // ถ้าผู้ใช้แก้เป็น "วันที่ตรวจ" แล้ว สลับรูปแบบกี่รอบก็ไม่โดนเขียนทับ
+  function syncFmtHeader(key) {
+    const fs = formatsOf(key);
+    if (!fs) return;
+    const dc = findCell(x => x.f === key);
+    const hc = findCell(x => x.hdr === key);
+    if (!dc || !hc) return;
+    const head = grid[hc.r][hc.c];
+    const auto = new Set([...fs.map(f => f.label), headerOf(key), labelOf(key)]);
+    if (!auto.has((head.v || '').trim())) return;      // ผู้ใช้ตั้งชื่อเองไว้ → ไม่แตะ
+    const cur = fs.find(f => f.key === grid[dc.r][dc.c].fmt);
+    if (cur) head.v = cur.label;
+  }
+
+  // คืนรายการค่าถ้าเซลล์นี้รองรับ (พร้อมสร้างชุดรูปแบบตั้งต้นให้ครบ) — null ถ้าไม่
+  function variantsOf(cell) {
+    const vals = cell.f ? valuesOf(cell.f) : null;
+    if (!vals) return null;
+    if (!cell.variants) cell.variants = {};
+    // ชุดแรกลอกรูปแบบเดิมของเซลล์มาเป็นจุดตั้งต้น จะได้ไม่เสียการจัดวางที่ทำไว้
+    vals.forEach(v => { if (!cell.variants[v]) cell.variants[v] = { ...cell.s }; });
+    if (!vals.includes(cell.vsel)) cell.vsel = vals[0];
+    return vals;
+  }
+
+  // รูปแบบที่ "กำลังแก้อยู่" ของเซลล์ — ปุ่มในแถบเครื่องมือทุกปุ่มเขียนลงตัวนี้
+  // ไม่ใช่ cell.s ตรงๆ ไม่งั้นตั้งสีให้ OK แล้ว NG จะเปลี่ยนตามไปด้วย
+  function styleOf(cell) {
+    const vals = variantsOf(cell);
+    return vals ? cell.variants[cell.vsel] : cell.s;
+  }
+
+  // ── บล็อกหลายเซลล์ ──────────────────────────────────────────────────
+  // บางคอลัมน์ลากครั้งเดียวได้ผังหลายเซลล์ (ตอนนี้มีแค่ Tolerance) โดย backend
+  // ส่ง metadata มาที่ c.block = {cols, sample, data:[{key,label}]}
+  const blockOf  = k => columnCatalog.find(c => c.key === k)?.block || null;
+  // key ทั้งหมดที่เป็นของบล็อกนี้ — ใช้ตอนลบให้หายยกชุด ไม่เหลือเศษ
+  const blockKeys = k => { const b = blockOf(k); return b ? [k, ...b.data.map(d => d.key)] : [k]; };
+  // ถ้า key เป็นลูกของบล็อกไหน คืน key ของบล็อกนั้น (เช่น value_x → tolerance_spec)
+  const ownerOf = k => columnCatalog.find(c => c.block?.data?.some(d => d.key === k))?.key || k;
+
+  // ฟิลด์ที่ถูกวางไปแล้ว — ใช้ทำให้ชิปในแผงซ้ายกดลากซ้ำไม่ได้
+  function usedFields() {
+    const set = new Set();
+    grid.flat().forEach(c => {
+      [c.f, c.hdr, c.spec].forEach(k => { if (k) set.add(ownerOf(k)); });
+    });
+    return set;
+  }
+
+  // เอาฟิลด์ออกทั้งคู่ (หัวตาราง + ข้อมูล) — ลบตัวไหนตัวหนึ่งก็หายไปทั้งคู่
+  // หัวตารางถูกผสาน 2 แถวไว้ตอนวาง จึงต้องคืนเซลล์ที่ถูกกลืนกลับมาด้วย
+  // ไม่งั้นจะเหลือช่องผีที่คลิกไม่ได้ค้างอยู่ในผัง
+  function removeField(key) {
+    const keys = new Set(blockKeys(ownerOf(key)));   // ลบยกบล็อก ไม่ทิ้งเศษ
+    for (let r = 0; r < nRows; r++)
+      for (let c = 0; c < nCols; c++) {
+        const cell = grid[r][c];
+        if (!(keys.has(cell.f) || keys.has(cell.hdr) || keys.has(cell.spec))) continue;
+        unspan(r, c);
+        cell.f = ''; cell.hdr = ''; cell.spec = ''; cell.v = '';
+        cell.variants = null; cell.vsel = ''; cell.fmt = '';   // กันค่าเก่าค้างผิดที่
+      }
+  }
+
+  // ยกเลิกการผสานของเซลล์หนึ่ง แล้วคืนเซลล์ที่ถูกกลืนให้กลับมามองเห็น
+  function unspan(r, c) {
+    const cell = grid[r][c];
+    if (!cell.span) return;
+    for (let dr = 0; dr < cell.span.r; dr++)
+      for (let dc = 0; dc < cell.span.c; dc++) {
+        const x = grid[r + dr]?.[c + dc];
+        if (x && x !== cell) x.hidden = false;
+      }
+    cell.span = null;
+  }
+
+  // เผื่อแถวให้พอ — ผังต้องมีอย่างน้อย need แถว (ต่อท้ายไม่กระทบ span เดิม)
+  function ensureRows(need) {
+    while (nRows < need) { grid.push(Array.from({ length: nCols }, blank)); nRows++; }
+  }
+
+  // วางบล็อกของฟิลด์ลงที่ (top,left) — สูง 3 แถวเสมอ แถวที่ 3 คือแถวข้อมูล
+  //
+  // คอลัมน์ธรรมดา (กว้าง 1)          บล็อก Tolerance (กว้าง 2)
+  //   ┌──────────┐                   ┌───────────────────────┐
+  //   │          │ ผสาน 2 แถว        │       Tolerance       │ ผสาน 2 คอลัมน์
+  //   │   ALPL   │                   ├───────────────────────┤
+  //   │          │                   │  9.030  +0.020 -0.010 │ ผสาน 2 คอลัมน์
+  //   ├──────────┤                   ├───────────┬───────────┤
+  //   │ข้อมูล ALPL│ ← แถวข้อมูล        │ข้อมูล Value X│ข้อมูล Value Y│ ← แถวข้อมูล
+  //   └──────────┘                   └───────────┴───────────┘
+  //
+  // คืน false ถ้าปลายทางล้นตาราง หรือชนเซลล์ที่ผสานไว้อยู่แล้ว
+  function placeFieldBlock(key, top, left, headText) {
+    const b = blockOf(key);
+    const w = b ? b.cols : 1;
+    if (left < 0 || left + w > nCols) { toast('คอลัมน์ทางขวาไม่พอสำหรับบล็อกนี้'); return false; }
+    ensureRows(top + 3);
+
+    const cells = [];
+    for (let dr = 0; dr < 3; dr++)
+      for (let dc = 0; dc < w; dc++) cells.push(grid[top + dr][left + dc]);
+    if (cells.some(x => x.hidden || x.span)) {
+      toast('ตำแหน่งปลายทางชนกับเซลล์ที่ผสานไว้ — เลือกที่อื่น');
+      return false;
+    }
+    const swallow = x => { x.hidden = true; x.v = ''; x.f = ''; x.hdr = ''; x.spec = ''; };
+    const center = x => { x.s.align = x.s.align || 'center'; x.s.valign = x.s.valign || 'middle'; };
+
+    const h = grid[top][left];
+    h.v = headText; h.f = ''; h.hdr = key; h.spec = ''; center(h);
+
+    if (!b) {
+      // คอลัมน์ธรรมดา — หัวตารางกินสูง 2 แถว แล้วข้อมูลอยู่แถวที่ 3
+      h.span = { r: 2, c: 1 };
+      swallow(grid[top + 1][left]);
+      const d = grid[top + 2][left];
+      d.v = ''; d.f = key; d.hdr = ''; d.spec = '';
+    } else {
+      // บล็อก — หัวตารางกับสเปกกินกว้าง w คอลัมน์ คนละแถว
+      h.span = { r: 1, c: w };
+      for (let dc = 1; dc < w; dc++) swallow(grid[top][left + dc]);
+
+      const sp = grid[top + 1][left];
+      sp.v = `ข้อมูล ${headerOf(key)}`; sp.f = ''; sp.hdr = ''; sp.spec = key;
+      sp.span = { r: 1, c: w }; center(sp);
+      for (let dc = 1; dc < w; dc++) swallow(grid[top + 1][left + dc]);
+
+      b.data.forEach((d, i) => {
+        const cell = grid[top + 2][left + i];
+        cell.v = ''; cell.f = d.key; cell.hdr = ''; cell.spec = ''; center(cell);
+      });
+    }
+    dataRow = top + 2;
+    return true;
+  }
+
+  // หาตำแหน่งของหัวตาราง/ข้อมูลของฟิลด์หนึ่ง — คืน null ถ้าไม่มี
+  function findCell(pred) {
+    for (let r = 0; r < nRows; r++)
+      for (let c = 0; c < nCols; c++)
+        if (pred(grid[r][c])) return { r, c };
+    return null;
+  }
+
+  // ย้ายทั้งบล็อกไปตำแหน่งใหม่ — (dr,dc) คือระยะห่างของเซลล์ที่ผู้ใช้จับ
+  // จากมุมบนซ้ายของบล็อก จับตรงไหนลากไปวางตรงนั้น ที่เหลือจัดตัวเองตาม
+  function moveFieldBlock(key, dropR, dropC, dr, dc) {
+    const owner = ownerOf(key);
+    // เก็บข้อความหัวตารางเดิมไว้ (ผู้ใช้อาจแก้เป็นชื่ออื่นแล้ว)
+    const oldH = findCell(x => x.hdr === owner);
+    const headText = oldH ? grid[oldH.r][oldH.c].v : headerOf(owner);
+    const old = oldH ? { r: oldH.r, c: oldH.c } : null;
+    const top = dropR - dr, left = dropC - dc;
+
+    // ชุดรูปแบบแยกตามค่า (OK/NG) ผูกกับ "ฟิลด์" ไม่ใช่ตำแหน่ง — ย้ายบล็อกแล้ว
+    // ต้องติดไปด้วย ไม่งั้นจัดสี OK/NG ไว้สวยๆ แล้วลากย้ายทีเดียวหายหมด
+    const keep = {};
+    grid.flat().forEach(x => {
+      if (x.f && (x.variants || x.fmt)) keep[x.f] = { variants: x.variants, vsel: x.vsel, fmt: x.fmt };
+    });
+    const reapply = () => grid.flat().forEach(x => {
+      const k = x.f && keep[x.f];
+      if (k) { x.variants = k.variants; x.vsel = k.vsel; x.fmt = k.fmt; }
+    });
+
+    const restore = () => { if (old) { placeFieldBlock(owner, old.r, old.c, headText); reapply(); } };
+    if (top < 0) { toast('ต้องมีที่ว่างข้างบนสำหรับหัวตาราง'); return false; }
+
+    // ล้างของเก่าก่อนเช็คปลายทาง เพื่อให้ลากทับตัวเองได้ (เช่นเลื่อนลง 1 แถว)
+    // ไม่งั้น span ของตัวมันเองจะไปบล็อกตำแหน่งใหม่ซะเอง
+    removeField(owner);
+    if (!placeFieldBlock(owner, top, left, headText)) { restore(); return false; }
+    reapply();
+    anchor = focusCell = { r: top, c: left };
+    return true;
+  }
+
+  function newGrid() {
+    grid = Array.from({ length: ROWS0 }, () => Array.from({ length: COLS0 }, blank));
+    nRows = ROWS0; nCols = COLS0; dataRow = 2; groupBy = GROUP_BY;
+    anchor = focusCell = { r: 0, c: 0 };
+  }
+
+  const colName = i => String.fromCharCode(65 + i);
+  const labelOf = k => columnCatalog.find(c => c.key === k)?.label
+    ?? columnCatalog.flatMap(c => c.block?.data || []).find(d => d.key === k)?.label
+    ?? k;
+  // ข้อความที่ใช้เป็น "หัวตาราง" จริงในรายงาน — ต่างจาก labelOf ที่เป็นชื่อชิป
+  // ในแผงซ้าย (ชิปต้องบอกว่าลากแล้วได้อะไรบ้าง เช่น "Tolerance + Value X/Y"
+  // แต่หัวตารางบนกระดาษต้องสั้นว่า "Tolerance")
+  const headerOf = k => blockOf(k)?.header
+    ?? columnCatalog.find(c => c.key === k)?.header
+    ?? labelOf(k);
+  const groupOf = k => columnCatalog.find(c => c.key === k)?.group ?? '';
+  // ข้อความที่แสดงแทนช่องข้อมูลในเซลล์ — สื่อว่า "ตรงนี้จะเป็นข้อมูลของคอลัมน์นี้"
+  const dataLabel = k => `ข้อมูล ${labelOf(k)}`;
+
+  // ══════════════════════════════════════════════════════════════════════
+  document.addEventListener('DOMContentLoaded', async () => {
+    initTopbar(); connectSSE(); bindToolbar();
+    document.getElementById('editor-kind').textContent = `Export · ${OUTPUT}`;
+    document.querySelector('#export-menu-btn').textContent = 'Export';
+    document.title = `TM-X · เทมเพลตรายงาน ${OUTPUT}`;
+    await loadColumns();
+    renderPalette();
+    await loadTemplates();
+    openEditor(OPEN_ID);        // เข้าตัวแก้ไขทันที ไม่มีหน้ารายการในนี้แล้ว
+  });
+
+  async function loadColumns() {
+    try {
+      // kind=report → ได้ช่องรวม "Tolerance" ช่องเดียวแทน Nominal X/Y + Upper/Lower Tol
+      const r = await fetch(`${API}/api/export/columns?kind=${FORMAT}`);
+      columnCatalog = r.ok ? await r.json() : [];
+    } catch (e) { columnCatalog = []; }
+  }
+
+  async function loadTemplates() {
+    try {
+      const r = await fetch(`${API}/api/export/templates?kind=${FORMAT}`);
+      templates = r.ok ? await r.json() : [];
+    } catch (e) { templates = []; }
+  }
+
+  function openEditor(id = null) {
+    editingId = id;
+    const t = id != null ? templates.find(x => x.export_template_id === id) : null;
+
+    // เปิดมาด้วย id ที่หาไม่เจอ (ถูกลบไปแล้ว / ลิงก์เก่า) — ของเดิมตกไปสร้าง
+    // ผังเปล่าเงียบๆ ผู้ใช้นึกว่าเทมเพลตหาย แล้วบันทึกทับเป็นตัวใหม่โดยไม่รู้ตัว
+    if (id != null && !t) {
+      toast('ไม่พบเทมเพลตนี้ (อาจถูกลบไปแล้ว) — เริ่มผังใหม่ให้แทน');
+      editingId = null;
+    }
+    // เทมเพลตค่าเริ่มต้นแก้ไม่ได้ (backend ปฏิเสธด้วย 403) — บอกตั้งแต่ตอนเปิด
+    // ดีกว่าปล่อยให้จัดผังจนเสร็จแล้วค่อยเด้ง error ตอนกดบันทึก งานที่ทำหายหมด
+    lockedDefault = !!t?.is_default;
+    if (lockedDefault) toast('เทมเพลตค่าเริ่มต้นแก้ไม่ได้ — บันทึกจะกลายเป็นตัวใหม่ให้อัตโนมัติ');
+
+    document.getElementById('tpl-name').value = t ? (lockedDefault ? `${t.name} (สำเนา)` : t.name) : '';
+    if (t?.layout?.grid) {
+      // โหลดผังเดิมกลับมา — เติมเซลล์ที่ขาดให้ครบกันกรณี layout เก่ามีคอลัมน์น้อยกว่า
+      nRows = t.layout.nRows; nCols = t.layout.nCols;
+      dataRow = t.layout.dataRow ?? 2; groupBy = GROUP_BY;
+      grid = Array.from({ length: nRows }, (_, r) =>
+        Array.from({ length: nCols }, (_, c) => ({ ...blank(), ...(t.layout.grid[r]?.[c] || {}) })));
+    } else {
+      newGrid();
+    }
+    anchor = focusCell = { r: 0, c: 0 };
+    renderGrid();
+  }
+
+  // ── แผงช่องข้อมูลที่ลากได้ ──────────────────────────────────────────
+  function renderPalette() {
+    const used = usedFields();
+    const groups = {};
+    columnCatalog.forEach(c => { (groups[c.group] ||= []).push(c); });
+    document.getElementById('palette').innerHTML =
+      '<div class="palt">ลากไปวางในเซลล์ →</div>' +
+      Object.entries(groups).map(([g, cols]) =>
+        `<div class="palt">${g}</div>` + cols.map(c => {
+          // ฟิลด์ที่วางไปแล้วลากซ้ำไม่ได้ — จางลงและปิด draggable
+          const u = used.has(c.key);
+          return `<div class="pc ${g === 'ข้อมูลการวัด' ? '' : 'gray'} ${u ? 'used' : ''}"
+                       ${u ? '' : 'draggable="true"'} data-key="${c.key}"
+                       title="${u ? 'วางไปแล้ว — ลากออกจากตารางก่อนถ้าอยากย้าย' : 'ลากไปวางในเซลล์'}">
+                    <span class="gp">⠿</span>${c.label}${u ? ' ✓' : ''}
+                  </div>`;
+        }).join('')
+      ).join('');
+
+    document.querySelectorAll('#palette .pc[draggable]').forEach(el => {
+      el.addEventListener('dragstart', e => {
+        dragField = el.dataset.key;
+        dragFrom = null;                    // กันค่าค้างจากการลากครั้งก่อน
+        e.dataTransfer.effectAllowed = 'copy';
+        // ต้อง setData ไม่งั้น Firefox ไม่ยอมเริ่มลาก
+        e.dataTransfer.setData('text/plain', el.dataset.key);
+        setChipDragImage(e, el);
+      });
+      el.addEventListener('dragend', () => { dragField = null; });
+    });
+  }
+
+  // ภาพตอนลากให้เป็น "ชิปใบเดียว" ไม่ใช่ภาพจางๆ ของแผงทั้งแผง
+  // (ค่าเริ่มต้นของเบราว์เซอร์จะจับภาพ element ตอนที่มันอยู่ใน container ที่
+  //  scroll ได้ ทำให้ได้ภาพเพี้ยนทับตารางเป็นแถบยาว)
+  function setChipDragImage(e, el) {
+    const ghost = el.cloneNode(true);
+    ghost.style.cssText = 'position:absolute;top:-1000px;left:-1000px;opacity:1;' +
+      'background:#eeedfe;color:#534ab7;border:1px solid #7f77dd;border-radius:5px;' +
+      'padding:.2rem .5rem;font-size:.72rem;white-space:nowrap;font-family:inherit';
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 10, 10);
+    setTimeout(() => ghost.remove(), 0);
+  }
+
+  // ── วาดตาราง ────────────────────────────────────────────────────────
+  function renderGrid() {
+    const t = document.getElementById('grid');
+    const g = range();
+    let html = '<tr class="ch"><td class="rn"></td>';
+    for (let c = 0; c < nCols; c++)
+      html += `<td class="${c >= g.c1 && c <= g.c2 ? 'hi' : ''}" onclick="colMenu(${c})">${colName(c)}</td>`;
+    html += '</tr>';
+
+    for (let r = 0; r < nRows; r++) {
+      html += `<tr><td class="rn ${r >= g.r1 && r <= g.r2 ? 'hi' : ''}" onclick="rowMenu(${r})">${r + 1}</td>`;
+      for (let c = 0; c < nCols; c++) {
+        const cell = grid[r][c];
+        if (cell.hidden) continue;                       // ถูกกลืนจากการผสาน
+        const sp = cell.span ? ` colspan="${cell.span.c}" rowspan="${cell.span.r}"` : '';
+        const s = styleOf(cell) || {};
+        const style = [
+          s.font ? `font-family:${s.font}` : '',
+          s.size ? `font-size:${s.size}px` : '',
+          s.bold ? 'font-weight:700' : '',
+          s.italic ? 'font-style:italic' : '',
+          s.underline ? 'text-decoration:underline' : '',
+          s.fill ? `background:${s.fill}` : '',
+          s.color ? `color:${s.color}` : '',
+          s.align ? `text-align:${s.align}` : '',
+          s.valign ? `vertical-align:${s.valign}` : '',
+          s.indent ? `padding-left:${0.4 + s.indent * 0.7}rem` : '',
+          // หมายเหตุ: เส้นขอบหนารอบเซลล์ที่มีเนื้อหา "ไม่แสดงในหน้าแก้ไข" —
+          // จะไปโผล่ตอน Preview กับในไฟล์ที่ export จริงเท่านั้น เพื่อให้หน้า
+          // แก้ไขดูโล่งเหมือนตาราง Excel เปล่าๆ ไม่รกสายตาตอนกำลังจัดผัง
+        ].filter(Boolean).join(';');
+
+        const isFocus = r === focusCell.r && c === focusCell.c;
+        const cls = ['cell', isFocus ? 'sel' : '', inRange(r, c) && !isFocus ? 'inrange' : '',
+                     r === dataRow ? 'datarow' : ''].filter(Boolean).join(' ');
+        // ชิปในเซลล์ลากได้ — ลากไปเซลล์อื่น = ย้าย, ลากออกนอกตาราง = เอาออก
+        // เซลล์ที่ผูกช่องข้อมูลไว้ แสดงเป็นข้อความ "ข้อมูล <ชื่อคอลัมน์>" ธรรมดา
+        // ตอน export ข้อความนี้จะถูกแทนด้วยค่าจริงของแต่ละแถว โดยยกรูปแบบ
+        // (ฟอนต์/สี/ขนาด/จัดวาง) ของเซลล์นี้ไปใช้กับทุกแถวที่ถูกสร้างขึ้น
+        // เซลล์ที่กำลังพิมพ์อยู่ → แสดงเป็นช่องกรอกซ้อนทับ (แก้ในเซลล์ได้เลย)
+        let content;
+        if (editing && editing.r === r && editing.c === c) {
+          // seed = ตัวอักษรที่ผู้ใช้เพิ่งพิมพ์ทับ (พิมพ์เลยโดยไม่ต้องดับเบิลคลิก)
+          const iv = editing.seed !== null && editing.seed !== undefined
+            ? editing.seed
+            : (cell.f ? '' : (cell.v || ''));
+          content = `<input class="cellinput" value="${escapeHtml(iv)}" />`;
+        } else if (cell.f) {
+          const vals = variantsOf(cell);
+          const fmts = initFmt(cell);
+          const suffix = vals ? ` (${cell.vsel})` : '';
+          const text = fmts ? 'ข้อมูล' : dataLabel(cell.f) + suffix;
+          const tok = `<span class="tok" draggable="true" data-tok="${r}-${c}">${escapeHtml(text)}</span>`;
+          // เซลล์ข้อมูลมี dropdown ได้ 2 แบบ (ไม่มีช่องไหนใช้ทั้งคู่พร้อมกัน):
+          //   vsel → เลือกว่ากำลังจัดรูปแบบ "ของค่าไหน" (OK/NG) แถบเครื่องมือทั้งแถบ
+          //          จะไปแก้ชุดนั้นแทน จัด OK เสร็จก็สลับมาทำ NG ต่อได้เลย
+          //   fsel → เลือก "รูปแบบข้อความ" ที่จะพิมพ์ออกมาจริง (วันที่/เวลา/ทั้งคู่)
+          if (vals) {
+            content = `<span class="vwrap">${tok}<select class="vsel" data-vsel="${r}-${c}" title="เลือกค่าที่จะจัดรูปแบบ">
+                 ${vals.map(v => `<option ${v === cell.vsel ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+               </select></span>`;
+          } else if (fmts) {
+            content = `<span class="vwrap">${tok}<select class="vsel wide" data-fsel="${r}-${c}" title="รูปแบบที่จะพิมพ์ออกมา">
+                 ${fmts.map(f => `<option value="${f.key}" ${f.key === cell.fmt ? 'selected' : ''}>${escapeHtml(f.label)}</option>`).join('')}
+               </select></span>`;
+          } else {
+            content = tok;
+          }
+        } else if (cell.spec) {
+          // สเปกของกลุ่ม — แสดงตัวอย่างรูปแบบจริงที่จะพิมพ์ออกมา
+          content = `<span class="tok" draggable="true" data-spec="${r}-${c}">${escapeHtml(cell.v || '')}</span>`;
+        } else if (cell.hdr) {
+          // หัวตารางก็ลากย้าย/ลากออกได้เหมือนกัน (ลากออก = หายทั้งคู่)
+          content = `<span class="tok" draggable="true" data-hdr="${r}-${c}">${escapeHtml(cell.v || '')}</span>`;
+        } else {
+          content = escapeHtml(cell.v || '');
+        }
+        const badge = (c === 0 && r === dataRow) ? '<span class="rowbadge"></span>' : '';
+        html += `<td class="${cls}" style="${style}"${sp} data-r="${r}" data-c="${c}">${badge}${content}</td>`;
+      }
+      html += '</tr>';
+    }
+    t.innerHTML = html;
+
+    t.querySelectorAll('td.cell').forEach(td => {
+      const r = +td.dataset.r, c = +td.dataset.c;
+      // คลิกธรรมดา = เลือกช่องเดียว · Shift+คลิก = ขยายเป็นช่วง (anchor อยู่กับที่)
+      td.onclick = e => {
+        if (editing) return;
+        selectCell(r, c, e.shiftKey);
+        // เปิด Format Painter อยู่ → คลิกที่ไหนคือทารูปแบบลงที่นั่น
+        // (Shift+คลิกคลุมช่วงก่อนแล้วปล่อย จะทาทั้งช่วงในทีเดียว)
+        if (painter) paintRange();
+      };
+      td.ondblclick = () => startEdit(r, c);          // ดับเบิลคลิก = พิมพ์ในเซลล์
+      td.addEventListener('dragover', e => { e.preventDefault(); td.classList.add('drop'); });
+      td.addEventListener('dragleave', () => td.classList.remove('drop'));
+      td.addEventListener('drop', e => {
+        e.preventDefault(); td.classList.remove('drop');
+        if (dragFrom) {                        // ย้ายข้อความจากเซลล์เดิมมาเซลล์นี้
+          const src = grid[dragFrom.r][dragFrom.c];
+          if (dragFrom.r !== r || dragFrom.c !== c) {
+            const key = src.hdr || src.spec || src.f;
+            if (key) {
+              // ย้ายทั้งบล็อกไปพร้อมกัน — หัวตาราง/สเปก/ข้อมูล ต้องเรียงตัวกัน
+              // เสมอ ไม่งั้นรายงานจะพิมพ์ข้อมูลผิดคอลัมน์
+              if (!moveFieldBlock(key, r, c, dragFrom.dr, dragFrom.dc)) { dragFrom = null; renderGrid(); return; }
+            } else {
+              const dst = grid[r][c];
+              dst.v = src.v; dst.f = ''; dst.hdr = '';
+              src.v = '';
+            }
+          }
+          dragFrom = null;
+        } else if (dragField) {
+          if (!dropField(r, c, dragField)) { dragField = null; renderGrid(); return; }
+          dragField = null;
+        } else return;
+        selectCell(r, c);
+        renderPalette();                       // อัปเดตชิปที่ใช้ไปแล้วในแผงซ้าย
+      });
+    });
+
+    // dropdown บนเซลล์ — กันไม่ให้คลิกทะลุไปเลือกเซลล์/เริ่มลากทั้งสองแบบ
+    t.querySelectorAll('select.vsel').forEach(sel => {
+      const isFmt = !!sel.dataset.fsel;
+      const [r, c] = (sel.dataset.vsel || sel.dataset.fsel).split('-').map(Number);
+      sel.onmousedown = e => e.stopPropagation();
+      sel.onclick     = e => e.stopPropagation();
+      sel.onchange    = e => {
+        if (isFmt) { grid[r][c].fmt = e.target.value; syncFmtHeader(grid[r][c].f); }
+        else       grid[r][c].vsel = e.target.value;
+        selectCell(r, c);          // ให้แถบเครื่องมือสะท้อนรูปแบบของค่าที่เพิ่งเลือก
+        renderGrid();
+      };
+    });
+
+    // ข้อความในเซลล์ (ข้อมูล/หัวตาราง/สเปก) — ลากย้ายหรือลากออกได้
+    // จับตรงไหนก็ได้ในบล็อก แล้วบล็อกทั้งก้อนย้ายตามโดยรักษาระยะที่จับไว้
+    t.querySelectorAll('.tok[data-tok], .tok[data-hdr], .tok[data-spec]').forEach(el => {
+      el.addEventListener('dragstart', e => {
+        const src = el.dataset.tok || el.dataset.hdr || el.dataset.spec;
+        const [r, c] = src.split('-').map(Number);
+        const cell = grid[r][c];
+        const owner = ownerOf(cell.hdr || cell.spec || cell.f);
+        const o = findCell(x => x.hdr === owner);          // มุมบนซ้ายของบล็อก
+        dragFrom = { r, c, dr: o ? r - o.r : 0, dc: o ? c - o.c : 0 };
+        dragField = null;                   // กันค่าค้างจากการลากครั้งก่อน
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', src);
+        setChipDragImage(e, el);
+        e.stopPropagation();
+      });
+      el.addEventListener('dragend', () => { dragFrom = null; });
+    });
+
+    // โฟกัสช่องกรอกทันทีที่เข้าโหมดพิมพ์
+    const inp = t.querySelector('.cellinput');
+    if (inp) {
+      inp.focus(); inp.select();
+      inp.onkeydown = e => {
+        if (e.key === 'Enter')  { e.preventDefault(); commitEdit(inp.value); if (editing === null && focusCell.r < nRows - 1) selectCell(focusCell.r + 1, focusCell.c); }
+        if (e.key === 'Escape') { e.preventDefault(); editing = null; renderGrid(); }
+        if (e.key === 'Tab')    { e.preventDefault(); commitEdit(inp.value); if (focusCell.c < nCols - 1) selectCell(focusCell.r, focusCell.c + 1); }
+      };
+      inp.onblur = () => { if (editing) commitEdit(inp.value); };
+    }
+
+    syncToolbar();
+  }
+
+  // ── พิมพ์ในเซลล์ ────────────────────────────────────────────────────
+  // เก็บ f/hdr เดิมไว้ใน editing แทนที่จะล้างทิ้งทันที — ถ้าล้างตั้งแต่เริ่มพิมพ์
+  // ตอน commit จะไม่รู้แล้วว่าเซลล์นี้เคยผูกกับฟิลด์ไหน ทำให้เซลล์คู่ของมัน
+  // (หัวตาราง/ข้อมูล) ค้างเป็นเศษอยู่ในตารางโดยที่ผู้ใช้ไม่ได้สั่งลบ
+  function startEdit(r, c, initial = null) {
+    anchor = focusCell = { r, c };
+    const cell = grid[r][c];
+    editing = { r, c, prevF: cell.f || cell.spec, prevHdr: cell.hdr, seed: initial };
+    renderGrid();
+  }
+
+  function commitEdit(val) {
+    if (!editing) return;
+    const { r, c, prevF, prevHdr } = editing;
+    const cell = grid[r][c];
+    editing = null;
+
+    if (prevF) {
+      // เคยเป็นช่องข้อมูล/สเปก — พิมพ์ทับ = เอาฟิลด์นั้นออกทั้งบล็อก
+      cell.f = ''; cell.spec = '';
+      removeField(prevF);
+      cell.v = val;
+    } else if (prevHdr) {
+      // เคยเป็นหัวตาราง — เปลี่ยนข้อความได้โดยไม่ตัดความผูกพันกับฟิลด์
+      // แต่ถ้าลบจนว่าง ถือว่าเอาออก (ข้อมูลคู่ของมันหายตามไปด้วย)
+      if (!val.trim()) removeField(prevHdr);
+      else { cell.v = val; cell.hdr = prevHdr; }
+    } else {
+      cell.v = val;
+    }
+    renderGrid(); renderPalette();
+  }
+
+
+  // ── ลากช่องข้อมูลจากแผงซ้ายมาวาง ─────────────────────────────────────
+  // ลาก 1 ครั้งได้ 2 เซลล์ที่ผูกกัน: หัวตารางตรงที่วาง + ข้อมูลในช่อง "ใต้" มัน
+  // (วางที่ A1 → ข้อมูลลง A2) ถ้าวางแถวสุดท้ายจะต่อแถวใหม่ให้อัตโนมัติ
+  function dropField(r, c, key) {
+    if (usedFields().has(key)) { toast(`"${labelOf(key)}" ถูกวางไปแล้ว`); return false; }
+    return placeFieldBlock(key, r, c, headerOf(key));
+  }
+
+  function selectCell(r, c, extend = false) {
+    focusCell = { r, c };
+    if (!extend) anchor = { r, c };
+    const g = range();
+    const many = g.r1 !== g.r2 || g.c1 !== g.c2;
+    document.getElementById('namebox').textContent = many
+      ? `${colName(g.c1)}${g.r1 + 1}:${colName(g.c2)}${g.r2 + 1}`
+      : `${colName(c)}${r + 1}`;
+    const cell = grid[r][c];
+    document.getElementById('formula').value = cell.f ? dataLabel(cell.f) : (cell.v || '');
+    renderGrid();
+  }
+
+  const cur = () => grid[focusCell.r][focusCell.c];
+
+  // ── แถบเครื่องมือ ───────────────────────────────────────────────────
+  function bindToolbar() {
+    // ปุ่มจัดรูปแบบมีผลกับ "ทุกเซลล์ในช่วงที่เลือก" ไม่ใช่แค่ช่องเดียว
+    // ปุ่มสลับ (B/I/U/wrap) ดูสถานะจากเซลล์ focus เป็นตัวตั้ง แล้วตั้งค่าเดียวกัน
+    // ให้ทั้งช่วง — ไม่งั้นกดทีเดียวแล้วบางช่องหนาบางช่องไม่หนา
+    const apply = fn => { selectedCells().forEach(c => fn(styleOf(c))); renderGrid(); };
+    const toggle = key => {
+      const next = !styleOf(cur())[key];
+      selectedCells().forEach(c => styleOf(c)[key] = next);
+      renderGrid();
+    };
+
+    document.getElementById('t-font').onchange = e => apply(s => s.font = e.target.value);
+    // ขนาดอักษรที่มีให้เลือก — ปุ่ม A▲/A▼ ไล่ไปตามรายการนี้เหมือน Excel
+    // (ไม่ใช่ +1/-1 ทีละหน่วย ไม่งั้นค่าจะหลุดออกนอกรายการใน dropdown)
+    const SIZES = [...document.getElementById('t-size').options].map(o => +o.value);
+    const stepSize = (cur, dir) => {
+      const i = SIZES.findIndex(s => dir > 0 ? s > cur : s >= cur);
+      if (dir > 0) return i === -1 ? SIZES[SIZES.length - 1] : SIZES[i];
+      return i <= 0 ? SIZES[0] : SIZES[i - 1];
+    };
+    document.getElementById('t-size').onchange = e => apply(s => s.size = +e.target.value);
+    document.getElementById('t-size-up').onclick   = () => apply(s => s.size = stepSize(s.size || 11,  1));
+    document.getElementById('t-size-down').onclick = () => apply(s => s.size = stepSize(s.size || 11, -1));
+    document.getElementById('t-bold').onclick      = () => toggle('bold');
+    document.getElementById('t-italic').onclick    = () => toggle('italic');
+    document.getElementById('t-underline').onclick = () => toggle('underline');
+
+    // ── จานสีแบบ Excel ──────────────────────────────────────────────────
+    // แต่ละคอลัมน์ = สีหลัก 1 สี + เฉดอ่อน/เข้ม 5 ระดับ (ชุดเดียวกับ Office)
+    const THEME_COLORS = [
+      ['#FFFFFF', '#F2F2F2', '#D9D9D9', '#BFBFBF', '#A6A6A6', '#808080'],
+      ['#000000', '#808080', '#595959', '#404040', '#262626', '#0D0D0D'],
+      ['#E7E6E6', '#D0CECE', '#AEAAAA', '#757171', '#3B3838', '#161616'],
+      ['#44546A', '#D6DCE4', '#ADB9CA', '#8496B0', '#333F4F', '#222A35'],
+      ['#4472C4', '#D9E2F3', '#B4C6E7', '#8EAADB', '#2F5597', '#1F3864'],
+      ['#ED7D31', '#FBE5D5', '#F7CBAC', '#F4B183', '#C55A11', '#833C0B'],
+      ['#A5A5A5', '#EDEDED', '#DBDBDB', '#C9C9C9', '#7B7B7B', '#525252'],
+      ['#FFC000', '#FFF2CC', '#FFE699', '#FFD966', '#BF9000', '#7F6000'],
+      ['#5B9BD5', '#DDEBF6', '#BDD7EE', '#9DC3E6', '#2E75B5', '#1F4E79'],
+      ['#70AD47', '#E2EFD9', '#C5E0B3', '#A8D08D', '#538135', '#375623'],
+    ];
+    const STANDARD_COLORS = ['#C00000', '#FF0000', '#FFC000', '#FFFF00', '#92D050',
+                             '#00B050', '#00B0F0', '#0070C0', '#002060', '#7030A0'];
+
+    const swHTML = hex => `<button class="sw" data-c="${hex}" style="background:${hex}" title="${hex}"></button>`;
+
+    // สร้างเนื้อในของจานสี — kind: 'fill' (มี No Fill) หรือ 'color' (มี Automatic)
+    function colorPanelHTML(kind) {
+      const base  = THEME_COLORS.map(col => swHTML(col[0])).join('');
+      const tints = [1, 2, 3, 4, 5].map(i => THEME_COLORS.map(col => swHTML(col[i])).join('')).join('');
+      const top = kind === 'color'
+        ? `<div class="crow" data-c="__auto"><span class="box" style="background:#000"></span>Automatic</div><hr>`
+        : '';
+      const bottom = kind === 'fill'
+        ? `<hr><div class="crow" data-c="__none"><span class="box" style="background:#fff"></span>No Fill</div>`
+        : '';
+      return top +
+        `<div class="cpl">Theme Colors</div>` +
+        `<div class="cgrid">${base}</div><div class="cgrid tint">${tints}</div>` +
+        `<div class="cpl" style="margin-top:.55rem">Standard Colors</div>` +
+        `<div class="cgrid">${STANDARD_COLORS.map(swHTML).join('')}</div>` +
+        bottom +
+        `<hr><div class="crow" data-c="__more"><span class="box" style="background:linear-gradient(135deg,#e74c3c,#f1c40f,#2ecc71,#3498db)"></span>More Colors…</div>`;
+    }
+
+    const fillPicker  = document.getElementById('t-fill-color');
+    const colorPicker = document.getElementById('t-font-color');
+
+    // ปิดจานสีทุกใบ (ใช้ตอนเปิดใบอื่นหรือคลิกที่ว่าง)
+    const closePanels = () => document.querySelectorAll('.cpanel.open').forEach(p => p.classList.remove('open'));
+
+    // ผูกปุ่มสี 1 ชุด: ตัวปุ่มหลัก = ใช้สีล่าสุด, ลูกศร = เปิดจานสี
+    function wireColorButton({ kind, mainId, arrowId, panelId, swatchId, picker, setStyle }) {
+      const panel = document.getElementById(panelId);
+      const swatch = document.getElementById(swatchId);
+      panel.innerHTML = colorPanelHTML(kind);
+
+      // จำสีล่าสุดไว้ที่แถบใต้ปุ่ม แล้วลงสีให้เซลล์ที่เลือกอยู่
+      const use = hex => {
+        if (hex) swatch.style.background = hex;
+        apply(s => setStyle(s, hex));
+      };
+
+      document.getElementById(mainId).onclick = () => use(picker.value);
+      document.getElementById(arrowId).onclick = e => {
+        e.stopPropagation();
+        const wasOpen = panel.classList.contains('open');
+        closePanels();
+        if (!wasOpen) panel.classList.add('open');
+      };
+      panel.onclick = e => {
+        const el = e.target.closest('[data-c]');
+        if (!el) return;
+        const v = el.dataset.c;
+        closePanels();
+        if (v === '__more') { picker.click(); return; }          // เปิด color picker ของเบราว์เซอร์
+        if (v === '__none' || v === '__auto') { use(null); return; } // ล้างสีกลับเป็นค่าเริ่มต้น
+        picker.value = v;
+        use(v);
+      };
+      picker.oninput = e => use(e.target.value);
+    }
+
+    wireColorButton({
+      kind: 'fill', mainId: 't-fill', arrowId: 't-fill-arrow', panelId: 'cp-fill',
+      swatchId: 'sw-fill', picker: fillPicker,
+      setStyle: (s, hex) => { if (hex) s.fill = hex; else delete s.fill; },
+    });
+    wireColorButton({
+      kind: 'color', mainId: 't-color', arrowId: 't-color-arrow', panelId: 'cp-color',
+      swatchId: 'sw-color', picker: colorPicker,
+      setStyle: (s, hex) => { if (hex) s.color = hex; else delete s.color; },
+    });
+    document.addEventListener('click', closePanels);
+
+    document.querySelectorAll('[data-align]').forEach(b =>
+      b.onclick = () => apply(s => s.align = b.dataset.align));
+    document.querySelectorAll('[data-valign]').forEach(b =>
+      b.onclick = () => apply(s => s.valign = b.dataset.valign));
+    document.getElementById('t-indent-inc').onclick = () => apply(s => s.indent = Math.min(6, (s.indent || 0) + 1));
+    document.getElementById('t-indent-dec').onclick = () => apply(s => s.indent = Math.max(0, (s.indent || 0) - 1));
+
+    document.getElementById('t-merge').onclick = mergeCells;
+    document.getElementById('t-painter').onclick = togglePainter;
+
+    // แทรก/ลบ แถวและคอลัมน์ — อ้างตำแหน่งจากช่องที่เลือกอยู่ (focusCell)
+    document.getElementById('t-col-left').onclick  = () => insertCol(focusCell.c);
+    document.getElementById('t-col-right').onclick = () => insertCol(focusCell.c + 1);
+    document.getElementById('t-col-del').onclick   = () => deleteCol(focusCell.c);
+    document.getElementById('t-row-up').onclick    = () => insertRow(focusCell.r);
+    document.getElementById('t-row-down').onclick  = () => insertRow(focusCell.r + 1);
+    document.getElementById('t-row-del').onclick   = () => deleteRow(focusCell.r);
+
+    // แถบ fx — พิมพ์ข้อความลงเซลล์ที่เลือกอยู่
+    const fx = document.getElementById('formula');
+    fx.oninput = () => { cur().v = fx.value; cur().f = ''; };
+    fx.onkeydown = e => {
+      if (e.key === 'Enter') { e.preventDefault(); renderGrid(); if (focusCell.r < nRows - 1) selectCell(focusCell.r + 1, focusCell.c); }
+    };
+    fx.onblur = renderGrid;
+
+    // ลากข้อความออกไปทิ้งที่แผงซ้าย = เอาฟิลด์นั้นออก "ทั้งคู่"
+    // (ลากหัวตารางออก ข้อมูลก็หายด้วย และกลับกัน) แล้วชิปในแผงกลับมาลากได้อีก
+    const palette = document.getElementById('palette');
+    palette.addEventListener('dragover', e => { if (dragFrom) e.preventDefault(); });
+    palette.addEventListener('drop', e => {
+      if (!dragFrom) return;
+      e.preventDefault();
+      const src = grid[dragFrom.r][dragFrom.c];
+      const key = src.f || src.hdr;
+      if (key) { removeField(key); toast(`เอา "${labelOf(key)}" ออกแล้ว`); }
+      else { src.v = ''; }
+      dragFrom = null;
+      renderGrid(); renderPalette();
+    });
+
+    // ── คีย์ลัดบนตาราง (เหมือน Excel) ─────────────────────────────────
+    document.addEventListener('keydown', e => {
+      // ไม่แย่งคีย์ตอนโฟกัสอยู่ในช่องกรอกอื่น (ชื่อเทมเพลต, fx, ช่องแก้เซลล์)
+      const tag = document.activeElement?.tagName;
+      if (editing || tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      if (document.getElementById('panel-editor').style.display === 'none') return;
+
+      if (e.key === 'Escape' && painter) { e.preventDefault(); setPainter(null); toast('เลิกใช้ Format Painter'); return; }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // ลบเฉพาะ "เนื้อหา" ของทุกเซลล์ในช่วง — สี/ตัวหนา/การผสาน ยังอยู่
+        // (พฤติกรรมเดียวกับกด Delete ใน Excel)
+        e.preventDefault();
+        const keys = new Set();
+        selectedCells().forEach(c => { [c.f, c.hdr, c.spec].forEach(k => { if (k) keys.add(k); }); });
+        keys.forEach(removeField);
+        selectedCells().forEach(c => { c.v = ''; });
+        renderGrid(); renderPalette();
+        return;
+      }
+      // ลูกศรเลื่อนช่อง — Shift ค้างไว้เพื่อขยายช่วง
+      const move = { ArrowUp: [-1, 0], ArrowDown: [1, 0], ArrowLeft: [0, -1], ArrowRight: [0, 1] }[e.key];
+      if (move) {
+        e.preventDefault();
+        const r = Math.max(0, Math.min(nRows - 1, focusCell.r + move[0]));
+        const c = Math.max(0, Math.min(nCols - 1, focusCell.c + move[1]));
+        selectCell(r, c, e.shiftKey);
+        return;
+      }
+      if (e.key === 'F2' || e.key === 'Enter') { e.preventDefault(); startEdit(focusCell.r, focusCell.c); return; }
+      // พิมพ์ตัวอักษรทับได้เลยเหมือน Excel (ไม่ต้องดับเบิลคลิกก่อน)
+      if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        e.preventDefault();
+        startEdit(focusCell.r, focusCell.c, e.key);
+      }
+    });
+
+    document.getElementById('btn-cancel').onclick = backToWizard;
+    document.getElementById('btn-save').onclick   = saveTemplate;
+  }
+
+  // ปุ่มในแถบเครื่องมือติดสว่างตามรูปแบบของเซลล์ที่เลือกอยู่
+  function syncToolbar() {
+    const s = styleOf(cur()) || {};
+    const on = (id, v) => document.getElementById(id)?.classList.toggle('on', !!v);
+    on('t-bold', s.bold); on('t-italic', s.italic); on('t-underline', s.underline);
+    on('t-merge', !!cur().span);
+    document.querySelectorAll('[data-align]').forEach(b => b.classList.toggle('on', s.align === b.dataset.align));
+    document.querySelectorAll('[data-valign]').forEach(b => b.classList.toggle('on', s.valign === b.dataset.valign));
+    if (s.font) document.getElementById('t-font').value = s.font;
+    document.getElementById('t-size').value = s.size || 11;
+    // ⚠ ไม่แตะแถบสีใต้ปุ่มสีพื้น/สีอักษร — มันคือ "สีที่ใช้ล่าสุด" ไม่ใช่สีของ
+    // เซลล์ที่เลือกอยู่ (พฤติกรรมเดียวกับ Excel) เดิมเขียนทับด้วยสีของเซลล์
+    // ทำให้สีล่าสุดหายทุกครั้งที่คลิกเซลล์อื่น กดปุ่มซ้ำแล้วได้สีไม่ตรงที่คิด
+  }
+
+  // ── ผสานเซลล์ ───────────────────────────────────────────────────────
+  // ผสาน "ทั้งช่วงที่เลือกไว้" — คลิกช่องแรก แล้ว Shift+คลิกช่องสุดท้าย
+  // เพื่อคลุมหลายช่อง จากนั้นค่อยกด Merge & Center
+  // ถ้าเซลล์ที่เลือกอยู่ผสานไว้แล้ว กดซ้ำ = ยกเลิกการผสาน
+  // ── Format Painter ──────────────────────────────────────────────────
+  // กดปุ่ม → คัดลอกรูปแบบของช่องที่เลือกไว้ → คลิก (หรือ Shift+คลิกคลุมช่วง)
+  // ที่ช่องอื่นเพื่อทาทับ → กดปุ่มซ้ำหรือ Esc เพื่อเลิก
+  //
+  // ทาแต่ "รูปแบบ" เท่านั้น (ฟอนต์/ขนาด/หนา/เอียง/สี/จัดวาง/ย่อหน้า) ไม่แตะ
+  // เนื้อหา ไม่แตะการผสาน และไม่แตะความผูกพันกับช่องข้อมูล — ไม่งั้นทาทีเดียว
+  // ผังพังหมด ต่างจาก Excel ที่ทา merge ไปด้วย แต่ที่นี่การผสานผูกกับโครงรายงาน
+  let painter = null;              // สำเนารูปแบบที่คัดไว้ (null = ไม่ได้เปิดใช้)
+
+  function togglePainter() {
+    if (painter) { setPainter(null); return; }
+    // เก็บสำเนาลึก กันไม่ให้แก้รูปแบบต้นฉบับทีหลังแล้วสิ่งที่ทาไปเปลี่ยนตาม
+    setPainter({ ...styleOf(cur()) });
+    toast('คัดลอกรูปแบบแล้ว — คลิกช่องที่ต้องการทา (Esc เพื่อเลิก)');
+  }
+
+  function setPainter(v) {
+    painter = v;
+    document.getElementById('t-painter').classList.toggle('armed', !!painter);
+    document.querySelector('.sheet').classList.toggle('painting', !!painter);
+  }
+
+  /** ทารูปแบบที่คัดไว้ลงทุกช่องในช่วงที่เลือก — คืน false ถ้ายังไม่ได้คัดอะไร */
+  function paintRange() {
+    if (!painter) return false;
+    selectedCells().forEach(c => {
+      const target = styleOf(c);
+      // ล้างของเดิมทิ้งก่อนแล้วทาทับ ไม่ใช่ merge เข้าไป — ไม่งั้นสีเก่าที่
+      // ปลายทางมีแต่ต้นฉบับไม่มี จะค้างอยู่ ผลลัพธ์ไม่เหมือนต้นฉบับ
+      Object.keys(target).forEach(k => delete target[k]);
+      Object.assign(target, painter);
+    });
+    renderGrid();
+    return true;
+  }
+
+  /** ยกเลิกการผสานของทุกเซลล์ในช่วงที่เลือก
+      ไม่มีปุ่มของตัวเองแล้ว — ถูกเรียกจากปุ่ม Merge ตอนที่ช่องที่เลือกผสานอยู่
+      (กด Merge ซ้ำที่ก้อนเดิม = ยกเลิกการผสาน) */
+  function unmergeCells() {
+    const g = range();
+    let count = 0;
+    for (let r = g.r1; r <= g.r2; r++)
+      for (let c = g.c1; c <= g.c2; c++) {
+        if (grid[r][c].span) { unspan(r, c); count++; }
+      }
+    if (!count) { toast('ช่องที่เลือกไม่มีการผสานอยู่'); return; }
+    renderGrid();
+    toast(`ยกเลิกการผสานแล้ว ${count} จุด`);
+  }
+
+  function mergeCells() {
+    const c = cur();
+    if (c.span) { unmergeCells(); return; }   // กดซ้ำที่ก้อนเดิม = ยกเลิก (เหมือนเดิม)
+
+    const g = range();
+    if (g.r1 === g.r2 && g.c1 === g.c2) {
+      toast('เลือกช่วงก่อน — คลิกช่องแรก แล้ว Shift+คลิกช่องสุดท้าย');
+      return;
+    }
+    // ห้ามผสานทับบล็อกที่ผสานไว้แล้ว ไม่งั้นเซลล์ที่ซ่อนอยู่จะกู้กลับไม่ได้
+    for (let r = g.r1; r <= g.r2; r++)
+      for (let cc = g.c1; cc <= g.c2; cc++) {
+        const cell = grid[r][cc];
+        if (cell.hidden || (cell.span && !(r === g.r1 && cc === g.c1))) {
+          toast('ในช่วงที่เลือกมีเซลล์ที่ผสานไว้แล้ว — ยกเลิกการผสานเดิมก่อน');
+          return;
+        }
+      }
+
+    // เนื้อหาของทุกช่องในช่วงถูกยุบมาไว้ที่ช่องบนซ้าย (เหมือน Excel ที่เก็บ
+    // เฉพาะค่าซ้ายบน) แต่เราเตือนก่อนถ้ามีข้อมูลในช่องอื่นจะได้ไม่หายเงียบๆ
+    const top = grid[g.r1][g.c1];
+    const others = [];
+    for (let r = g.r1; r <= g.r2; r++)
+      for (let cc = g.c1; cc <= g.c2; cc++)
+        if (!(r === g.r1 && cc === g.c1) && hasContent(grid[r][cc])) others.push(grid[r][cc]);
+    if (others.length && !confirm(`ในช่วงที่เลือกมีข้อมูลอยู่ ${others.length} ช่อง — ผสานแล้วจะเหลือเฉพาะช่องซ้ายบน ดำเนินการต่อไหม?`)) return;
+
+    for (let r = g.r1; r <= g.r2; r++)
+      for (let cc = g.c1; cc <= g.c2; cc++) {
+        if (r === g.r1 && cc === g.c1) continue;
+        grid[r][cc].hidden = true;
+        grid[r][cc].f = ''; grid[r][cc].v = '';
+      }
+    top.span = { r: g.r2 - g.r1 + 1, c: g.c2 - g.c1 + 1 };
+    top.s.align = 'center';
+    top.s.valign = 'middle';
+    anchor = focusCell = { r: g.r1, c: g.c1 };
+    renderGrid();
+  }
+
+  // ── แทรก/ลบ คอลัมน์และแถว ───────────────────────────────────────────
+  function colMenu(c) {
+    anchor = focusCell = { r: focusCell.r, c };
+    const a = prompt(`คอลัมน์ ${colName(c)}\n\n1 = แทรกทางซ้าย\n2 = แทรกทางขวา\n3 = ลบคอลัมน์นี้\n\nพิมพ์เลขแล้วกด OK`);
+    if (a === '1') insertCol(c);
+    else if (a === '2') insertCol(c + 1);
+    else if (a === '3') deleteCol(c);
+    else renderGrid();
+  }
+  function rowMenu(r) {
+    anchor = focusCell = { r, c: focusCell.c };
+    const a = prompt(`แถวที่ ${r + 1}\n\n1 = แทรกด้านบน\n2 = แทรกด้านล่าง\n3 = ลบแถวนี้\n4 = ตั้งเป็นแถวข้อมูล\n\nพิมพ์เลขแล้วกด OK`);
+    if (a === '1') insertRow(r);
+    else if (a === '2') insertRow(r + 1);
+    else if (a === '3') deleteRow(r);
+    else if (a === '4') { dataRow = r; renderGrid(); }
+    else renderGrid();
+  }
+
+  function insertCol(at) {
+    grid.forEach(row => row.splice(at, 0, blank()));
+    nCols++; renderGrid();
+  }
+  function deleteCol(at) {
+    if (nCols <= 1) { toast('ต้องเหลืออย่างน้อย 1 คอลัมน์'); return; }
+    grid.forEach(row => row.splice(at, 1));
+    nCols--;
+    if (focusCell.c >= nCols) anchor = focusCell = { r: focusCell.r, c: nCols - 1 };
+    renderGrid();
+  }
+  function insertRow(at) {
+    grid.splice(at, 0, Array.from({ length: nCols }, blank));
+    nRows++; if (at <= dataRow) dataRow++;      // แถวข้อมูลเลื่อนตาม
+    renderGrid();
+  }
+  function deleteRow(at) {
+    if (nRows <= 1) { toast('ต้องเหลืออย่างน้อย 1 แถว'); return; }
+    grid.splice(at, 1); nRows--;
+    if (at < dataRow) dataRow--;
+    else if (at === dataRow) dataRow = Math.min(dataRow, nRows - 1);
+    if (focusCell.r >= nRows) anchor = focusCell = { r: nRows - 1, c: focusCell.c };
+    renderGrid();
+  }
+
+  // ── บันทึก ──────────────────────────────────────────────────────────
+  async function saveTemplate() {
+    const name = document.getElementById('tpl-name').value.trim();
+    if (!name) { toast('ตั้งชื่อเทมเพลตก่อน'); return; }
+    const used = grid.flat().some(c => c.f);
+    if (!used) { toast('ยังไม่ได้ลากช่องข้อมูลลงในเซลล์เลย'); return; }
+
+    const body = JSON.stringify({
+      name, kind: FORMAT,          // 'pdf' หรือ 'excel' — แยกลิสต์กันคนละรูปแบบ
+      layout: { nRows, nCols, dataRow, groupBy, grid },
+    });
+    // ตัวที่ถูกล็อกไว้ → สร้างเป็นตัวใหม่เสมอ ไม่ยิง PATCH ไปให้โดนปฏิเสธ
+    const r = (editingId != null && !lockedDefault)
+      ? await fetch(`${API}/api/export/templates/${editingId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body })
+      : await fetch(`${API}/api/export/templates`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
+    if (!r.ok) { toast(await errText(r, 'บันทึกไม่สำเร็จ')); return; }
+    toast('บันทึกแล้ว'); backToWizard();
+  }
+
+  // ── Plumbing ────────────────────────────────────────────────────────
+  let toastTimer = null;
+</script>
+</body>
+</html>
