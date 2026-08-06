@@ -94,6 +94,21 @@ def _within_tolerance(value: float, nominal: float, upper_tol: float, lower_tol:
     return (nominal - lower_tol - _TOL_EPS) <= value <= (nominal + upper_tol + _TOL_EPS)
 
 
+def _offset_ok(offset: Optional[float], offset_tol: Optional[float]) -> bool:
+    """offset ผ่านเกณฑ์ไหม — เทียบกับ offset_tol ของ part_number
+
+    ต่างจาก value_x/value_y ที่เทียบกับช่วง nominal ± tolerance — offset เป็น
+    "ค่าความเยื้อง" ที่ยิ่งน้อยยิ่งดี จึงเทียบแค่ว่าไม่เกินเพดานที่ตั้งไว้
+    ใช้ abs() เผื่อ TM-X ส่งค่าติดลบมา (เยื้องคนละทิศก็ถือว่าเยื้องเท่ากัน)
+
+    ถ้ายังไม่ได้ตั้ง offset_tol (NULL) ถือว่า "ไม่ตรวจข้อนี้" → ผ่านเสมอ
+    ไม่งั้น Part เก่าที่ยังไม่ได้กรอกค่านี้จะกลายเป็น NG ทั้งหมดทันทีที่ deploy
+    """
+    if offset is None or offset_tol is None:
+        return True
+    return abs(offset) <= offset_tol + _TOL_EPS
+
+
 def _thai_date_str(dt: Optional[datetime] = None) -> str:
     """คืนวันที่รูปแบบ DD-MM-YYYY โดยปีเป็น พ.ศ. (ค.ศ. + 543) เช่น 22-07-2569
     ใช้ตั้งชื่อโฟลเดอร์/ไฟล์รูปภาพแบบแยกตามวันที่ (ดู upload_measurement_image)
@@ -1209,7 +1224,7 @@ async def list_all_part_numbers():
             cur.execute(
                 "SELECT pn.part_number_id, pn.part_number_name, ps.package_size, "
                 "h.handler_name AS handler, pn.nominal_x, pn.nominal_y, "
-                "pn.upper_tol, pn.lower_tol "
+                "pn.upper_tol, pn.lower_tol, pn.offset_tol "
                 "FROM part_number pn "
                 "JOIN package_size ps ON pn.package_size_id = ps.package_size_id "
                 "JOIN handler h       ON pn.handler_id = h.handler_id "
@@ -1470,6 +1485,8 @@ class PartNumberCreate(BaseModel):
     nominal_y:        float
     upper_tol:        float
     lower_tol:        float
+    # มี default 0 เพื่อให้ payload เก่าที่ยังไม่ส่ง offset_tol มา ยัง POST ผ่านได้
+    offset_tol:       float = 0
 
 
 class PartNumberUpdate(BaseModel):
@@ -1480,6 +1497,7 @@ class PartNumberUpdate(BaseModel):
     nominal_y:        Optional[float] = None
     upper_tol:        Optional[float] = None
     lower_tol:        Optional[float] = None
+    offset_tol:       Optional[float] = None
 
 
 @app.post("/api/part-numbers", status_code=201)
@@ -1494,11 +1512,13 @@ async def create_part_number(body: PartNumberCreate):
             try:
                 cur.execute(
                     "INSERT INTO part_number "
-                    "(part_number_name, package_size_id, handler_id, nominal_x, nominal_y, upper_tol, lower_tol) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    "(part_number_name, package_size_id, handler_id, nominal_x, nominal_y, "
+                    " upper_tol, lower_tol, offset_tol) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         body.part_number_name, package_size_id, handler_id,
                         body.nominal_x, body.nominal_y, body.upper_tol, body.lower_tol,
+                        body.offset_tol,
                     ),
                 )
             except pymysql.MySQLError as exc:
@@ -1525,7 +1545,7 @@ async def update_part_number(part_number_id: int, body: PartNumberUpdate):
                 handler_id = _lookup_id(cur, "handler", "handler_id", "handler_name", body.handler)
                 set_parts.append("handler_id = %s")
                 values.append(handler_id)
-            for field_name in ("nominal_x", "nominal_y", "upper_tol", "lower_tol"):
+            for field_name in ("nominal_x", "nominal_y", "upper_tol", "lower_tol", "offset_tol"):
                 value = getattr(body, field_name)
                 if value is not None:
                     set_parts.append(f"{field_name} = %s")
@@ -1578,6 +1598,7 @@ PARTS_SELECT = """
            pn.nominal_y     AS nominal_y,
            pn.upper_tol     AS upper_tol,
            pn.lower_tol     AS lower_tol,
+           pn.offset_tol    AS offset_tol,
            t.template_name  AS template_name
     FROM parts_specifications p
     LEFT JOIN part_number pn  ON p.part_number_id = pn.part_number_id
@@ -1974,6 +1995,9 @@ class MeasurementCreate(BaseModel):
     number_alpl: int
     value_x:     float
     value_y:     float
+    # ค่าที่ 3 จากไฟล์ .txt ของ TM-X (+0000.003) — ความเยื้องของชิ้นงาน
+    # default 0 เพื่อให้สคริปต์เก่าที่ยังไม่ส่งฟิลด์นี้มา ยัง POST ผ่านได้เหมือนเดิม
+    offset:      float = 0
     note:        Optional[str] = None
     # UUID ที่ Agent สร้างขึ้นต่อการวัด 1 ครั้ง (uuid4) — ส่งมาด้วยทุกครั้งที่มา
     # จาก agent.py (ไม่มีถ้าเป็น manual add จาก edit.html) ใช้กัน insert ซ้ำ
@@ -2164,7 +2188,7 @@ async def create_measurement(req: MeasurementCreate):
             # ตัวเดียวใช้ร่วมกันทั้งแกน X/Y (upper_tol/lower_tol) เก็บอยู่ที่
             # part_number (ไม่ใช่ package_size อีกต่อไป — ดู init.sql)
             cur.execute(
-                "SELECT pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol "
+                "SELECT pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol, pn.offset_tol "
                 "FROM parts_specifications p "
                 "JOIN part_number pn ON p.part_number_id = pn.part_number_id "
                 "WHERE p.number_alpl = %s",
@@ -2177,7 +2201,9 @@ async def create_measurement(req: MeasurementCreate):
             # เช็ค OK/NG — tolerance ตัวเดียวใช้ร่วมกันทั้งแกน X และ Y
             ok_x = _within_tolerance(req.value_x, part["nominal_x"], part["upper_tol"], part["lower_tol"])
             ok_y = _within_tolerance(req.value_y, part["nominal_y"], part["upper_tol"], part["lower_tol"])
-            result = "OK" if (ok_x and ok_y) else "NG"
+            ok_offset = _offset_ok(req.offset, part.get("offset_tol"))
+            # ตกข้อใดข้อหนึ่งใน 3 ข้อ = NG (ต้องผ่านครบทั้งหมดถึงจะ OK)
+            result = "OK" if (ok_x and ok_y and ok_offset) else "NG"
 
             # resolve ชื่อ operator (จาก dropdown) เป็น operator_id ก่อน insert —
             # measurements.operator_id เป็น FK ไป operator table แล้ว (เดิมเป็น
@@ -2190,9 +2216,11 @@ async def create_measurement(req: MeasurementCreate):
             try:
                 cur.execute(
                     "INSERT INTO measurements "
-                    "(session_id, number_alpl, value_x, value_y, result, measure_type, operator_id, note, client_uuid) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (session_id, number_alpl, req.value_x, req.value_y, result, measure_type, operator_id, note, req.client_uuid),
+                    "(session_id, number_alpl, value_x, value_y, `offset`, result, "
+                    " measure_type, operator_id, note, client_uuid) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (session_id, number_alpl, req.value_x, req.value_y, req.offset, result,
+                     measure_type, operator_id, note, req.client_uuid),
                 )
             except pymysql.IntegrityError:
                 # race เล็กๆ ที่ทฤษฎีมีได้: สอง request ที่มี client_uuid เดียวกัน
@@ -2239,6 +2267,24 @@ async def create_measurement(req: MeasurementCreate):
 
         # Auto-complete session เมื่อถึง target_count แล้ว — เฉพาะ session จริง
         # ของ Agent เท่านั้น (manual session จบในตัวเองไปแล้วตั้งแต่ insert)
+        #
+        # ⚠️ ห้ามใส่ `await` ระหว่าง UPDATE measured_count ข้างบน (ราวบรรทัด 2239)
+        # กับ UPDATE state='stopped' ข้างล่าง — มีคนพึ่งพาช่วงนี้อยู่:
+        #   send_command.py บน Pi poll GET /api/session/state เพื่อรอให้
+        #   measured_count ขยับ พอครบ target มันจะหลุด loop เข้า finally แล้วอ่าน
+        #   state อีกครั้ง ถ้าเจอ 'running' จะยิง POST /api/session/stop
+        #   (ดูบล็อก "ปิด session ที่ค้าง running" ท้าย command_flow)
+        # ตอนนี้ autocommit=True ทำให้ measured_count ถูก commit ทันที แต่ Pi ยัง
+        # อ่านค่าคาบเกี่ยวไม่ได้ เพราะ handler นี้เป็น async def ที่เรียก pymysql
+        # (sync ล้วน ไม่ยอมคืน control) → event loop สลับไปเสิร์ฟ
+        # /api/session/state ระหว่างสอง UPDATE นี้ไม่ได้ Pi จึงเห็นทั้งคู่พร้อมกัน
+        # เสมอ ไม่มีทางยิง stop ทับ session ที่กำลังจะปิดตัวเองอยู่พอดี
+        #
+        # การรับประกันนี้จะหายไปทันทีถ้า: ย้ายไป async DB driver, ยัด DB call ลง
+        # threadpool, เปลี่ยน endpoint นี้เป็น `def` ธรรมดา (FastAPI จะโยนเข้า
+        # threadpool ให้รันขนานได้), หรือรัน uvicorn หลาย worker
+        # → ถ้าทำอย่างใดอย่างหนึ่ง ต้องรวมสอง UPDATE นี้เป็น transaction เดียว
+        #   หรือให้ stop_session เช็ค state ก่อน UPDATE แทน
         status = "complete" if is_manual else "continue"
         if not is_manual and measured >= target:
             with db.cursor() as cur:
@@ -2276,8 +2322,11 @@ async def create_measurement(req: MeasurementCreate):
                     # รวมอย่างเดียว ค่าพวกนี้จึงต้องส่งมาทาง event ตอนวัดเสร็จ
                     # ส่วนตอน refresh หน้าเว็บ frontend คำนวณเองจาก nominal/tol
                     # ที่ /api/measurements แนบมาให้ — ดู MEASUREMENTS_SELECT)
+                    "offset":         req.offset,
+                    "offset_tol":     part.get("offset_tol"),
                     "ok_x":           ok_x,
                     "ok_y":           ok_y,
+                    "ok_offset":      ok_offset,
                     "nominal_x":      part["nominal_x"],
                     "nominal_y":      part["nominal_y"],
                     "upper_tol":      part["upper_tol"],
@@ -2364,7 +2413,8 @@ async def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(..
             # คำนวณ OK/NG ใหม่จากค่า value_x/value_y/number_alpl "ปัจจุบัน" ของ row
             # นี้เสมอ (หลัง update) — ครอบคลุมทั้งกรณีแก้ ALPL, แก้ value, หรือแก้แค่ note
             cur.execute(
-                "SELECT m.value_x, m.value_y, pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol "
+                "SELECT m.value_x, m.value_y, m.`offset`, "
+                "pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol, pn.offset_tol "
                 "FROM measurements m "
                 "JOIN parts_specifications p ON m.number_alpl = p.number_alpl "
                 "JOIN part_number pn ON p.part_number_id = pn.part_number_id "
@@ -2379,7 +2429,8 @@ async def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(..
                 )
             ok_x = _within_tolerance(row["value_x"], row["nominal_x"], row["upper_tol"], row["lower_tol"])
             ok_y = _within_tolerance(row["value_y"], row["nominal_y"], row["upper_tol"], row["lower_tol"])
-            new_result = "OK" if (ok_x and ok_y) else "NG"
+            ok_offset = _offset_ok(row.get("offset"), row.get("offset_tol"))
+            new_result = "OK" if (ok_x and ok_y and ok_offset) else "NG"
             cur.execute(
                 "UPDATE measurements SET result = %s WHERE measurement_id = %s",
                 (new_result, measurement_id),
@@ -2615,9 +2666,11 @@ async def get_image_url(measurement_id: int):
 # dynamic จากค่าที่ผู้ใช้ส่งมา จึงไม่มีช่องให้ SQL injection เลย)
 EXPORT_SELECT = """
     SELECT m.measurement_id, m.session_id, m.number_alpl, m.value_x, m.value_y,
+           m.`offset` AS `offset`,
            m.result, m.note, m.measure_type, m.timestamp,
            op.operator_name,
            pn.part_number_name, pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol,
+           pn.offset_tol,
            h.handler_name, ps.package_size, t.template_name,
            v.vendor_name, o.owner_name,
            p.po_number, p.description, p.recieve_date
@@ -2745,6 +2798,14 @@ EXPORT_COLUMNS: Dict[str, Dict[str, Any]] = {
     "value_y":       {"label": "Value Y",       "group": "ข้อมูลการวัด", "scope": "csv",
                       "values": ["OK", "NG"], "state": lambda r: _axis_state(r, "y"),
                       "get": lambda r: _fmt_num(r["value_y"])},
+    # offset ไม่ได้เทียบกับช่วง nominal ± tol เหมือน X/Y แต่เทียบกับเพดาน
+    # offset_tol ตัวเดียว จึงมี state เป็นของตัวเองไม่ใช้ _axis_state
+    "offset":        {"label": "Offset",        "group": "ข้อมูลการวัด", "scope": "csv",
+                      "values": ["OK", "NG"],
+                      "state": lambda r: (
+                          "" if r.get("offset") is None or r.get("offset_tol") is None
+                          else ("OK" if _offset_ok(r.get("offset"), r.get("offset_tol")) else "NG")),
+                      "get": lambda r: _fmt_num(r.get("offset"))},
     # ── บล็อก Tolerance (รายงานเท่านั้น) ────────────────────────────────
     # ลากครั้งเดียวได้ผังกว้าง 2 คอลัมน์ สูง 3 แถว:
     #   แถว 1  [        Tolerance        ]   ผสาน 2 คอลัมน์ — หัวตาราง
@@ -3565,6 +3626,7 @@ async def export_preview(
 @app.get("/api/export/csv")
 async def export_csv(
     export_template_id: Optional[int] = None,
+    filename: Optional[str] = None,
     filters: Dict[str, Any] = Depends(export_filters_dep),
 ):
     """Export ประวัติ measurement (พร้อม filter) เป็นไฟล์ CSV ให้ดาวน์โหลด
@@ -3604,7 +3666,12 @@ async def export_csv(
     buf.seek(0)
 
     # ชื่อไฟล์ใส่วันที่ให้ด้วย — ดาวน์โหลดหลายรอบจะได้ไม่ทับกันใน Downloads
-    fname = f"measurements_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
+    # ชื่อไฟล์ที่ผู้ใช้กรอกในหน้า Export มาก่อน — ถ้าไม่ส่งมาค่อยตั้งชื่อตามเวลาให้
+    # กรองตัวอักษรที่ใช้ในชื่อไฟล์ Windows ไม่ได้ออกอีกชั้น (ฝั่งหน้าเว็บกรองแล้ว
+    # แต่ endpoint นี้เรียกตรงจาก URL ได้ จึงต้องกันเองด้วย ไม่เชื่อ input จากข้างนอก)
+    safe_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", (filename or "")).strip(". ")
+    fname = (f"{safe_name}.csv" if safe_name
+             else f"measurements_{datetime.now().strftime('%Y%m%d_%H%M')}.csv")
     return StreamingResponse(
         iter(["﻿" + buf.getvalue()]),
         media_type="text/csv; charset=utf-8",

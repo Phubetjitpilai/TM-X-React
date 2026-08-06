@@ -91,6 +91,99 @@ function mediaUrl(u) {
   return API + (u.startsWith('/') ? u : '/' + u);
 }
 
+/* ── กล่องยืนยัน/แจ้งเตือนกลาง ────────────────────────────────────────────
+   ใช้แทน confirm()/alert() ของเบราว์เซอร์ทุกจุด เพราะกล่องของเบราว์เซอร์:
+     - หน้าตาไม่เข้ากับหน้าเว็บเลย (ขึ้นว่า "127.0.0.1:8000 says" นำหน้าเสมอ)
+     - จัดรูปแบบข้อความไม่ได้ ตัวหนา/ขึ้นบรรทัดใหม่ทำไม่ได้
+     - บล็อกทั้งหน้าจอ ทำให้ SSE/timer ที่รันอยู่หยุดค้างไปด้วย
+     - บางเบราว์เซอร์ให้ผู้ใช้ติ๊ก "ไม่ต้องแสดงอีก" แล้วกล่องจะหายไปเลย
+
+   สร้าง element ครั้งแรกที่เรียกแล้วใช้ซ้ำ — หน้าไหนก็เรียกได้โดยไม่ต้องมี
+   markup ของตัวเอง (ดูสไตล์ที่ shared.css) */
+let _dialogEl = null;
+
+function _ensureDialog() {
+  if (_dialogEl) return _dialogEl;
+  _dialogEl = document.createElement('div');
+  _dialogEl.className = 'ui-dialog-overlay';
+  _dialogEl.innerHTML =
+    '<div class="ui-dialog-box">' +
+      '<div class="ui-dialog-title"></div>' +
+      '<div class="ui-dialog-msg"></div>' +
+      '<div class="ui-dialog-actions">' +
+        '<button type="button" class="ui-dialog-cancel"></button>' +
+        '<button type="button" class="ui-dialog-ok"></button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(_dialogEl);
+  return _dialogEl;
+}
+
+/**
+ * กล่องยืนยัน — คืน Promise<boolean>
+ *
+ * @param {string} message  ข้อความ (ใส่ HTML ได้ · ผู้เรียกต้อง escape เอง)
+ * @param {object} [opts]   { title, okLabel, cancelLabel, danger }
+ */
+function uiConfirm(message, opts = {}) {
+  const { title = 'ยืนยันการดำเนินการ', okLabel = 'ตกลง',
+          cancelLabel = 'ยกเลิก', danger = false } = opts;
+  const el = _ensureDialog();
+  el.querySelector('.ui-dialog-title').textContent = title;
+  el.querySelector('.ui-dialog-msg').innerHTML     = message;
+  const ok     = el.querySelector('.ui-dialog-ok');
+  const cancel = el.querySelector('.ui-dialog-cancel');
+  ok.textContent     = okLabel;
+  ok.className       = 'ui-dialog-ok' + (danger ? ' danger' : '');
+  cancel.textContent = cancelLabel;
+  cancel.style.display = '';
+  el.classList.add('open');
+
+  return new Promise(resolve => {
+    const done = v => {
+      el.classList.remove('open');
+      ok.onclick = cancel.onclick = el.onclick = null;
+      document.removeEventListener('keydown', onKey);
+      resolve(v);
+    };
+    // Esc = ยกเลิก · คลิกพื้นหลัง = ยกเลิก — ให้เหมือนพฤติกรรมที่คนคุ้นเคย
+    const onKey = e => { if (e.key === 'Escape') done(false); };
+    document.addEventListener('keydown', onKey);
+    el.onclick = e => { if (e.target === el) done(false); };
+    ok.onclick     = () => done(true);
+    cancel.onclick = () => done(false);
+    ok.focus();
+  });
+}
+
+/** กล่องแจ้งเตือน (ปุ่มเดียว) — คืน Promise ที่ resolve เมื่อผู้ใช้กดรับทราบ */
+function uiAlert(message, opts = {}) {
+  const { title = 'แจ้งเตือน', okLabel = 'รับทราบ' } = opts;
+  const el = _ensureDialog();
+  el.querySelector('.ui-dialog-title').textContent = title;
+  el.querySelector('.ui-dialog-msg').innerHTML     = message;
+  const ok     = el.querySelector('.ui-dialog-ok');
+  const cancel = el.querySelector('.ui-dialog-cancel');
+  ok.textContent = okLabel;
+  ok.className   = 'ui-dialog-ok';
+  cancel.style.display = 'none';     // แจ้งเตือนเฉยๆ ไม่มีอะไรให้ยกเลิก
+  el.classList.add('open');
+
+  return new Promise(resolve => {
+    const done = () => {
+      el.classList.remove('open');
+      ok.onclick = el.onclick = null;
+      document.removeEventListener('keydown', onKey);
+      resolve();
+    };
+    const onKey = e => { if (e.key === 'Escape' || e.key === 'Enter') done(); };
+    document.addEventListener('keydown', onKey);
+    el.onclick = e => { if (e.target === el) done(); };
+    ok.onclick = done;
+    ok.focus();
+  });
+}
+
 /** กันข้อความจากผู้ใช้/DB ไปพังโครง HTML ตอนเอาไปต่อสตริง */
 function escapeHtml(text) {
   return String(text ?? '').replace(/[&<>"']/g, c => (

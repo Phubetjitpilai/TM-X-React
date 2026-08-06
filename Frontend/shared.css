@@ -217,3 +217,56 @@ select:focus, input:focus, textarea:focus {
   white-space: nowrap;
 }
 .toast-action:hover { background: rgba(255, 255, 255, .16); }
+
+/* ── กล่องยืนยัน/แจ้งเตือนกลาง (uiConfirm / uiAlert ใน shared.js) ─────────
+   z-index สูงกว่า modal อื่นในระบบ (200) เพราะต้องเด้งทับได้ เช่นยืนยันลบ
+   ขณะที่ modal แก้ข้อมูลเปิดค้างอยู่ */
+.ui-dialog-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .5);
+  z-index: 400;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.ui-dialog-overlay.open { display: flex; }
+.ui-dialog-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem 1.1rem;
+  width: 100%;
+  max-width: 460px;
+}
+.ui-dialog-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.6rem;
+}
+.ui-dialog-msg {
+  font-size: 0.88rem;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-line;     /* ให้ \n ในข้อความขึ้นบรรทัดใหม่ได้เหมือน confirm() เดิม */
+  margin-bottom: 1.25rem;
+}
+.ui-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+.ui-dialog-actions button {
+  padding: 0.45rem 1.1rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ui-dialog-cancel { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.ui-dialog-cancel:hover { background: var(--surface2); }
+.ui-dialog-ok { background: var(--accent); border: 1px solid var(--accent); color: #fff; }
+.ui-dialog-ok:hover { filter: brightness(0.93); }
+.ui-dialog-ok.danger { background: var(--ng); border-color: var(--ng); }

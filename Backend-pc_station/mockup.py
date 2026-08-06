@@ -96,7 +96,17 @@ def random_value(nominal, upper_tol, lower_tol, force_ng):
     return round(random.uniform(nominal - lower_tol * 0.85, nominal + upper_tol * 0.85), 3)
 
 
-def post_measurement(session_id, number_alpl, value_x, value_y):
+def random_offset():
+    """สุ่มค่า offset (ความเยื้อง) 0.000 – 0.030 ตามที่กำหนด
+
+    ไม่ผูกกับ force_ng เหมือน value_x/value_y โดยตั้งใจ — offset เป็นเกณฑ์อิสระ
+    ที่เทียบกับ offset_tol ของ part_number ถ้า offset_tol ตั้งไว้ต่ำกว่า 0.030
+    ค่าที่สุ่มได้บางส่วนจะทำให้ NG เองตามธรรมชาติ ซึ่งเป็นสิ่งที่อยากทดสอบพอดี
+    """
+    return round(random.uniform(0.0, 0.030), 3)
+
+
+def post_measurement(session_id, number_alpl, value_x, value_y, offset):
     """ส่งผลวัด 1 ชิ้นไปที่ Backend (POST /api/measurements)
 
     number_alpl ที่ส่งไปเป็นแค่ค่า fallback — Backend จะเพิกเฉยแล้วใช้ ALPL ตาม
@@ -109,6 +119,7 @@ def post_measurement(session_id, number_alpl, value_x, value_y):
         "number_alpl": number_alpl,
         "value_x":     value_x,
         "value_y":     value_y,
+        "offset":      offset,
         "client_uuid": str(uuid.uuid4()),
     }
     try:
@@ -196,10 +207,11 @@ def measurement_flow(session_id, template_name, number_alpl, target_count):
         force_ng = random.random() < NG_RATE
         value_x = random_value(spec["nominal_x"], spec["upper_tol"], spec["lower_tol"], force_ng)
         value_y = random_value(spec["nominal_y"], spec["upper_tol"], spec["lower_tol"], force_ng)
+        offset  = random_offset()
 
-        print(f"\n🔍 ชิ้นที่ {piece}/{target_count} — สุ่มได้ X={value_x}  Y={value_y}"
+        print(f"\n🔍 ชิ้นที่ {piece}/{target_count} — สุ่มได้ X={value_x}  Y={value_y}  offset={offset}"
               f"{'  (จงใจให้ NG)' if force_ng else ''}")
-        post_measurement(session_id, number_alpl, value_x, value_y)
+        post_measurement(session_id, number_alpl, value_x, value_y, offset)
         piece += 1
 
     is_running = False

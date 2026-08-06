@@ -1204,7 +1204,7 @@
     toast(`ยกเลิกการผสานแล้ว ${count} จุด`);
   }
 
-  function mergeCells() {
+  async function mergeCells() {
     const c = cur();
     if (c.span) { unmergeCells(); return; }   // กดซ้ำที่ก้อนเดิม = ยกเลิก (เหมือนเดิม)
 
@@ -1230,7 +1230,10 @@
     for (let r = g.r1; r <= g.r2; r++)
       for (let cc = g.c1; cc <= g.c2; cc++)
         if (!(r === g.r1 && cc === g.c1) && hasContent(grid[r][cc])) others.push(grid[r][cc]);
-    if (others.length && !confirm(`ในช่วงที่เลือกมีข้อมูลอยู่ ${others.length} ช่อง — ผสานแล้วจะเหลือเฉพาะช่องซ้ายบน ดำเนินการต่อไหม?`)) return;
+    if (others.length && !await uiConfirm(
+        `ในช่วงที่เลือกมีข้อมูลอยู่ <strong>${others.length} ช่อง</strong><br>` +
+        `ผสานแล้วจะเหลือเฉพาะช่องซ้ายบน ข้อมูลช่องอื่นจะหายไป`,
+        { title: 'ผสานช่อง', okLabel: 'ผสาน', danger: true })) return;
 
     for (let r = g.r1; r <= g.r2; r++)
       for (let cc = g.c1; cc <= g.c2; cc++) {

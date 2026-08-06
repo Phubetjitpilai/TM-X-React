@@ -72,6 +72,7 @@ CREATE TABLE part_number (
   nominal_y        FLOAT NOT NULL,
   upper_tol        FLOAT NOT NULL,
   lower_tol        FLOAT NOT NULL,
+  offset_tol       FLOAT NOT NULL,
   FOREIGN KEY (package_size_id) REFERENCES package_size(package_size_id),
   FOREIGN KEY (handler_id)      REFERENCES handler(handler_id)
 );
@@ -127,6 +128,10 @@ CREATE TABLE measurements (
   number_alpl    INT          NOT NULL,
   value_x        FLOAT        NOT NULL,
   value_y        FLOAT        NOT NULL,
+  -- ⚠ ต้องมี backtick ครอบเสมอ — OFFSET เป็น reserved keyword ของ MySQL 8
+  --   (ใช้กับ LIMIT ... OFFSET) เขียนเปล่าๆ จะได้ ERROR 1064 ตั้งแต่ CREATE TABLE
+  --   ทุก query ที่อ้างคอลัมน์นี้ก็ต้องใส่ backtick เหมือนกัน
+  `offset`       FLOAT        NOT NULL DEFAULT 0,
   result         VARCHAR(10)  NOT NULL,
   note           TEXT,
   operator_id    INT          NOT NULL,

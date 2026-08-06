@@ -262,9 +262,22 @@
     tr:last-child td { border-bottom: none; }
     .empty { text-align: center; color: var(--muted); padding: 2rem; font-size: 0.85rem; }
 
-    .actions { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 1.1rem; flex-wrap: wrap; }
+    .actions { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 1.1rem; flex-wrap: wrap; align-items: flex-end; }
     .btn-primary { background: var(--accent); color: #fff; }
     .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--muted); }
+    /* ปุ่มที่กดไม่ได้ต้องดู "กดไม่ได้" จริงๆ ไม่ใช่แค่ไม่ตอบสนอง — ไม่งั้นผู้ใช้
+       จะกดซ้ำแล้วคิดว่าเว็บค้าง */
+    .btn-primary:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
+
+    /* ── ช่องชื่อไฟล์ ─────────────────────────────────────────────────── */
+    .fname-group { flex: 1; min-width: 240px; }
+    .fname-label { display: block; font-size: 0.72rem; color: var(--muted); margin-bottom: 0.25rem; }
+    .fname-label .req { color: var(--ng); }
+    .fname-row { display: flex; align-items: center; gap: 0.4rem; }
+    .fname-row input { flex: 1; min-width: 0; }
+    .fname-ext { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+    .fname-hint { font-size: 0.72rem; color: var(--muted); text-align: right; margin-top: 0.35rem; }
+    .fname-hint.warn { color: var(--ng); }
 
     /* ── Modal (สร้าง/แก้ Template) ───────────────────────────────────── */
     .overlay {
@@ -403,8 +416,18 @@
 
       <div class="actions">
         <button class="btn-ghost" id="btn-back-1">← เปลี่ยน Template</button>
-        <button class="btn-primary" id="btn-download">⤓ ดาวน์โหลด CSV</button>
+        <!-- ช่องชื่อไฟล์วางติดกับปุ่มโดยตั้งใจ — ถ้าไปวางบนสุดของขั้นที่ 3 จะมี
+             ตัวกรองกับตัวอย่างข้อมูลยาวๆ คั่น พอเลื่อนลงมาถึงปุ่มก็ลืมไปแล้ว -->
+        <div class="fname-group">
+          <label class="fname-label" for="f-filename">ชื่อไฟล์ <span class="req">*</span></label>
+          <div class="fname-row">
+            <input type="text" id="f-filename" placeholder="เช่น IPM-Report-2026-08" autocomplete="off" />
+            <span class="fname-ext" id="f-filename-ext">.csv</span>
+          </div>
+        </div>
+        <button class="btn-primary" id="btn-download" disabled>⤓ ดาวน์โหลด CSV</button>
       </div>
+      <div class="fname-hint" id="f-filename-hint">กรอกชื่อไฟล์ก่อนถึงจะกดดาวน์โหลดได้</div>
     </section>
   </div>
 </main>
@@ -452,6 +475,10 @@
   const FORMATS = { csv: 'CSV', pdf: 'PDF', excel: 'Excel' };
   const FMT_LABEL = FORMATS[FORMAT] || 'CSV';
   const TPL_KIND  = FORMAT;          // csv / pdf / excel — แยกลิสต์กันคนละชนิด
+  // นามสกุลไฟล์ตามรูปแบบที่เปิดอยู่ — โชว์ข้างช่องกรอก ผู้ใช้ไม่ต้องพิมพ์เอง
+  const FILE_EXT  = { csv: '.csv', pdf: '.pdf', excel: '.xlsx' }[FORMAT] || '.csv';
+  // จำชื่อไฟล์ล่าสุดแยกตามรูปแบบ — export ซ้ำด้วยชื่อเดิมได้โดยไม่ต้องพิมพ์ใหม่
+  const FNAME_KEY = `tmx_export_filename_${FORMAT}`;
   let selectedTplId = null;
   let editingTplId  = null;    // null = โหมดสร้างใหม่
   let draftColumns  = [];      // ลำดับคอลัมน์ที่กำลังแก้อยู่ใน modal
@@ -612,7 +639,8 @@
   }
 
   async function deleteTemplate(id, name) {
-    if (!confirm(`ลบ Template "${name}" ใช่ไหม?`)) return;
+    if (!await uiConfirm(`ลบ Template <strong>"${escapeHtml(name)}"</strong>`,
+                         { title: 'ลบ Template', okLabel: '🗑 ลบ', danger: true })) return;
     try {
       const r = await fetch(`${API}/api/export/templates/${id}`, { method: 'DELETE' });
       if (!r.ok) { showToast(await errText(r, 'ลบไม่สำเร็จ')); return; }
@@ -908,6 +936,61 @@
 
   let reportData = null;
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // ชื่อไฟล์
+  // ══════════════════════════════════════════════════════════════════════════
+  // ⚠ ต้องกรองตัวอักษรที่ Windows ห้ามใช้ในชื่อไฟล์ออก — ถ้าปล่อยผ่านไป
+  //   เบราว์เซอร์จะเซฟไฟล์ไม่ได้หรือเปลี่ยนชื่อให้เองเงียบๆ แล้วผู้ใช้จะหาไฟล์ไม่เจอ
+  //   \ / : * ? " < > |  ห้ามทั้งหมด · จุดกับเว้นวรรคท้ายชื่อก็ห้าม (Explorer ตัดทิ้ง)
+  const _BAD_FNAME_CHARS = /[\\/:*?"<>|\x00-\x1f]/g;
+
+  function sanitizeFilename(raw) {
+    return String(raw || '').replace(_BAD_FNAME_CHARS, '').replace(/[. ]+$/, '').trim();
+  }
+
+  /** ชื่อไฟล์ที่ผู้ใช้กรอก (ยังไม่รวมนามสกุล) — '' ถ้ายังไม่ได้กรอก */
+  function currentFilename() {
+    return sanitizeFilename(document.getElementById('f-filename')?.value);
+  }
+
+  /** เปิด/ปิดปุ่มดาวน์โหลดตามว่ากรอกชื่อไฟล์แล้วหรือยัง */
+  function refreshFilenameState() {
+    const input = document.getElementById('f-filename');
+    const btn   = document.getElementById('btn-download');
+    const hint  = document.getElementById('f-filename-hint');
+    if (!input || !btn) return;
+
+    // กรองตัวอักษรต้องห้ามทันทีขณะพิมพ์ พร้อมคงตำแหน่งเคอร์เซอร์ไว้ ไม่ให้เด้งไปท้ายช่อง
+    const cleaned = input.value.replace(_BAD_FNAME_CHARS, '');
+    if (cleaned !== input.value) {
+      const pos = Math.max(0, input.selectionStart - (input.value.length - cleaned.length));
+      input.value = cleaned;
+      input.setSelectionRange(pos, pos);
+      hint.textContent = 'ตัวอักษร \\ / : * ? " < > | ใช้ในชื่อไฟล์ไม่ได้';
+      hint.className = 'fname-hint warn';
+      setTimeout(refreshFilenameState, 2500);
+      btn.disabled = !currentFilename();
+      return;
+    }
+
+    const name = currentFilename();
+    btn.disabled = !name;
+    hint.className = 'fname-hint';
+    hint.textContent = name ? `จะได้ไฟล์ชื่อ ${name}${FILE_EXT}`
+                            : 'กรอกชื่อไฟล์ก่อนถึงจะกดดาวน์โหลดได้';
+    if (name) { try { localStorage.setItem(FNAME_KEY, name); } catch (e) {} }
+  }
+
+  function initFilenameField() {
+    const input = document.getElementById('f-filename');
+    const ext   = document.getElementById('f-filename-ext');
+    if (!input) return;
+    ext.textContent = FILE_EXT;
+    try { input.value = localStorage.getItem(FNAME_KEY) || ''; } catch (e) {}
+    input.addEventListener('input', refreshFilenameState);
+    refreshFilenameState();
+  }
+
   // ดาวน์โหลด Excel ผ่าน fetch แทนการเปลี่ยน location ตรงๆ — จะได้อ่านข้อความ
   // error จาก backend มาโชว์เป็น toast ได้ (เช่นตอนข้อมูลเกินเพดานของรายงาน)
   // ถ้าเปลี่ยน location เลย ผู้ใช้จะเจอหน้า error ดิบๆ ของเบราว์เซอร์แทน
@@ -919,8 +1002,8 @@
       const r = await fetch(`${API}/api/export/xlsx?${filterParams()}`);
       if (!r.ok) { showToast(await errText(r, 'สร้างไฟล์ไม่สำเร็จ')); cnt.innerHTML = prev; return; }
       const blob = await r.blob();
-      const name = (r.headers.get('Content-Disposition') || '').match(/filename=([^;]+)/)?.[1]?.trim()
-                   || 'report.xlsx';
+      // ชื่อจากผู้ใช้มาก่อนเสมอ — Content-Disposition ของ backend เป็นแค่ตัวสำรอง
+      const name = `${currentFilename()}${FILE_EXT}`;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url; a.download = name; a.click();
@@ -953,7 +1036,9 @@
       const root = document.getElementById('print-root');
       root.innerHTML = reportTableHtml(d);
       const restore = document.title;
-      document.title = d.template_name || 'report';   // เบราว์เซอร์ใช้เป็นชื่อไฟล์ PDF
+      // เบราว์เซอร์เอา document.title ไปเป็นชื่อไฟล์ที่เสนอในหน้าต่างพิมพ์
+      // (สั่งชื่อไฟล์ PDF ตรงๆ จากโค้ดไม่ได้ ต้องผ่านทางนี้ทางเดียว)
+      document.title = currentFilename() || d.template_name || 'report';
       window.print();
       document.title = restore;
       cnt.innerHTML = prev;
@@ -1009,6 +1094,7 @@
 
   // ── Plumbing ─────────────────────────────────────────────────────────
   function bindHandlers() {
+    initFilenameField();
     document.getElementById('btn-new-tpl').onclick = () => newTemplate();
     document.getElementById('btn-to-2').onclick    = () => gotoStep(2);
     document.getElementById('btn-back-1').onclick  = () => gotoStep(1);
@@ -1044,19 +1130,25 @@
       refreshPreview();
     };
 
-    document.getElementById('btn-download').onclick = () => {
+    document.getElementById('btn-download').onclick = async () => {
       // ไม่ได้กรองอะไรเลย = กำลังจะดึงข้อมูลทั้งระบบ — ถามยืนยันก่อน กันเผลอกด
       // แล้วได้ไฟล์ใหญ่เกินคาด (โดยเฉพาะตอนติ๊ก "เฉพาะล่าสุด" ออกด้วย)
       if (!hasAnyFilter()) {
         const scope = document.getElementById('f-latest').checked
           ? 'การวัดล่าสุดของทุก ALPL'
           : 'ประวัติการวัดทั้งหมดทุกครั้ง';
-        if (!confirm(`ยังไม่ได้ตั้งตัวกรองไว้เลย\n\nต้องการ Export ${scope} จำนวน ${previewTotal.toLocaleString()} แถว ใช่หรือไม่?`)) return;
+        const okExport = await uiConfirm(
+          `<strong>ยังไม่ได้ตั้งตัวกรองไว้เลย</strong><br><br>` +
+          `กำลังจะ Export ${escapeHtml(scope)}<br>` +
+          `จำนวน <strong>${previewTotal.toLocaleString()} แถว</strong>`,
+          { title: 'ยืนยันการ Export', okLabel: 'Export' });
+        if (!okExport) return;
       }
       if (FORMAT === 'excel') { downloadXlsx(); return; }
       if (FORMAT === 'pdf')   { printReport(); return; }
       // ให้เบราว์เซอร์โหลดไฟล์ตรงๆ จาก endpoint (ได้ชื่อไฟล์จาก Content-Disposition)
-      window.location.href = `${API}/api/export/csv?${filterParams()}`;
+      window.location.href =
+        `${API}/api/export/csv?${filterParams()}&filename=${encodeURIComponent(currentFilename())}`;
     };
   }
 

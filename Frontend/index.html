@@ -282,6 +282,9 @@
     .telemetry-cell .tc-value span { font-size: 0.8rem; color: var(--muted); font-weight: 400; }
     .telemetry-cell.x .tc-value { color: var(--accent); }
     .telemetry-cell.y .tc-value { color: var(--accent2); }
+    /* offset ใช้สีกลางๆ ให้ต่างจาก X (ฟ้า) และ Y (ม่วง) — มันไม่ใช่แกนวัด
+       แต่เป็นค่าความเยื้อง คนละชนิดกัน */
+    .telemetry-cell.offset .tc-value { color: var(--muted); }
 
     .telemetry-result-col {
       background: var(--surface2);
@@ -988,6 +991,17 @@
                 <div class="tc-value" id="telemetry-y">—<span> mm</span></div>
                 <div class="tc-range" id="telemetry-y-range"></div>
               </div>
+              <!-- Offset เทียบกับเพดาน offset_tol ของ part_number ตัวเดียว
+                   ไม่ใช่ช่วง nominal ± tol เหมือน X/Y — tc-range จึงขึ้นว่า
+                   "ไม่เกิน x.xxx" ไม่ใช่ช่วงตัวเลข 2 ฝั่ง -->
+              <div class="telemetry-cell offset">
+                <div class="tc-head">
+                  <span class="tc-label">Offset</span>
+                  <span class="tc-axis" id="telemetry-offset-axis"></span>
+                </div>
+                <div class="tc-value" id="telemetry-offset">—<span> mm</span></div>
+                <div class="tc-range" id="telemetry-offset-range"></div>
+              </div>
             </div>
             <div class="telemetry-result-col" id="telemetry-result-col">
               <div class="telemetry-result-label">Result</div>
@@ -1061,6 +1075,7 @@
                 <th>ALPL</th>
                 <th>Value X</th>
                 <th>Value Y</th>
+                <th>Offset</th>
                 <th>Result</th>
                 <th>Note</th>
                 <th>Operator</th>
@@ -1070,7 +1085,7 @@
               </tr>
             </thead>
             <tbody id="meas-body">
-              <tr><td colspan="11" style="text-align:center;color:var(--muted);padding:2rem">Loading…</td></tr>
+              <tr><td colspan="12" style="text-align:center;color:var(--muted);padding:2rem">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -1742,12 +1757,44 @@
     range.textContent = `รับได้ ${(nominal - lowerTol).toFixed(3)} – ${(nominal + upperTol).toFixed(3)}`;
   }
 
+  /** offset ผ่านเกณฑ์ไหม — ต้องตรงกับ _offset_ok ฝั่ง backend เป๊ะ */
+  function offsetOk(offset, offsetTol) {
+    if (offset == null || offsetTol == null) return null;   // ยังไม่ตั้งเกณฑ์ = ไม่ตรวจ
+    return Math.abs(offset) <= offsetTol + TOL_EPS;
+  }
+
+  /**
+   * เขียนค่า + ป้าย OK/NG ลงกล่อง Offset
+   *
+   * ต่างจาก renderAxisCell ตรงที่ offset ไม่มี nominal — เทียบกับเพดานตัวเดียว
+   * (offset_tol) ว่าเกินไหม ข้อความใต้ค่าจึงเป็น "ไม่เกิน x.xxx" ไม่ใช่ช่วง 2 ฝั่ง
+   */
+  function renderOffsetCell(offset, offsetTol, okFromEvent) {
+    const valEl  = document.getElementById('telemetry-offset');
+    const badge  = document.getElementById('telemetry-offset-axis');
+    const range  = document.getElementById('telemetry-offset-range');
+    if (!valEl || !badge || !range) return;
+
+    valEl.innerHTML = offset == null ? '—<span> mm</span>'
+                                     : `${Number(offset).toFixed(3)}<span> mm</span>`;
+    const ok = (okFromEvent != null) ? okFromEvent : offsetOk(offset, offsetTol);
+    if (ok == null) {
+      badge.textContent = ''; badge.className = 'tc-axis';
+      range.textContent = offsetTol == null ? 'ยังไม่ได้ตั้ง Offset Tol' : '';
+      return;
+    }
+    badge.textContent = ok ? 'OK' : 'NG';
+    badge.className   = `tc-axis ${ok ? 'ok' : 'ng'}`;
+    range.textContent = offsetTol == null ? '' : `ไม่เกิน ${Number(offsetTol).toFixed(3)}`;
+  }
+
   function updateTelemetry(d) {
     document.getElementById('telemetry-alpl-badge').textContent = `ALPL ${d.number_alpl ?? '—'}`;
     document.getElementById('telemetry-x').innerHTML = `${d.value_x.toFixed(3)}<span> mm</span>`;
     document.getElementById('telemetry-y').innerHTML = `${d.value_y.toFixed(3)}<span> mm</span>`;
     renderAxisCell('x', d.value_x, d.nominal_x, d.upper_tol, d.lower_tol, d.ok_x);
     renderAxisCell('y', d.value_y, d.nominal_y, d.upper_tol, d.lower_tol, d.ok_y);
+    renderOffsetCell(d.offset, d.offset_tol, d.ok_offset);
     const resultEl = document.getElementById('telemetry-result-value');
     const colEl    = document.getElementById('telemetry-result-col');
     const cls      = d.result === 'OK' ? 'ok' : 'ng';
@@ -1845,7 +1892,8 @@
     document.getElementById('telemetry-alpl-badge').textContent = 'ALPL —';
     document.getElementById('telemetry-x').innerHTML = '—<span> mm</span>';
     document.getElementById('telemetry-y').innerHTML = '—<span> mm</span>';
-    ['x', 'y'].forEach(a => {
+    document.getElementById('telemetry-offset').innerHTML = '—<span> mm</span>';
+    ['x', 'y', 'offset'].forEach(a => {
       const badge = document.getElementById(`telemetry-${a}-axis`);
       const range = document.getElementById(`telemetry-${a}-range`);
       if (badge) { badge.textContent = ''; badge.className = 'tc-axis'; }
@@ -2040,8 +2088,8 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: session.session_id }),
         });
-        if (!r.ok) alert(`สั่งวัดต่อไม่สำเร็จ: ${(await r.json().catch(() => ({}))).detail ?? r.status}`);
-      } catch (e) { alert(`Error: ${e.message}`); }
+        if (!r.ok) uiAlert(`สั่งวัดต่อไม่สำเร็จ: ${escapeHtml(String((await r.json().catch(() => ({}))).detail ?? r.status))}`);
+      } catch (e) { uiAlert(`เกิดข้อผิดพลาด: ${escapeHtml(e.message)}`); }
       return;
     }
     if (ipmQueue || newQueue || reworkQueue) startFromQueue();
@@ -2054,8 +2102,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: session.session_id }),
       });
-      if (!r.ok) alert(`พัก session ไม่สำเร็จ: ${(await r.json().catch(() => ({}))).detail ?? r.status}`);
-    } catch (e) { alert(`Error: ${e.message}`); }
+      if (!r.ok) uiAlert(`พัก session ไม่สำเร็จ: ${escapeHtml(String((await r.json().catch(() => ({}))).detail ?? r.status))}`);
+    } catch (e) { uiAlert(`เกิดข้อผิดพลาด: ${escapeHtml(e.message)}`); }
   };
 
   async function startFromQueue() {
@@ -2064,7 +2112,11 @@
     const list  = queue.list;
     const label = mode === 'ipm' ? 'IPM' : mode === 'new' ? 'New' : 'Rework';
 
-    if (!confirm(`เริ่ม session ด้วยคิว ${label} จำนวน ${list.length} ALPL (${list.join(', ')}) ใช่ไหม?`)) return;
+    const okStart = await uiConfirm(
+      `เริ่ม session ด้วยคิว <strong>${escapeHtml(label)}</strong><br>` +
+      `จำนวน <strong>${list.length} ALPL</strong> — ${escapeHtml(list.join(', '))}`,
+      { title: 'เริ่มการวัด', okLabel: '▶ เริ่มวัด' });
+    if (!okStart) return;
 
     const numberAlplStrList = list.map(n => String(n));
 
@@ -2135,7 +2187,7 @@
       refreshParts();
       // คิวยังคงค้างไว้ระหว่างวัด (ไม่เคลียร์ตรงนี้แล้ว)
       // จะเคลียร์เมื่อ session จบเท่านั้น (ผ่าน updateSession/clearAllQueuesAndForms)
-    } catch (e) { alert(`Error: ${e.message}`); }
+    } catch (e) { uiAlert(`เกิดข้อผิดพลาด: ${escapeHtml(e.message)}`); }
   }
 
   /** หยุด session — ใช้ร่วมกันระหว่างปุ่ม Stop กับ modal "ไม่ได้รับค่าการวัด"
@@ -2149,11 +2201,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: session.session_id }),
       });
-    } catch (e) { alert(`Error: ${e.message}`); }
+    } catch (e) { uiAlert(`เกิดข้อผิดพลาด: ${escapeHtml(e.message)}`); }
   }
 
   document.getElementById('btn-stop').onclick = async () => {
-    if (!confirm('Stop the current session?')) return;
+    if (!await uiConfirm('หยุด session ที่กำลังวัดอยู่ตอนนี้',
+                         { title: 'หยุดการวัด', okLabel: '■ หยุด', danger: true })) return;
     await stopSession();
   };
 
@@ -2236,13 +2289,13 @@
     }
 
     ENTRY_MODES.forEach(mode => {
-      modeBtns[mode].onclick = () => {
+      modeBtns[mode].onclick = async () => {
         if (modeBtns[mode].classList.contains('active')) return;
         // ถ้าโหมดอื่น (ที่ไม่ใช่ตัวที่กำลังจะสลับไป) มีข้อมูลค้างอยู่ในฟอร์ม —
         // ถามยืนยันก่อนทิ้งข้อมูลนั้น (เดิมเช็คแค่ "อีกฝั่งเดียว" พอมี 3 โหมด
         // ต้องเช็คทั้ง 2 โหมดที่เหลือ)
         const dirtyMode = ENTRY_MODES.find(m => m !== mode && formHasData(m));
-        if (dirtyMode && !confirmDiscard(modeLabels[mode], modeLabels[dirtyMode])) return;
+        if (dirtyMode && !await confirmDiscard(modeLabels[mode], modeLabels[dirtyMode])) return;
         ENTRY_MODES.filter(m => m !== mode).forEach(m => clearFormCompletely(m));
         switchEntryMode(mode);
         // เข้าโหมด IPM ต้องเช็คใหม่ว่า ALPL ที่ค้างอยู่ลงทะเบียนแล้วหรือยัง
@@ -2411,7 +2464,10 @@
   }
 
   function confirmDiscard(targetLabel, currentLabel) {
-    return confirm(`หากกด ${targetLabel} ข้อมูลที่กรอกไว้ในฟอร์ม ${currentLabel} จะหายไป ดำเนินการต่อหรือไม่?`);
+    return uiConfirm(
+      `หากเปลี่ยนไป <strong>${escapeHtml(targetLabel)}</strong> ` +
+      `ข้อมูลที่กรอกไว้ในฟอร์ม <strong>${escapeHtml(currentLabel)}</strong> จะหายไป`,
+      { title: 'เปลี่ยนโหมด', okLabel: 'เปลี่ยนโหมด', danger: true });
   }
 
   function clearFormCompletely(prefix) {
@@ -2979,13 +3035,22 @@
     return `<span class="${ok ? 'val-ok' : 'val-ng'}" title="รับได้ ${(nominal - lowerTol).toFixed(3)} – ${(nominal + upperTol).toFixed(3)}">${txt}</span>`;
   }
 
+  /** ช่อง Offset ในตาราง — เทียบกับเพดาน offset_tol ตัวเดียว ไม่ใช่ช่วง nominal±tol */
+  function offsetCell(v, offsetTol) {
+    if (v == null) return '';
+    const txt = Number(v).toFixed(3);
+    const ok = offsetOk(v, offsetTol);
+    if (ok == null) return txt;          // ยังไม่ได้ตั้งเกณฑ์ → แสดงเฉยๆ ไม่ระบายสี
+    return `<span class="${ok ? 'val-ok' : 'val-ng'}" title="ไม่เกิน ${Number(offsetTol).toFixed(3)}">${txt}</span>`;
+  }
+
   function renderTable(highlightId = null) {
     const rows = measurements;
     const tbody = document.getElementById('meas-body');
     renderMeasPagination();
     if (!rows.length) {
       const msg = (measFilterAlpl || measFilterDate) ? 'ไม่พบ Measurement ที่ตรงกับตัวกรอง' : 'No measurements';
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${msg}</td></tr>`;
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="12">${msg}</td></tr>`;
       return;
     }
     tbody.innerHTML = rows.map(m => {
@@ -2999,6 +3064,7 @@
         <td>${m.number_alpl}</td>
         <td>${valueCell(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol)}</td>
         <td>${valueCell(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol)}</td>
+        <td>${offsetCell(m.offset, m.offset_tol)}</td>
         <td><span class="result-badge ${cls}">${res}</span></td>
         <td>${m.note ?? ''}</td>
         <td>${m.operator_name ?? '—'}</td>
@@ -3051,7 +3117,7 @@
       const data = await r.json();
       document.getElementById('modal-img').src = mediaUrl(data.url);
       document.getElementById('modal').classList.add('open');
-    } catch (e) { alert('Image not available yet.'); }
+    } catch (e) { uiAlert('ยังไม่มีรูปของรายการนี้'); }
   }
 
   document.getElementById('modal-close').onclick = closeModal;

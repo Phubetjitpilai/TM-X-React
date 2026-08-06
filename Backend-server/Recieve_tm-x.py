@@ -26,8 +26,9 @@ Pi — Pi มีหน้าที่แค่รับคำสั่ง Start/
   +0005.047,+0005.045,+0000.003,26,07,31,17,28,42
   └─ x ──┘ └─ y ──┘ └─ z ──┘ └YY┘└MM┘└DD┘└HH┘└MM┘└SS┘
 
-  - คั่นด้วย comma 9 ช่อง เอาแค่ 2 ช่องแรกเป็น value_x / value_y
-  - ช่องที่ 3 (z) ยังไม่ได้ใช้กับอะไร เก็บไว้เผื่ออนาคต
+  - คั่นด้วย comma 9 ช่อง: ช่อง 1-2 = value_x / value_y · ช่อง 3 = offset
+  - offset ถูกส่งให้ backend ไปเทียบกับ offset_tol ของ part_number
+    (เกินเกณฑ์ = NG เหมือน value_x/value_y ที่หลุด tolerance)
   - 6 ช่องท้ายคือเวลาที่วัด — **ตรงกับเวลาในชื่อไฟล์รูปเป๊ะ** จึงใช้จับคู่
     "รูปใบนี้คู่กับค่าบรรทัดไหน" ได้แม่นกว่าการเดาจากลำดับที่ไฟล์มาถึง
   - ขึ้นบรรทัดใหม่ด้วย CR (\\r) ตัวเดียว ไม่ใช่ CRLF (Python อ่านได้อยู่แล้ว
@@ -163,12 +164,14 @@ def _is_error_value(v: float) -> bool:
 
 
 def _parse_measurement_line(line: str):
-    """แปลง 1 บรรทัดของไฟล์ผลวัด (.txt) → (value_x, value_y, ts_key)
+    """แปลง 1 บรรทัดของไฟล์ผลวัด (.txt) → (value_x, value_y, offset, ts_key)
 
     รูปแบบจริง 9 ช่อง: "+0005.047,+0005.045,+0000.003,26,07,31,17,28,42"
-    เอาแค่ 2 ช่องแรก ส่วน 6 ช่องท้ายประกอบเป็น ts_key "260731_172842" ไว้
-    จับคู่กับชื่อไฟล์รูป — คืน None ถ้ารูปแบบไม่ตรง (ไม่ throw เพราะไฟล์อาจมี
-    บรรทัดหัว/ท้ายแปลกๆ ปนมา ไม่ควรทำให้ทั้งไฟล์ใช้ไม่ได้)
+      ช่อง 1-2 = value_x / value_y
+      ช่อง 3   = offset (ความเยื้อง) — backend เอาไปเทียบกับ offset_tol ของ part_number
+      ช่อง 4-9 = เวลาที่วัด ประกอบเป็น ts_key "260731_172842" ไว้จับคู่กับชื่อไฟล์รูป
+    คืน None ถ้ารูปแบบไม่ตรง (ไม่ throw เพราะไฟล์อาจมีบรรทัดแปลกๆ ปนมา
+    ไม่ควรทำให้ทั้งไฟล์ใช้ไม่ได้)
     """
     parts = [p.strip() for p in line.strip().split(",")]
     if len(parts) < 2:
@@ -179,6 +182,14 @@ def _parse_measurement_line(line: str):
     except ValueError:
         return None
 
+    # ไฟล์รุ่นเก่า/ไฟล์ทดสอบที่มีแค่ 2 ช่อง ยังอ่านได้ — offset เป็น 0 ไปก่อน
+    offset = 0.0
+    if len(parts) >= 3:
+        try:
+            offset = float(parts[2])
+        except ValueError:
+            pass
+
     ts_key = None
     if len(parts) >= 9:
         try:
@@ -186,7 +197,7 @@ def _parse_measurement_line(line: str):
             ts_key = f"{yy:02d}{mm:02d}{dd:02d}_{hh:02d}{mi:02d}{ss:02d}"
         except ValueError:
             pass
-    return value_x, value_y, ts_key
+    return value_x, value_y, offset, ts_key
 
 
 def _read_lines(path: str):
@@ -219,8 +230,8 @@ def _find_measurement_for_image(ts_key: str, timeout: float = TXT_WAIT_TIMEOUT):
         for path in paths:
             for line in _read_lines(path):
                 parsed = _parse_measurement_line(line)
-                if parsed and parsed[2] == ts_key:
-                    return parsed[0], parsed[1]
+                if parsed and parsed[3] == ts_key:
+                    return parsed[0], parsed[1], parsed[2]
         if time.time() >= deadline:
             return None
         time.sleep(0.3)
@@ -238,7 +249,7 @@ def _fallback_last_line():
     if not lines:
         return None
     parsed = _parse_measurement_line(lines[-1])
-    return (parsed[0], parsed[1]) if parsed else None
+    return (parsed[0], parsed[1], parsed[2]) if parsed else None
 
 
 def get_current_session():
@@ -256,7 +267,7 @@ def get_current_session():
     return None, None
 
 
-def post_to_backend(session_id, number_alpl, value_x, value_y):
+def post_to_backend(session_id, number_alpl, value_x, value_y, offset):
     """POST ค่าเข้า backend — format ตรงตาม MeasurementCreate ใน main.py
     (number_alpl ตรงนี้ไม่จำเป็นต้องตรงเป๊ะ — session แบบคิว IPM/New/Rework
     ฝั่ง main.py จะเพิกเฉยค่านี้แล้วใช้ตำแหน่งปัจจุบันในคิวของตัวเองแทนอยู่แล้ว)
@@ -268,6 +279,7 @@ def post_to_backend(session_id, number_alpl, value_x, value_y):
             "number_alpl": number_alpl,
             "value_x":     value_x,
             "value_y":     value_y,
+            "offset":      offset,
             "client_uuid": str(uuid.uuid4()),
         },
         timeout=10,
@@ -418,11 +430,11 @@ def _handle_capture_inner(image_path, t_recv):
             _remove_quietly(image_path)
             return
 
-    value_x, value_y = pair
+    value_x, value_y, offset = pair
     t_txt = time.time()   # จับเวลาหลังได้ค่าคู่กับรูปแล้ว
 
     # ── ด่าน 2: ค่าที่วัดไม่ติด ──────────────────────────────────────────
-    if _is_error_value(value_x) or _is_error_value(value_y):
+    if _is_error_value(value_x) or _is_error_value(value_y) or _is_error_value(offset):
         print(f"⏭ {name}: TM-X วัดไม่ติด ({value_x}, {value_y}) — ข้าม ไม่บันทึกลง DB")
         _remove_quietly(image_path)
         return
@@ -436,9 +448,9 @@ def _handle_capture_inner(image_path, t_recv):
     t_session = time.time()
 
     # ── ด่าน 4: ส่งเข้า Backend ─────────────────────────────────────────
-    print(f"✅ {name}  ({size_mb:.1f} MB)  →  value_x={value_x}  value_y={value_y}")
+    print(f"✅ {name}  ({size_mb:.1f} MB)  →  value_x={value_x}  value_y={value_y}  offset={offset}")
     try:
-        resp = post_to_backend(session_id, number_alpl, value_x, value_y)
+        resp = post_to_backend(session_id, number_alpl, value_x, value_y, offset)
     except Exception as exc:
         print(f"   ⚠️ POST /api/measurements ไม่สำเร็จ: {exc} — เก็บรูปไว้ไม่ลบ")
         return
@@ -504,7 +516,8 @@ def _log_received_file(path: str, note: str = ""):
     elif _is_error_value(parsed[0]) or _is_error_value(parsed[1]):
         print(f"           ⏭ TM-X วัดไม่ติด ({parsed[0]}, {parsed[1]}) — โหมดจริงจะข้ามบรรทัดนี้")
     else:
-        print(f"           แปลงค่าได้: value_x={parsed[0]}  value_y={parsed[1]}  (เวลา {parsed[2]})")
+        print(f"           แปลงค่าได้: value_x={parsed[0]}  value_y={parsed[1]}  "
+              f"offset={parsed[2]}  (เวลา {parsed[3]})")
 
 
 class ReceiverFTPHandler(FTPHandler):

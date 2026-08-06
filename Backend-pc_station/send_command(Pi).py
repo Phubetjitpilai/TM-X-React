@@ -12,18 +12,20 @@ Flow:
   1. รับคำสั่ง Start + template จาก Backend ผ่าน POST /command
   2. ต่อ TM-X → ส่ง R0 (reset) → โหลดโปรแกรมวัด PW,1,<template>
   3. ต่อ 1 ชิ้นงาน (จนครบ target_count หรือโดนสั่ง Stop):
-     - รอพิมพ์เริ่มที่ terminal (แทน trigger จาก MCU จริง)
+     - รอสัญญาณว่าชิ้นงานเข้าที่ — ตอนนี้ยังไม่มี MCU จริง จึงจำลองด้วยการยิง
+       POST/GET มาที่ /trigger ของสคริปต์นี้ (เดิมใช้ input() ซึ่งบล็อก thread
+       จนกด Stop ไม่หลุด) พอต่อ MCU จริงค่อยเปลี่ยนเป็นอ่านสัญญาณจาก Serial
      - ส่งคำสั่ง T1 ไปสั่ง TM-X ให้ถ่าย/วัดตอนนี้เลย ผ่าน connection ใหม่แยก
        ต่างหาก (ไม่ใช่ connection เดิมที่ค้างไว้ส่ง R0/PW/S0) — ทดสอบกับ
        ฮาร์ดแวร์จริงแล้วว่าใช้งานได้ด้วยวิธีนี้
-  4. จบ session (ครบ target_count หรือโดนสั่ง Stop) → ส่ง S0
+  4. จบ session (ครบ target_count หรือโดนสั่ง Stop) → ส่ง S0 แล้วถ้า session
+     ยังค้าง 'running' อยู่ ให้แจ้ง backend ปิดให้ด้วย
 
-หมายเหตุสำคัญ: เพราะ Pi ไม่เห็นผลค่า/รูปที่วัดได้เลย (ไม่มี FTP server บน Pi
-อีกต่อไป) จึงไม่มีการ "รอยืนยันว่าได้ค่า+รูปจริง" หรือ retry ต่อชิ้นแบบที่
-เคยทำใน ftp.py (arm_and_capture) — Pi แค่ส่ง T1 แล้ววนไปชิ้นถัดไปตามจำนวน
-target_count ที่ได้รับตอน Start เท่านั้น ถ้า TM-X พลาดรอบไหนไปจริงๆ (ไม่ส่ง
-ค่า/รูปมาที่ PC) Pi จะไม่รู้ตัวเลย — measured_count ฝั่ง Backend อาจไม่ครบ
-target_count ในกรณีนั้น (ต้องกด Stop เองจากเว็บถ้าเจอ)
+หมายเหตุสำคัญ: Pi ไม่เห็นค่า/รูปที่วัดได้เลย (ไม่มี FTP server บน Pi อีกต่อไป
+TM-X ส่งตรงเข้า PC) จึงรู้ผลทางอ้อมด้วยการ poll ว่า sessions.measured_count
+ขยับไหมหลังยิง T1 — ถ้าครบ MEASURE_TIMEOUT แล้วไม่ขยับ จะแจ้ง backend ให้เด้ง
+ถามผู้ใช้บนหน้าเว็บว่าจะวัดต่อหรือหยุด เลือก "วัดต่อ" = ข้ามชิ้นนั้นไป ไม่ได้
+ยิง T1 ซ้ำ (ไม่มี retry) พอวนครบ measured_count จึงอาจไม่ถึง target_count ได้
 """
 import os
 import socket
@@ -88,6 +90,55 @@ current_session_id = None
 is_running = False
 _tmx_sock = None
 
+# ╔═══ trigger จากภายนอก — เริ่มส่วนที่เพิ่ม ══════════════════════════════════╗
+#
+# "กระดิ่ง" ที่บอกว่าชิ้นงานเข้าที่พร้อมวัดแล้ว
+#
+# ทำไมต้องเป็น Event ไม่ใช่ input(): input() บล็อก thread ของ command_flow ไว้
+#   ไม่มีกำหนดและปลุกจากข้างนอกไม่ได้ กด Stop บนเว็บแล้ว TM-X หยุดทันที (stop
+#   handler ยิง S0 เอง) หน้าเว็บก็อัปเดตทันที แต่ thread ของ Pi ค้างคาที่
+#   input() → finally ไม่ทำงาน → ไม่ปิด socket/ไม่เคลียร์สถานะ จนกว่าจะมีคน
+#   เดินไปเคาะ Enter ที่เทอร์มินัล
+#
+# Event แยก "ใครส่งสัญญาณ" ออกจาก "ใครรอสัญญาณ" ตัวรอจึงวนเช็ค is_running ได้
+#   ตลอดโดยไม่ต้องรู้ว่าสัญญาณมาจากไหน
+#
+# 🔌 ตอนต่อ MCU/sensor จริงผ่าน Serial: เพิ่ม thread อ่าน serial แล้วเรียก
+#   `_trigger.set()` บรรทัดเดียวกับที่ endpoint /trigger ใช้ — ตัวรอกับที่เหลือ
+#   ทั้งระบบไม่ต้องแก้เลย และเก็บ /trigger ไว้เป็น manual override ได้ด้วย
+#   (เผื่อเซนเซอร์เสีย หรือต้องเทสต์โดยไม่มีชิ้นงาน) เพราะ Event รับหลายแหล่งได้
+#   ⚠ ตอนนั้นต้อง ser.reset_input_buffer() คู่กับ _trigger.clear() ด้วย เพราะ
+#     clear() ล้างได้แค่กระดิ่ง byte ที่ค้างใน buffer ของ OS ยังอยู่
+_trigger = threading.Event()
+
+# ตอนนี้อยู่ในช่วง "รอสัญญาณ" จริงหรือยัง — endpoint /trigger ใช้ตอบให้ตรงความจริง
+# ว่าสัญญาณที่ยิงมาจะถูกใช้หรือถูกทิ้ง
+#
+# ที่มา: เจอตอนเทสต์ว่าถ้ายิง /trigger เร็วเกินไป (ช่วง ~1.5 วิแรกที่ยังส่ง
+# R0/PW ให้ TM-X อยู่) สัญญาณจะโดน _trigger.clear() ล้างทิ้งพอดี แต่ endpoint
+# ตอบ ok:True ไปแล้ว → คนยิงนึกว่าสำเร็จ แต่เครื่องไม่ขยับ หาสาเหตุไม่เจอ
+_waiting_for_trigger = False
+
+
+def wait_for_trigger():
+    """รอสัญญาณว่าชิ้นงานพร้อมวัด — True = ได้สัญญาณ · False = โดน Stop ระหว่างรอ
+
+    clear() ก่อนเสมอ เพื่อทิ้งสัญญาณที่ยิงมาตอนยังไม่ถึงคิว (เช่นกดรัวไว้ตอน
+    ชิ้นก่อนหน้ายังวัดไม่เสร็จ) ไม่งั้นชิ้นถัดไปจะถูก trigger ทันทีทั้งที่ยัง
+    ไม่ได้วางชิ้นงาน — และกันสัญญาณเด้ง (bounce) ของเซนเซอร์จริงไปในตัว
+    """
+    global _waiting_for_trigger
+    _trigger.clear()
+    _waiting_for_trigger = True
+    try:
+        while is_running:
+            if _trigger.wait(0.1):   # ตื่นทุก 0.1 วิ ไปเช็ค is_running
+                return True
+        return False
+    finally:
+        _waiting_for_trigger = False
+# ╚═══ trigger จากภายนอก — จบส่วนที่เพิ่ม ════════════════════════════════════╝
+
 http_app = FastAPI()
 
 
@@ -103,12 +154,36 @@ def send_command(sock, command):
     return response
 
 
-def trigger_sensor(timeout=TRIGGER_TIMEOUT):
-    """ส่งคำสั่ง T1 ไปสั่งให้ TM-X ถ่าย/วัด 1 ครั้ง ผ่าน connection ใหม่แยก
-    ต่างหาก — ทดสอบกับฮาร์ดแวร์จริงแล้วว่าใช้งานได้จริงด้วยวิธีนี้ คืน
-    True/False ว่าส่งคำสั่งสำเร็จไหม (แค่ส่งสำเร็จ ไม่รอ/ไม่ตรวจผลว่าได้ค่า+
-    รูปจริงไหม — ฝั่ง PC เป็นคนรับแล้วรายงานไป Backend เอง ดู Recieve_tm-x.py)
+def trigger_sensor(session_id, timeout=TRIGGER_TIMEOUT):
+    """รอสัญญาณว่าชิ้นงานพร้อม แล้วส่ง T1 ไปสั่ง TM-X ถ่าย/วัด 1 ครั้ง
+
+    T1 ส่งผ่าน connection ใหม่แยกต่างหากทุกครั้ง (ไม่ใช่ตัวที่ค้างไว้ส่ง
+    R0/PW/S0) — ทดสอบกับฮาร์ดแวร์จริงแล้วว่าต้องทำแบบนี้ และแค่ส่งสำเร็จเท่านั้น
+    ไม่รอ/ไม่ตรวจว่าได้ค่า+รูปจริงไหม (ฝั่ง PC เป็นคนรับแล้วรายงานไป Backend เอง
+    ดู Recieve_tm-x.py)
+
+    คืน (ok, count_before):
+      ok           – ส่ง T1 สำเร็จไหม · False = โดน Stop ระหว่างรอสัญญาณ
+                     (ไม่ได้ส่ง T1 เลย) หรือส่งไปแล้วแต่ไม่สำเร็จ
+      count_before – measured_count ก่อนยิง T1 ไว้ให้ wait_for_measurement
+                     เทียบว่าขยับไหม (None = อ่านไม่ได้ หรือยังไม่ได้อ่าน)
+
+    ทำไม count_before อ่านตรงนี้ ไม่ใช่ที่ command_flow ก่อนเรียกฟังก์ชันนี้:
+      ช่วงรอสัญญาณอาจกินเวลาเป็นนาที ถ้าอ่านไว้ตั้งแต่ก่อนรอ แล้วระหว่างนั้นมี
+      ค่าของ "ชิ้นก่อนหน้าที่มาช้า" หลุดเข้ามา (เกิดได้จริงตอนชิ้นก่อน timeout
+      แล้วผู้ใช้เลือกวัดต่อ — TM-X วัดไม่ติดบ่อยมากตามข้อมูลหน้างาน)
+      measured_count จะขยับตั้งแต่ยังไม่ได้ยิง T1 ของชิ้นนี้ →
+      wait_for_measurement เห็นว่า "ขยับแล้ว" ทันที → รายงานว่าชิ้นนี้สำเร็จ
+      ทั้งที่ TM-X ยังไม่ได้วัดเลย
     """
+    # ── ขั้นที่ 1: รอสัญญาณ (ยกเลิกได้เมื่อกด Stop) ────────────────────────
+    if not wait_for_trigger():
+        return False, None
+
+    # ── ขั้นที่ 2: จำค่าตั้งต้นไว้ ให้ชิดกับ T1 ที่สุด ──────────────────────
+    count_before = get_measured_count(session_id)
+
+    # ── ขั้นที่ 3: ยิง T1 ──────────────────────────────────────────────────
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.settimeout(timeout)
@@ -116,16 +191,16 @@ def trigger_sensor(timeout=TRIGGER_TIMEOUT):
             s.sendall(TRIGGER_COMMAND.encode("ascii"))
             response = s.recv(BUFFER_SIZE).decode("ascii").strip()
             print(f"📡 TM-X ตอบ trigger: {response}")
-            return True
+            return True, count_before
     except socket.timeout:
         print("❌ ส่ง trigger ไม่สำเร็จ: timeout")
-        return False
+        return False, count_before
     except ConnectionRefusedError:
         print(f"❌ ส่ง trigger ไม่สำเร็จ: connection refused (port {TMX_PORT})")
-        return False
+        return False, count_before
     except Exception as exc:
         print(f"❌ ส่ง trigger ไม่สำเร็จ: {exc}")
-        return False
+        return False, count_before
 
 
 def get_measured_count(session_id):
@@ -156,10 +231,10 @@ def wait_for_measurement(session_id, count_before, timeout=MEASURE_TIMEOUT):
     """
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if not is_running:
+        if not is_running: #ถ้า Stop
             return True
-        now = get_measured_count(session_id)
-        if now is not None and count_before is not None and now > count_before:
+        count_after = get_measured_count(session_id) 
+        if count_after is not None and count_before is not None and count_after > count_before:
             return True
         time.sleep(MEASURE_POLL_INTERVAL)
     return False
@@ -266,7 +341,7 @@ def command_flow(session_id, template_name, number_alpl, target_count):
 
         _tmx_sock = client_socket  # ให้ stop handler ยิง S0 ผ่าน socket นี้ได้
 
-        # Reset (เข้าโหมดดำเนินงาน)
+        # Running (เข้าโหมดดำเนินงาน)
         print(f"→ R0 : {send_command(client_socket, 'R0')}")
         time.sleep(0.5)
 
@@ -280,25 +355,23 @@ def command_flow(session_id, template_name, number_alpl, target_count):
                 print("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
                 break
 
-            # รอสัญญาณว่าชิ้นงานพร้อม (แทน trigger จาก Micro ด้วยการพิมพ์ไปก่อน)
-            input(f"\nชิ้นที่ {piece}/{target_count} — กด Enter เพื่อ trigger: ")
+            # รอสัญญาณว่าชิ้นงานพร้อม แล้วยิง T1 (trigger_sensor อ่าน
+            # count_before ให้เองหลังได้สัญญาณ — ดูเหตุผลใน docstring)
+            print(f"\nชิ้นที่ {piece}/{target_count} — รอสัญญาณ trigger ...")
+            _sent, count_before = trigger_sensor(session_id)
 
-            # เช็คอีกทีหลัง input — เผื่อ Stop มาถึงระหว่างที่กำลังรอพิมพ์อยู่
+            # โดน Stop ระหว่างรอสัญญาณ → trigger_sensor ไม่ได้ยิง T1 ให้
             if not is_running:
                 print("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
                 break
 
-            # จำจำนวนที่บันทึกไว้ "ก่อน" ยิง T1 เพื่อเอาไว้เทียบว่าขยับไหม
-            count_before = get_measured_count(session_id)
 
-            trigger_sensor()
-
-            # ── รอยืนยันว่าค่าเข้า DB จริง ก่อนไปชิ้นถัดไป ──────────────────
-            if wait_for_measurement(session_id, count_before):
+            # ── รอยืนยันว่าค่าเข้า DB จริง ก่อนไปชิ้นถัดไป ────────────────── ถ้า wait_for_measurement return true 
+            if wait_for_measurement(session_id, count_before): 
                 if is_running:
                     print(f"   ✅ ชิ้นที่ {piece}/{target_count} บันทึกแล้ว")
                 continue
-
+                # Retry 3 ครั้ง ถ้าไม่ได้รับค่า
             # หมดเวลาแล้วยังไม่มีค่าเข้ามา — โยนให้คนตัดสินใจ เพราะ Pi แยกไม่ออก
             # ว่าเป็น "TM-X วัดไม่ติด" หรือ "FTP มาช้า/Recieve_tm-x.py ไม่ได้รัน"
             print(f"\n⚠️ ชิ้นที่ {piece}/{target_count}: รอ {MEASURE_TIMEOUT:.0f} วิแล้วไม่ได้รับค่าการวัด")
@@ -329,6 +402,48 @@ def command_flow(session_id, template_name, number_alpl, target_count):
         current_session_id = None  # heartbeat กลับไปยิงแบบ idle (ไม่แนบ session)
         print("\n✅ จบ session — ปิดการเชื่อมต่อ TM-X แล้ว")
 
+        # ╔═══ ปิด session ที่ค้าง 'running' — เริ่มส่วนที่เพิ่ม ═══════════════╗
+        #
+        # ปัญหา: backend ปิด session ให้เฉพาะตอนมี measurement ใหม่เข้ามาเท่านั้น
+        #   (create_measurement เช็ค `measured >= target` แล้วค่อยตั้ง stopped)
+        #   ถ้ามีชิ้นที่วัดไม่ติดแล้วผู้ใช้เลือก "วัดต่อ" measured_count จะไม่มีวัน
+        #   ถึง target_count → ไม่มีใครรันบรรทัดนั้นอีก → session ค้าง 'running'
+        #   ทั้งที่ Pi เลิกทำงานไปแล้ว (heartbeat_checker จะมา mark 'timeout' ให้
+        #   ใน ~15 วิ แต่บอกสาเหตุผิด เหมือน Pi ตาย ทั้งที่แค่ข้ามชิ้น)
+        #
+        # ทำไมเช็คแค่ state ไม่เทียบ measured_count กับ target_count:
+        #   `measured >= target` เป็นเงื่อนไขเดียวที่ทำให้ auto-complete ทำงาน
+        #   ดังนั้น state=='running' ตอนถึง finally = วัดไม่ครบอยู่แล้วในตัว
+        #   ถ้าไปเทียบตัวเลขตรงๆ จะพังตอนผู้ใช้กด Stop เองกลางคัน (measured <
+        #   target จริง แต่ backend ตั้ง stopped ไปแล้ว) → ยิง stop ซ้ำ →
+        #   ended_at โดนเขียนทับ เพราะ stop_session ไม่ได้เช็ค state ก่อน UPDATE
+        #
+        # ต้องเทียบ session_id ด้วย: /api/session/state คืน session ล่าสุดเสมอ
+        #   (ORDER BY session_id DESC LIMIT 1) ไม่ได้รับ param ถ้ามีคนกด Start
+        #   ตัวใหม่ระหว่างนี้จะกลายเป็นไปปิด session ของคนอื่นแทน
+        #
+        # ⚠ ต้องวางหลัง `_tmx_sock = None` เท่านั้น: stop_session ยิง
+        #   POST /command {"action":"stop"} กลับมาหา Pi ด้วย ซึ่ง handler นั้นจะ
+        #   send_command(_tmx_sock, "S0") ถ้า socket ยังไม่ None — วางก่อนหน้านี้
+        #   จะกลายเป็นยิง S0 ใส่ socket ที่เพิ่งปิดไป พอเป็น None แล้ว callback
+        #   จะเป็น no-op ปลอดภัย (ไม่ deadlock เพราะ command_flow อยู่คนละ thread
+        #   กับ event loop ของ Pi จึงรับ callback ของตัวเองได้)
+        try:
+            st = httpx.get(f"{BACKEND_URL}/api/session/state", timeout=5).json()
+            if st.get("session_id") == session_id and st.get("state") == "running":
+                httpx.post(
+                    f"{BACKEND_URL}/api/session/stop",
+                    json={"session_id": session_id},
+                    timeout=10,
+                )
+                print(f"⏹ แจ้ง backend ปิด session แล้ว "
+                      f"(วัดได้ {st.get('measured_count')}/{target_count} — ไม่ครบ)")
+        except Exception as exc:
+            # ปล่อยผ่านได้ heartbeat_checker ฝั่ง backend ยังเป็นตาข่ายสำรองอยู่
+            print(f"   ⚠️ แจ้งปิด session ไม่ได้: {exc} — "
+                  f"backend จะปิดเองใน ~{HB_TIMEOUT_HINT:g} วิ (ขึ้นเป็น 'timeout')")
+        # ╚═══ ปิด session ที่ค้าง 'running' — จบส่วนที่เพิ่ม ═════════════════╝
+
 
 class CommandRequest(BaseModel):
     action: str
@@ -345,6 +460,7 @@ async def command(req: CommandRequest):
         threading.Thread(
             target=command_flow,
             args=(req.session_id, req.template_name, req.number_alpl, req.target_count),
+            #args=(req.session_id, req.template_name, req.target_count),
             daemon=True,
         ).start()
     elif req.action == "stop":
@@ -360,6 +476,38 @@ async def command(req: CommandRequest):
     return {"status": "ok", "action": req.action}
 
 
+# ╔═══ endpoint จำลอง sensor — เริ่มส่วนที่เพิ่ม ══════════════════════════════╗
+#
+# ยิงอะไรมาก็ได้ที่ URL นี้ = "ชิ้นงานเข้าที่แล้ว วัดได้เลย" แทนการกด Enter เดิม
+#
+#   curl -X POST http://<ip-ของ-pi>:9998/trigger
+#   หรือพิมพ์ http://<ip-ของ-pi>:9998/trigger บน address bar ของเบราว์เซอร์
+#
+# รับทั้ง GET และ POST เพราะ address bar ของเบราว์เซอร์ยิงได้แค่ GET เท่านั้น
+# (พิมพ์ URL แล้ว Enter = GET เสมอ ส่ง POST จากช่อง URL ไม่ได้)
+#
+# ไม่ต้องเพิ่ม thread ใดๆ — uvicorn รันอยู่แล้วสำหรับ /command ตัวนี้เกาะไปด้วย
+# ส่วน command_flow อยู่คนละ thread จึงเห็น Event ที่ถูก set() ทันที
+#
+# ⚠ ไม่มี auth เหมือน /command ที่มีอยู่เดิม — ใครยิงถึงพอร์ตนี้ได้ก็สั่งวัดได้
+#   ต้องพึ่ง firewall rule ถ้าจะให้แน่นควรจำกัดให้รับเฉพาะ IP ของเครื่อง Backend
+@http_app.api_route("/trigger", methods=["GET", "POST"])
+async def trigger():
+    if not is_running: #ยังไม่เริ่มRun
+        # ไม่ทำอะไร แต่ตอบให้รู้ว่ากดแล้วไม่มีผล ไม่งั้นกดตอนไม่มี session
+        # แล้วเงียบๆ จะนึกว่าระบบพัง
+        return {"ok": False, "reason": "ไม่มี session กำลังวัดอยู่ — กด Start ที่หน้าเว็บก่อน"}
+    if not _waiting_for_trigger:
+        # ยิงมาถูกจังหวะแต่ยังไม่ถึงช่วงรอ (กำลังส่ง R0/PW ให้ TM-X อยู่ หรือ
+        # กำลังรอผลวัดของชิ้นก่อนหน้า) — สัญญาณนี้จะโดน clear() ทิ้งอยู่ดี
+        # จึงบอกไปตรงๆ ให้ยิงใหม่ ดีกว่าตอบ ok แล้วเครื่องไม่ขยับ
+        return {"ok": False, "reason": "ยังไม่ถึงช่วงรอสัญญาณ — รอข้อความ 'รอสัญญาณ trigger ...' ก่อนแล้วยิงใหม่"}
+    _trigger.set()
+    print("⚡ ได้รับสัญญาณ trigger")
+    return {"ok": True}
+# ╚═══ endpoint จำลอง sensor — จบส่วนที่เพิ่ม ════════════════════════════════╝
+
+
 if __name__ == "__main__":
     # heartbeat รันตลอดอายุโปรแกรมใน daemon thread — เริ่มก่อนเปิด server
     threading.Thread(target=heartbeat_loop, daemon=True).start()
@@ -371,6 +519,8 @@ if __name__ == "__main__":
     print(f"  Backend ที่         : {BACKEND_URL}          (.env: BACKEND_URL)")
     print(f"  heartbeat ทุก       : {HB_INTERVAL:g} วิ   (.env: HEARTBEAT_INTERVAL)")
     print(f"  รอค่าวัดสูงสุด       : {MEASURE_TIMEOUT:g} วิ   (.env: MEASURE_TIMEOUT)")
+    print(f"  จำลอง trigger ด้วย   : curl -X POST http://<ip-นี้>:{AGENT_PORT}/trigger")
+    print(f"                       (หรือเปิด http://<ip-นี้>:{AGENT_PORT}/trigger บนเบราว์เซอร์)")
     print("─" * 66)
 
     # เตือนตอนเริ่มถ้าตั้งค่าจนเสี่ยงโดน mark timeout ทั้งที่เครื่องยังปกติดี

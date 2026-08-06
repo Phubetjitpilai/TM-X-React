@@ -430,7 +430,8 @@
             <th>Package Size</th>
             <th class="th-derived">Template</th>
             <th class="th-derived">Nominal X / Y</th>
-            <th class="th-derived">Tol (+/-)</th>
+            <th class="th-derived">Upper/Lower Tol (+/-)</th>
+            <th class="th-derived">Offset_Tol</th>
             <th>Vendor</th>
             <th>Owner</th>
             <th>PO Number</th>
@@ -479,6 +480,7 @@
             <th>ALPL</th>
             <th class="th-derived">Value X</th>
             <th class="th-derived">Value Y</th>
+            <th class="th-derived">Offset</th>
             <th class="th-derived">Result</th>
             <th class="th-derived">Note</th>
             <th>Operator</th>
@@ -830,6 +832,7 @@
                       { key: 'nominal_y',        label: 'Nominal Y',    type: 'number',              width: '140px' },
                       { key: 'upper_tol',        label: 'Upper Tol',    type: 'number',              width: '140px' },
                       { key: 'lower_tol',        label: 'Lower Tol',    type: 'number',              width: '140px' },
+                      { key: 'offset_tol',       label: 'Offset Tol',   type: 'number',              width: '140px' },
                     ] },
   };
 
@@ -982,7 +985,13 @@
     if (kind === 'package_size') return values;
     if (kind === 'part_number') {
       const body = { ...values };
-      ['nominal_x', 'nominal_y', 'upper_tol', 'lower_tol'].forEach(k => { body[k] = Number(body[k]); });
+      // ⚠ อย่า hardcode รายชื่อคอลัมน์ตรงนี้ — เดิมเขียนตายไว้ 4 ตัว พอเพิ่ม
+      //   offset_tol เข้า LOOKUP_CONFIG แล้วลืมมาเติม ค่าเลยถูกส่งเป็น string
+      //   แทน number โดยไม่มี error อะไรให้เห็น
+      //   อ่านจาก config เป็นแหล่งเดียวแทน — เพิ่ม field ใหม่ทีหลังไม่ต้องแก้ที่นี่อีก
+      LOOKUP_CONFIG.part_number.fields
+        .filter(f => f.type === 'number')
+        .forEach(f => { body[f.key] = Number(body[f.key]); });
       return body;
     }
     const singleKey = LOOKUP_CONFIG[kind].fields[0].key;
@@ -1026,10 +1035,29 @@
         body: JSON.stringify(lookupToApiBody(currentLookupKind, values)),
       });
       if (!r.ok) { showToast(await errorMessage(r, `บันทึก ${cfg.label} ไม่สำเร็จ`)); return; }
-      showToast(`บันทึก ${cfg.label} สำเร็จ`);
-      // refresh จะ re-render ทั้งตารางใหม่จากค่าล่าสุดใน DB — ปุ่ม Save ที่เคยเป็น
-      // สีเขียว (dirty) จะกลับเป็นปกติเองอัตโนมัติ เพราะค่าในช่องตรงกับ DB แล้ว
-      await refreshLookupSection();
+
+      // ⚠⚠ ห้ามเรียก refreshLookupSection() ตรงนี้เด็ดขาด
+      //   ของเดิมเรียกแล้ว re-render "ทั้งตาราง" จากค่าใน DB ผลคือค่าที่ผู้ใช้
+      //   พิมพ์ค้างไว้ในแถวอื่น (ยังไม่ได้กด Save) หายไปเงียบๆ แล้วปุ่มเขียวของ
+      //   แถวพวกนั้นกลับเป็นปกติด้วย — ดูเหมือน "บันทึกครบทุกแถว" ทั้งที่ PATCH
+      //   ไปแค่แถวเดียว เป็นการทำข้อมูลที่พิมพ์ไว้หายโดยไม่มีอะไรเตือน
+      //
+      //   แก้เป็น: อัปเดตเฉพาะแถวนี้ใน lookupRows แล้วปลดสถานะ dirty ของแถวนี้
+      //   closure ของ bindLookupDirtyTracking จับ object ตัวเดียวกันไว้อยู่แล้ว
+      //   การแก้ในที่ (mutate) จึงมีผลกับการเทียบครั้งถัดไปทันที ไม่ต้องผูก listener ใหม่
+      const idx = lookupRows.findIndex(x => String(x[cfg.idField]) === String(rowId));
+      if (idx >= 0) cfg.fields.forEach(f => { lookupRows[idx][f.key] = values[f.key]; });
+      document.getElementById(`lk-save-${rowId}`)?.classList.remove('dirty');
+
+      const rowName = values[cfg.fields[0].key] || `ID ${rowId}`;
+      const stillDirty = document.querySelectorAll('#lookup-body .btn-icon.dirty').length;
+      showToast(stillDirty
+        ? `บันทึก "${rowName}" แล้ว — ยังมีอีก ${stillDirty} แถวที่แก้ไว้แต่ยังไม่ได้กด Save`
+        : `บันทึก "${rowName}" แล้ว`);
+
+      // อัปเดตเฉพาะรายชื่อใน dropdown (เผื่อชื่อ handler/package size เปลี่ยน)
+      // โดยไม่แตะตาราง — ค่าที่ค้างในแถวอื่นจึงไม่หาย
+      await loadLookupSupportData();
     } catch (e) { console.error(e); showToast('เกิดข้อผิดพลาดในการบันทึกข้อมูล'); }
   }
 
@@ -1164,7 +1192,7 @@
 
     if (!rows.length) {
       const msg = partsSearch ? 'ไม่พบ Part ที่ตรงกับคำค้นหา' : 'ยังไม่มีข้อมูล Parts';
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="14">${msg}</td></tr>`;
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="15">${msg}</td></tr>`;
       return;
     }
 
@@ -1179,6 +1207,8 @@
         ? `${p.nominal_x} / ${p.nominal_y}` : '';
       const tol = (p.upper_tol != null && p.lower_tol != null)
         ? `+${p.upper_tol} / -${p.lower_tol}` : '';
+      // มาจาก part_number.offset_tol — เกณฑ์ที่ใช้ตัดสินว่า offset ของการวัดผ่านไหม
+      const offsetTol = p.offset_tol != null ? String(p.offset_tol) : '';
       return `<tr class="${hl}" data-alpl="${p.number_alpl}">
         <td><strong>${p.part_id ?? ''}</strong></td>
         <td><strong>${p.number_alpl}</strong></td>
@@ -1188,6 +1218,7 @@
         <td class="td-derived">${p.template_name ?? ''}</td>
         <td class="td-derived">${nominal}</td>
         <td class="td-derived">${tol}</td>
+        <td class="td-derived">${offsetTol}</td>
         <td>${p.vendor ?? ''}</td>
         <td>${p.owner ?? ''}</td>
         <td>${p.po_number ?? ''}</td>
@@ -1417,6 +1448,21 @@
   }
 
   // ค่าที่วัดได้ 1 ช่องในตาราง — ระบายสีเขียว/แดงตามว่าอยู่ในสเปคของแกนนั้นไหม
+  /** offset ผ่านเกณฑ์ไหม — ต้องตรงกับ _offset_ok ฝั่ง backend เป๊ะ */
+  function offsetOk(offset, offsetTol) {
+    if (offset == null || offsetTol == null) return null;   // ยังไม่ตั้งเกณฑ์ = ไม่ตรวจ
+    return Math.abs(offset) <= offsetTol + TOL_EPS;
+  }
+
+  /** ช่อง Offset ในตาราง — เทียบกับเพดาน offset_tol ตัวเดียว ไม่ใช่ช่วง nominal±tol */
+  function offsetCell(v, offsetTol) {
+    if (v == null) return '';
+    const txt = Number(v).toFixed(3);
+    const ok = offsetOk(v, offsetTol);
+    if (ok == null) return txt;
+    return `<span class="${ok ? 'val-ok' : 'val-ng'}" title="ไม่เกิน ${Number(offsetTol).toFixed(3)}">${txt}</span>`;
+  }
+
   function valueCell(v, nominal, upperTol, lowerTol) {
     if (v == null) return '';
     const ok = axisOk(v, nominal, upperTol, lowerTol);
@@ -1437,7 +1483,7 @@
 
     if (!rows.length) {
       const msg = (measSearch || measDate) ? 'ไม่พบ Measurement ที่ตรงกับตัวกรอง' : 'ยังไม่มีข้อมูล Measurements';
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="11">${msg}</td></tr>`;
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="12">${msg}</td></tr>`;
       return;
     }
 
@@ -1452,6 +1498,7 @@
         <td><strong>${m.number_alpl}</strong></td>
         <td class="td-derived">${valueCell(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol)}</td>
         <td class="td-derived">${valueCell(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol)}</td>
+        <td class="td-derived">${offsetCell(m.offset, m.offset_tol)}</td>
         <td class="td-derived"><span class="result-badge ${cls}">${res}</span></td>
         <td class="td-derived">${m.note ?? ''}</td>
         <td>${m.operator_name ?? ''}</td>
@@ -1827,7 +1874,7 @@
         // ถ้อยคำต้องหนักกว่าตอนกู้คืน เพราะขั้นนี้ย้อนกลับไม่ได้แล้วจริงๆ
         showConfirm(
           `⚠ ลบถาวร ${what}<br><br>` +
-          `<strong>การลบนี้กู้คืนไม่ได้อีก</strong> — ทั้งข้อมูลและไฟล์รูปจะหายถาวร`,
+          `<strong>การลบนี้กู้คืนไม่ได้อีก</strong> — ข้อมูลทั้งหมดจะหายถาวร`,
           () => purgeTrashItem(btn.dataset.id),
           { label: '🗑 ลบถาวร' }
         );
