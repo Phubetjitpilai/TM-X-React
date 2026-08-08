@@ -365,9 +365,13 @@ async def _reload_session_queues() -> None:
     ทำไมต้องมี: session_queues เดิมอยู่ใน memory ของ backend ล้วนๆ ถ้า backend
     ถูก restart (reload ตอน dev, crash แล้ว auto-restart, deploy ใหม่) ระหว่างที่
     มี session แบบ IPM/New กำลัง running อยู่ คิวจะหายไปจาก memory ทันที —
-    create_measurement หลังจากนั้นจะ fallback ไปใช้ req.number_alpl ที่ Agent
-    ส่งมา ซึ่งเป็น ALPL ตัวแรกในคิวเสมอ (Agent ไม่เคยอัปเดตค่านี้เอง) ทำให้ทุก
-    measurement ที่เหลือถูกบันทึกผิด ALPL ไปเรื่อยๆ แบบไม่มี error เตือนเลย
+    create_measurement หลังจากนั้นจะไม่มีทางรู้ว่ากำลังวัด ALPL ตัวไหนอยู่
+
+    เดิมกรณีนั้นจะ fallback ไปใช้ req.number_alpl ที่ Agent ส่งมา ซึ่งเป็น ALPL
+    ตัวแรกในคิวเสมอ (อ่านมาจาก sessions.number_alpl ที่ไม่เคยถูก UPDATE) ทำให้ทุก
+    measurement ที่เหลือถูกบันทึกผิด ALPL แบบไม่มี error เตือนเลย — ตอนนี้ถอด
+    fallback นั้นออกแล้ว เปลี่ยนเป็นตอบ 409 ปฏิเสธไปเลย ฟังก์ชันนี้จึงเป็นด่าน
+    เดียวที่กันไม่ให้ session ที่กำลังวัดอยู่ต้องล้มทั้งรอบเวลา backend restart
 
     จึงต้องรันตรงนี้ (ก่อน yield ให้แอปเริ่มรับ request) — ต้อง await ตรงๆ ไม่ใช่
     fire-and-forget แบบ _init_bucket_bg เพราะต้องมั่นใจว่า session_queues ถูก
@@ -537,7 +541,7 @@ async def get_session_state():
             # (ต้องได้คิวเต็มไม่ใช่แค่ ALPL ตัวแรก) และทำให้แถบนี้รอดการ refresh
             # หน้าเว็บกลาง session ด้วย เพราะอ่านคิวกลับจาก DB ได้ตรงๆ
             cur.execute(
-                "SELECT session_id, number_alpl, state, target_count, measured_count, "
+                "SELECT session_id, state, target_count, measured_count, "
                 "queue_state, last_seen, started_at, ended_at "
                 "FROM sessions ORDER BY session_id DESC LIMIT 1"
             )
@@ -797,11 +801,13 @@ async def start_session(request: Request):
                     # IPM: ไม่ insert parts เลย แค่ query หา template_name
                     template_name = _get_template_name_for_ipm(cur, first_alpl)
 
-                # 2) Insert sessions row (ผ่าน FK ได้แน่นอนแล้ว ไม่ว่าจะ New หรือ IPM)
+                # 2) Insert sessions row — ไม่มี number_alpl แล้ว (ถอดออกพร้อม FK
+                #    เพราะเก็บได้แค่ ALPL ตัวแรกของคิว ไม่เคยถูก UPDATE ระหว่าง
+                #    session จึงไม่มีใครใช้ได้จริง — คิวตัวจริงอยู่ใน queue_state)
                 cur.execute(
-                    "INSERT INTO sessions (number_alpl, state, target_count, measured_count) "
-                    "VALUES (%s, 'running', %s, 0)",
-                    (first_alpl, target_count),
+                    "INSERT INTO sessions (state, target_count, measured_count) "
+                    "VALUES ('running', %s, 0)",
+                    (target_count,),
                 )
                 session_id = cur.lastrowid
         finally:
@@ -987,6 +993,53 @@ async def resolve_measure_timeout(session_id: int, body: MeasureTimeoutResolve):
 
     pending["decision"] = body.action
     log.info("Measure timeout: session=%s ผู้ใช้เลือก %s", session_id, body.action)
+
+    # ╔═══ ขยับตำแหน่งคิวตอนข้ามชิ้น — เริ่มส่วนที่เพิ่ม ═════════════════════╗
+    #
+    # บั๊กที่แก้: number_alpl ของแต่ละ measurement ไม่ได้มาจาก Agent แต่ Backend
+    # เลือกเองจาก "ตำแหน่งในคิว" (ดู create_measurement: number_alpl = queue[pos])
+    # และตำแหน่งนั้นขยับที่เดียวในระบบคือตอน INSERT สำเร็จ
+    #
+    # ชิ้นที่ผู้ใช้เลือกข้าม (action="continue") ไม่มี INSERT → ตำแหน่งไม่ขยับ →
+    # ผลวัดของ "ทุกชิ้นที่เหลือ" ถูกแปะ ALPL เลื่อนไปหมด:
+    #
+    #   คิว [A, B, C, D]
+    #   ชิ้น 1 (ของจริง A) → บันทึกเป็น A ✓   pos 0→1
+    #   ชิ้น 2 (ของจริง B) → บันทึกเป็น B ✓   pos 1→2
+    #   ชิ้น 3 (ของจริง C) → ข้าม            pos ค้างที่ 2
+    #   ชิ้น 4 (ของจริง D) → บันทึกเป็น C ✗   ← ผิด
+    #
+    # อันตรายกว่า "ข้อมูลหาย" เพราะข้อมูลหายเห็นได้จาก measured_count ที่ไม่ครบ
+    # แต่ข้อมูลผิด ALPL หน้าตาปกติทุกอย่าง ไม่มีใครรู้จนกว่าจะไปเทียบของจริง
+    #
+    # ทำไมแก้ตรงนี้: นี่คือจุดเดียวในระบบที่รู้ว่า "ผู้ใช้ตัดสินใจข้ามชิ้นนี้"
+    # (Pi แค่รับคำตอบไปเดินต่อ ไม่ได้บอก Backend อีกที)
+    #
+    # ⚠ ข้อจำกัดที่ยังเหลือ: ถ้าค่าของชิ้นที่ถูกข้ามมาถึงทีหลัง (FTP ช้ากว่า
+    #   MEASURE_TIMEOUT) มันจะไปกินตำแหน่งของชิ้นถัดไปแทน ยังแปะผิดอยู่ดี —
+    #   แต่เป็นเคสที่แคบกว่าเดิมมาก (ต้องมาถึงในช่วงหลังผู้ใช้กดตอบ แต่ก่อนที่
+    #   ชิ้นถัดไปจะวัดเสร็จ) ต่างจากของเดิมที่ผิด "ทุกชิ้นที่เหลือ" แน่นอน 100%
+    #   ปิดช่องนี้ได้ด้วย client_uuid = ts_key + เลข 10 หลัก (ดู IMPROVEMENT_PLAN.md)
+    if body.action == "continue":
+        qstate = session_queues.get(session_id)
+        if qstate is not None:
+            qstate["position"] += 1
+            db = get_db()
+            try:
+                with db.cursor() as cur:
+                    cur.execute(
+                        "UPDATE sessions SET queue_state = %s WHERE session_id = %s",
+                        (json.dumps(qstate), session_id),
+                    )
+            finally:
+                db.close()
+            log.info(
+                "Session %s: ข้ามชิ้นงาน — ขยับตำแหน่งคิวเป็น %d/%d เพื่อไม่ให้ "
+                "ชิ้นที่เหลือถูกแปะ ALPL ผิด",
+                session_id, qstate["position"], len(qstate.get("queue", [])),
+            )
+    # ╚═══ ขยับตำแหน่งคิวตอนข้ามชิ้น — จบส่วนที่เพิ่ม ═══════════════════════╝
+
     return {"ok": True, "action": body.action}
 
 
@@ -1987,12 +2040,14 @@ MEASUREMENTS_SELECT = """
 
 
 class MeasurementCreate(BaseModel):
-    # session_id เป็น Optional แล้ว — None หมายถึง "manual add" จากหน้า
-    # Database Editor (edit.html ปุ่ม + Add Measurement) ซึ่งไม่มี session ที่
-    # Agent กำลัง running อยู่จริงให้อ้างอิงเลย ต่างจาก flow ปกติที่ Agent ส่ง
-    # session_id ที่ได้จากตอนเริ่ม session มาด้วยเสมอ (ดู create_measurement)
+    # session_id บังคับแล้ว (Optional ไว้เพื่อให้ error message อ่านง่ายกว่า 422
+    # ดิบๆ ของ Pydantic — create_measurement เช็คเองแล้วตอบ 400 พร้อมคำอธิบาย)
     session_id:  Optional[int] = None
-    number_alpl: int
+    # ⚠ ไม่ได้ใช้แล้ว — เก็บ field ไว้เฉยๆ เพื่อให้ Agent รุ่นเก่าที่ยังส่งมา POST
+    #   ผ่านได้เหมือนเดิม backend เลือก ALPL จากตำแหน่งในคิวของตัวเองเสมอ
+    #   (ดู create_measurement) ค่าที่ Agent ส่งมาคือ ALPL ตัวแรกของคิวตลอด
+    #   ซึ่งผิดตั้งแต่ชิ้นที่ 2 จึงห้ามเอาไปใช้เด็ดขาด
+    number_alpl: Optional[int] = None
     value_x:     float
     value_y:     float
     # ค่าที่ 3 จากไฟล์ .txt ของ TM-X (+0000.003) — ความเยื้องของชิ้นงาน
@@ -2075,15 +2130,33 @@ async def create_measurement(req: MeasurementCreate):
     เหมือนเดิมเสมอ (ไม่ต้องแก้ agent.py) แต่ตอนนี้ backend จะตัดสินเองว่าจะใช้
     ALPL ไหนจริงๆ ตามประเภทของ session:
 
-      - **Session แบบ queue-based (IPM/New — มี entry ใน session_queues)**:
-        เพิกเฉยค่า `req.number_alpl` ที่ Agent ส่งมา แล้วใช้ ALPL ตามตำแหน่ง
-        ปัจจุบันในคิวแทน (`session_queues[session_id]["queue"][position]`)
-        เพราะ Agent ไม่รู้ (และไม่จำเป็นต้องรู้) ว่ากำลังวัดตัวไหนอยู่ในคิว
-        มันรู้แค่ว่า "วัดเสร็จแล้ว ได้ value_x/value_y เท่านี้"
-      - **Session แบบ manual (เดิม — ไม่มี entry ใน session_queues)**: ใช้
-        `req.number_alpl` ตรงๆ ตามที่ Agent ส่งมา ไม่มีอะไรเปลี่ยนจากเดิม
+    **ALPL มาจากคิวของ backend เท่านั้น** — เพิกเฉยค่า `req.number_alpl` ที่ Agent
+    ส่งมาเสมอ แล้วใช้ ALPL ตามตำแหน่งปัจจุบันในคิวแทน
+    (`session_queues[session_id]["queue"][position]`) เพราะ Agent ไม่รู้
+    (และไม่จำเป็นต้องรู้) ว่ากำลังวัดตัวไหนอยู่ในคิว มันรู้แค่ว่า
+    "วัดเสร็จแล้ว ได้ value_x/value_y เท่านี้"
+
+    เส้นทางที่ถูกถอดออกไปแล้ว (อย่าเอากลับมาโดยไม่คุยกันก่อน):
+
+      - **Manual add จากหน้าเว็บ** (`session_id` เป็น None) — ปุ่ม
+        "+ Add Measurement" ใน edit.html ถูกถอดออกแล้วตามที่ตกลงกันว่า
+        **ผลวัดต้องมาจากการวัดจริงเท่านั้น ห้ามพิมพ์เอง** จึงไม่รับ POST ที่ไม่มี
+        session_id อีกต่อไป (เดิมจะสร้าง session ปลอมให้ 1 แถวแล้วบันทึกด้วย
+        measure_type='Manual')
+      - **Fallback ใช้ `req.number_alpl` ตอนคิวหาย** — เดิมถ้า `session_queues`
+        ไม่มี entry ของ session นี้ (เช่น backend restart แล้วโหลดคิวกลับไม่สำเร็จ)
+        จะตกมาใช้ค่าที่ Agent ส่งมา ซึ่ง **ผิดเสมอตั้งแต่ชิ้นที่ 2 เป็นต้นไป**
+        เพราะค่านั้นอ่านมาจาก `sessions.number_alpl` ที่ไม่เคยถูก UPDATE เลย
+        = ALPL ตัวแรกของคิวตลอดทั้ง session → ข้อมูลผิด ALPL เข้า DB แบบเงียบๆ
+        ตอนนี้เปลี่ยนเป็น "ปฏิเสธไปเลย" ดีกว่าเดา (ดู HTTPException 409 ด้านล่าง)
     """
-    is_manual = req.session_id is None
+    # ผลวัดต้องผูกกับ session ที่ Agent กำลัง running อยู่จริงเท่านั้น
+    if req.session_id is None:
+        raise HTTPException(
+            400,
+            "ต้องมี session_id — ระบบไม่รับการเพิ่มผลวัดเองด้วยมืออีกต่อไป "
+            "(ผลวัดต้องมาจากการวัดจริงผ่าน TM-X เท่านั้น)",
+        )
     qstate = None
     db = get_db()
     try:
@@ -2119,70 +2192,58 @@ async def create_measurement(req: MeasurementCreate):
                 }
 
         with db.cursor() as cur:
-            if is_manual:
-                # ── Manual add จากหน้า Database Editor (edit.html) ──────────
-                # ไม่มี session ของ Agent ที่ running อยู่จริงให้อ้างอิงเลย แต่
-                # measurements.session_id เป็น NOT NULL + FK ไป sessions บังคับ
-                # ต้องมี session อยู่จริงเสมอ จึงสร้าง session "จบในตัว" ขึ้นมา 1
-                # แถวแทน (state='stopped', target=measured=1, ended_at=NOW())
-                # ไม่ใช่ session ของ Agent เลย แค่เป็นที่ผูก FK ให้ record นี้เท่านั้น
-                cur.execute(
-                    "INSERT INTO sessions "
-                    "(number_alpl, state, target_count, measured_count, ended_at) "
-                    "VALUES (%s, 'stopped', 1, 1, NOW())",
-                    (req.number_alpl,),
+            session_id = req.session_id
+            # Session ต้องอยู่ในสถานะ running
+            cur.execute(
+                "SELECT state, target_count, measured_count FROM sessions WHERE session_id = %s",
+                (session_id,),
+            )
+            session = cur.fetchone()
+            if not session or session["state"] != "running":
+                raise HTTPException(400, "Session is not running")
+
+            qstate = session_queues.get(session_id)
+            if qstate is None:
+                # คิวหาย (backend restart แล้ว _reload_session_queues() กู้กลับไม่ได้)
+                # — ปฏิเสธดีกว่าเดา เพราะการเดาจะได้ ALPL ตัวแรกของคิวเสมอ ซึ่งผิด
+                # ตั้งแต่ชิ้นที่ 2 และผิดแบบเงียบๆ ไม่มีใครรู้ ส่วนการปฏิเสธจะทำให้
+                # measured_count ไม่ขยับ → Pi รอจนครบ MEASURE_TIMEOUT → เด้งถาม
+                # ผู้ใช้บนหน้าเว็บ → มีคนเห็นแน่นอน
+                raise HTTPException(
+                    409,
+                    f"คิว ALPL ของ session {session_id} หายไป (backend อาจถูก restart) "
+                    "— กด Stop ที่หน้าเว็บแล้วเริ่ม session ใหม่",
                 )
-                session_id = cur.lastrowid
-                number_alpl = req.number_alpl
-                measure_type = "Manual"
-                operator_name = None
-                note = req.note
-            else:
-                session_id = req.session_id
-                # Session ต้องอยู่ในสถานะ running
-                cur.execute(
-                    "SELECT state, target_count, measured_count FROM sessions WHERE session_id = %s",
-                    (session_id,),
-                )
-                session = cur.fetchone()
-                if not session or session["state"] != "running":
-                    raise HTTPException(400, "Session is not running")
 
-                qstate = session_queues.get(session_id)  # None ถ้าเป็น manual session (เดิม)
-                measure_type = None
-                operator_name = None
-                note = None
+            # ── Queue-based (IPM / New) ─────────────────────────────────────
+            queue = qstate["queue"]
+            pos = qstate["position"]
+            if pos >= len(queue):
+                raise HTTPException(400, "Measurement queue หมดแล้วสำหรับ session นี้")
+            number_alpl = queue[pos]
+            # entry_mode/note ถูก map ไว้แล้วตั้งแต่ start_session ตามโหมด
+            # ที่ผู้ใช้เลือกหน้าเว็บ: Rework → ('New', 'Rework'),
+            # New → ('New', None), IPM → ('IPM', None)
+            # ⚠ measure_type จึงมีได้แค่ 'IPM' กับ 'New' เท่านั้น — 'Manual' ถูก
+            #   ถอดออกแล้วพร้อมกับปุ่ม Add Measurement ส่วน 'Rework' ไม่เคยลง DB
+            #   อยู่แล้ว (เก็บเป็น note แทน)
+            measure_type = qstate["entry_mode"]  # 'IPM' หรือ 'New'
+            operator_name = qstate.get("operator")
+            note = qstate.get("note")
 
-                if qstate is not None:
-                    # ── Queue-based (IPM / New) ─────────────────────────────
-                    queue = qstate["queue"]
-                    pos = qstate["position"]
-                    if pos >= len(queue):
-                        raise HTTPException(400, "Measurement queue หมดแล้วสำหรับ session นี้")
-                    number_alpl = queue[pos]
-                    # entry_mode/note ถูก map ไว้แล้วตั้งแต่ start_session ตามโหมด
-                    # ที่ผู้ใช้เลือกหน้าเว็บ: Rework → ('New', 'Rework'),
-                    # New → ('New', None), IPM → ('IPM', None)
-                    measure_type = qstate["entry_mode"]  # 'IPM' หรือ 'New'
-                    operator_name = qstate.get("operator")
-                    note = qstate.get("note")
-                else:
-                    # ── Manual session แบบเดิม (ผ่าน Agent แต่ไม่มีคิว) ─────────
-                    number_alpl = req.number_alpl
-
-                # ── New mode: insert Part ตัวนี้แบบ lazy ถ้ายังไม่เคยมีอยู่จริง ──
-                # ตัวแรกในคิวถูก insert ไปแล้วตอน start_session (จำเป็นเพราะ FK
-                # ของ sessions) ตัวที่เหลือยังไม่เคย insert เลย — insert "ตอนนี้"
-                # ที่ได้ผลวัดจริงจาก Agent แล้วเท่านั้น เพื่อไม่ให้ ALPL ที่ยังไม่
-                # ทันวัด (เช่น กด Stop กลางคัน) กลายเป็น Part ค้างอยู่ใน DB ทั้งที่
-                # ไม่มีประวัติจริง
-                if qstate is not None and qstate.get("new_part_config") is not None:
-                    cur.execute("SELECT 1 FROM parts_specifications WHERE number_alpl = %s", (number_alpl,))
-                    if not cur.fetchone():
-                        try:
-                            _insert_part_row(cur, number_alpl, qstate["new_part_config"])
-                        except pymysql.MySQLError as exc:
-                            raise HTTPException(409, f"Insert Part ALPL {number_alpl} ไม่สำเร็จ: {exc}")
+            # ── New mode: insert Part ตัวนี้แบบ lazy ถ้ายังไม่เคยมีอยู่จริง ──
+            # ตัวแรกในคิวถูก insert ไปแล้วตอน start_session (จำเป็นเพราะ FK
+            # ของ sessions) ตัวที่เหลือยังไม่เคย insert เลย — insert "ตอนนี้"
+            # ที่ได้ผลวัดจริงจาก Agent แล้วเท่านั้น เพื่อไม่ให้ ALPL ที่ยังไม่
+            # ทันวัด (เช่น กด Stop กลางคัน) กลายเป็น Part ค้างอยู่ใน DB ทั้งที่
+            # ไม่มีประวัติจริง
+            if qstate.get("new_part_config") is not None:
+                cur.execute("SELECT 1 FROM parts_specifications WHERE number_alpl = %s", (number_alpl,))
+                if not cur.fetchone():
+                    try:
+                        _insert_part_row(cur, number_alpl, qstate["new_part_config"])
+                    except pymysql.MySQLError as exc:
+                        raise HTTPException(409, f"Insert Part ALPL {number_alpl} ไม่สำเร็จ: {exc}")
 
             # หา nominal/tolerance ผ่าน part_number ที่ผูกกับ part นี้ — tolerance
             # ตัวเดียวใช้ร่วมกันทั้งแกน X/Y (upper_tol/lower_tol) เก็บอยู่ที่
@@ -2231,42 +2292,35 @@ async def create_measurement(req: MeasurementCreate):
                 raise HTTPException(409, "Measurement นี้ถูกบันทึกไปแล้ว (duplicate client_uuid)")
             measurement_id = cur.lastrowid
 
-            if not is_manual:
-                # เพิ่มตัวนับของ session — เฉพาะ session จริงของ Agent เท่านั้น
-                # (manual session ที่สร้างเองข้างบน insert มาแบบ measured=target=1
-                # อยู่แล้ว ไม่ต้องนับซ้ำ)
+            # เพิ่มตัวนับของ session
+            cur.execute(
+                "UPDATE sessions SET measured_count = measured_count + 1 "
+                "WHERE session_id = %s",
+                (session_id,),
+            )
+
+            # อ่านค่าตัวนับล่าสุดอีกครั้ง เพื่อเช็คว่าครบ target แล้วหรือยัง
+            cur.execute(
+                "SELECT measured_count, target_count FROM sessions WHERE session_id = %s",
+                (session_id,),
+            )
+            updated = cur.fetchone()
+            measured = updated["measured_count"]
+            target   = updated["target_count"]
+
+        # เพิ่มตำแหน่งในคิว (memory) แล้ว sync สำเนาลง DB ทันที (คอลัมน์
+        # sessions.queue_state) — กัน backend restart กลาง session นี้แล้ว
+        # ตำแหน่งคิวหาย ทำให้ measurement หลังจากนั้นถูกบันทึกผิด ALPL ไปเรื่อยๆ
+        # แบบเงียบๆ (ดู lifespan() ที่โหลดค่านี้กลับตอน boot)
+        if qstate is not None:
+            qstate["position"] += 1
+            with db.cursor() as cur:
                 cur.execute(
-                    "UPDATE sessions SET measured_count = measured_count + 1 "
-                    "WHERE session_id = %s",
-                    (session_id,),
+                    "UPDATE sessions SET queue_state = %s WHERE session_id = %s",
+                    (json.dumps(qstate), session_id),
                 )
 
-                # อ่านค่าตัวนับล่าสุดอีกครั้ง เพื่อเช็คว่าครบ target แล้วหรือยัง
-                cur.execute(
-                    "SELECT measured_count, target_count FROM sessions WHERE session_id = %s",
-                    (session_id,),
-                )
-                updated = cur.fetchone()
-                measured = updated["measured_count"]
-                target   = updated["target_count"]
-            else:
-                measured, target = 1, 1
-
-        if not is_manual:
-            # เพิ่มตำแหน่งในคิว (memory) แล้ว sync สำเนาลง DB ทันที (คอลัมน์
-            # sessions.queue_state) — กัน backend restart กลาง session นี้แล้ว
-            # ตำแหน่งคิวหาย ทำให้ measurement หลังจากนั้นถูกบันทึกผิด ALPL ไปเรื่อยๆ
-            # แบบเงียบๆ (ดู lifespan() ที่โหลดค่านี้กลับตอน boot)
-            if qstate is not None:
-                qstate["position"] += 1
-                with db.cursor() as cur:
-                    cur.execute(
-                        "UPDATE sessions SET queue_state = %s WHERE session_id = %s",
-                        (json.dumps(qstate), session_id),
-                    )
-
-        # Auto-complete session เมื่อถึง target_count แล้ว — เฉพาะ session จริง
-        # ของ Agent เท่านั้น (manual session จบในตัวเองไปแล้วตั้งแต่ insert)
+        # Auto-complete session เมื่อถึง target_count แล้ว
         #
         # ⚠️ ห้ามใส่ `await` ระหว่าง UPDATE measured_count ข้างบน (ราวบรรทัด 2239)
         # กับ UPDATE state='stopped' ข้างล่าง — มีคนพึ่งพาช่วงนี้อยู่:
@@ -2285,8 +2339,8 @@ async def create_measurement(req: MeasurementCreate):
         # threadpool ให้รันขนานได้), หรือรัน uvicorn หลาย worker
         # → ถ้าทำอย่างใดอย่างหนึ่ง ต้องรวมสอง UPDATE นี้เป็น transaction เดียว
         #   หรือให้ stop_session เช็ค state ก่อน UPDATE แทน
-        status = "complete" if is_manual else "continue"
-        if not is_manual and measured >= target:
+        status = "continue"
+        if measured >= target:
             with db.cursor() as cur:
                 cur.execute(
                     "UPDATE sessions SET state = 'stopped', ended_at = NOW() "
@@ -2301,40 +2355,36 @@ async def create_measurement(req: MeasurementCreate):
                 {"session_id": session_id, "measured": measured, "target": target},
             )
 
-        # ไม่ broadcast SSE เลยตอน manual add — เหตุผล: onNewMeasurement /
-        # onSessionComplete ฝั่ง dashboard (index.html) ไม่ได้เช็คว่า session_id
-        # ที่ได้รับตรงกับ session ที่กำลังแสดงอยู่ไหม เลยจะเขียนทับ measured_count/
-        # telemetry ของ session จริงที่อาจกำลัง running อยู่พร้อมกันโดยไม่ตั้งใจ
-        # (ดูรายละเอียดเพิ่มเติมในคำอธิบายที่คุยกันไว้) edit.html เองก็ไม่ได้พึ่ง
-        # SSE อยู่แล้ว มัน refetch ตารางเองหลัง POST สำเร็จ
-        if not is_manual:
-            await push_event(
-                "measurement",
-                {
-                    "measurement_id": measurement_id,
-                    "session_id":     session_id,
-                    "number_alpl":    number_alpl,
-                    "value_x":        req.value_x,
-                    "value_y":        req.value_y,
-                    "result":         result,
-                    # ผลแยกรายแกน + ช่วงที่รับได้ — ให้ Live Telemetry โชว์ได้ว่า
-                    # "พังที่แกนไหน" ไม่ใช่รู้แค่ result รวม (DB เก็บแค่ result
-                    # รวมอย่างเดียว ค่าพวกนี้จึงต้องส่งมาทาง event ตอนวัดเสร็จ
-                    # ส่วนตอน refresh หน้าเว็บ frontend คำนวณเองจาก nominal/tol
-                    # ที่ /api/measurements แนบมาให้ — ดู MEASUREMENTS_SELECT)
-                    "offset":         req.offset,
-                    "offset_tol":     part.get("offset_tol"),
-                    "ok_x":           ok_x,
-                    "ok_y":           ok_y,
-                    "ok_offset":      ok_offset,
-                    "nominal_x":      part["nominal_x"],
-                    "nominal_y":      part["nominal_y"],
-                    "upper_tol":      part["upper_tol"],
-                    "lower_tol":      part["lower_tol"],
-                    "measured":       measured,
-                    "target":         target,
-                },
-            )
+        # broadcast ให้ทุก dashboard ที่เปิดอยู่ (เดิมมีเงื่อนไขข้ามตอน manual add
+        # เพราะ onNewMeasurement ฝั่ง index.html ไม่ได้เช็คว่า session_id ตรงกับ
+        # session ที่กำลังแสดงอยู่ไหม — ตอนนี้ไม่มีเส้นทาง manual แล้วจึงยิงเสมอ)
+        await push_event(
+            "measurement",
+            {
+                "measurement_id": measurement_id,
+                "session_id":     session_id,
+                "number_alpl":    number_alpl,
+                "value_x":        req.value_x,
+                "value_y":        req.value_y,
+                "result":         result,
+                # ผลแยกรายแกน + ช่วงที่รับได้ — ให้ Live Telemetry โชว์ได้ว่า
+                # "พังที่แกนไหน" ไม่ใช่รู้แค่ result รวม (DB เก็บแค่ result
+                # รวมอย่างเดียว ค่าพวกนี้จึงต้องส่งมาทาง event ตอนวัดเสร็จ
+                # ส่วนตอน refresh หน้าเว็บ frontend คำนวณเองจาก nominal/tol
+                # ที่ /api/measurements แนบมาให้ — ดู MEASUREMENTS_SELECT)
+                "offset":         req.offset,
+                "offset_tol":     part.get("offset_tol"),
+                "ok_x":           ok_x,
+                "ok_y":           ok_y,
+                "ok_offset":      ok_offset,
+                "nominal_x":      part["nominal_x"],
+                "nominal_y":      part["nominal_y"],
+                "upper_tol":      part["upper_tol"],
+                "lower_tol":      part["lower_tol"],
+                "measured":       measured,
+                "target":         target,
+            },
+        )
         return {
             "measurement_id": measurement_id,
             "result":  result,

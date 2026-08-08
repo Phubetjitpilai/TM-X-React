@@ -387,12 +387,38 @@ def command_flow(session_id, template_name, number_alpl, target_count):
         # ── ล้างสถานะให้สะอาดเสมอ ไม่ว่าจะจบปกติ พัง หรือโดนสั่ง Stop ──────
         # จบการทำงาน — กลับโหมดตั้งค่า (S0 ยิงซ้ำกับตอน stop handler ได้ไม่เป็นไร
         # TM-X รับซ้ำได้)
+        #
+        # ⚠ เดิมครอบ try/except แล้ว `pass` เฉยๆ ทั้งก้อน — ถ้า S0 ถูกปฏิเสธหรือ
+        #   timeout จะไม่มีใครรู้เลยสักคน แล้ว TM-X ค้างอยู่ในโหมดดำเนินงานตลอด
+        #   (คนหน้างานแตะจอแก้โปรแกรมไม่ได้ + เครื่องยังเปิดรับ T1 อยู่)
+        #   ตอนนี้ยังกลืน exception เหมือนเดิม (ไม่ให้ session พังเพราะ S0)
+        #   แต่ต้อง log ให้เห็นเสมอ
         if client_socket is not None:
             try:
-                send_command(client_socket, "S0")
+                resp = send_command(client_socket, "S0")
+                if str(resp).upper().startswith("ER"):
+                    print(f"⚠️ S0 ถูกปฏิเสธ: {resp!r} — TM-X อาจยังค้างในโหมดดำเนินงาน")
+                else:
+                    print(f"→ S0 : {resp}")
                 time.sleep(0.5)
-            except Exception:
-                pass  # socket อาจถูกปิดไปแล้วจาก stop handler
+            except Exception as exc:
+                print(f"⚠️ ส่ง S0 ไม่สำเร็จ: {type(exc).__name__} — "
+                      f"TM-X อาจยังค้างในโหมดดำเนินงาน")
+
+            # ── ปิด connection ให้สะอาด ────────────────────────────────────
+            # TM-X ให้มี "อุปกรณ์ควบคุม" ได้ทีละตัวเดียว — ตราบใดที่มันยังเห็นว่า
+            # connection นี้มีชีวิตอยู่ จอสัมผัสหน้าเครื่องจะถูกล็อกไว้ ขึ้นข้อความ
+            # "Another device is currently in use."
+            #
+            # close() เฉยๆ แค่คืน handle ให้ OS ไม่ได้ส่ง FIN บอก TM-X ทันทีเสมอไป
+            # shutdown(SHUT_RDWR) บอกตรงๆ ว่า "จบแล้ว ตัดได้เลย"
+            # (ยืนยันหน้างาน 6 ส.ค. 2569: S0 เปลี่ยนโหมดสำเร็จจริง แต่จอยังล็อก
+            #  จนกว่าจะกด Close Other Device ที่เครื่อง = ปัญหาอยู่ที่การปล่อย
+            #  connection ไม่ใช่ที่ตัวคำสั่ง S0)
+            try:
+                client_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass  # อีกฝั่งตัดไปก่อนแล้ว หรือ socket ถูกปิดจาก stop handler
             try:
                 client_socket.close()
             except Exception:

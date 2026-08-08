@@ -54,6 +54,11 @@ CREATE TABLE template (
 CREATE TABLE package_size (
   package_size_id INT AUTO_INCREMENT PRIMARY KEY,
   package_size    VARCHAR(20) NOT NULL UNIQUE,
+  nominal_x       FLOAT NOT NULL,
+  nominal_y       FLOAT NOT NULL,
+  upper_tol       FLOAT NOT NULL,
+  lower_tol       FLOAT NOT NULL,
+  offset_tol      FLOAT NOT NULL,
   template_id     INT,
   FOREIGN KEY (template_id) REFERENCES template(template_id)
 );
@@ -87,12 +92,14 @@ CREATE TABLE parts_specifications (
   part_id          INT AUTO_INCREMENT PRIMARY KEY,
   number_alpl      INT UNIQUE,
   part_number_id   INT,
+  package_size_id   INT,
   vendor_id        INT,
   owner_id         INT,
   po_number        BIGINT,
   description      TEXT,
   recieve_date     DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (part_number_id)  REFERENCES part_number(part_number_id),
+  FOREIGN KEY (package_size_id)  REFERENCES package_size(package_size_id),
   FOREIGN KEY (vendor_id)       REFERENCES vendor(vendor_id),
   FOREIGN KEY (owner_id)        REFERENCES owner(owner_id)
 );
@@ -109,15 +116,13 @@ CREATE TABLE parts_specifications (
 -- restart กลาง session ที่ยัง running อยู่
 CREATE TABLE sessions (
   session_id     INT          AUTO_INCREMENT PRIMARY KEY,
-  number_alpl    INT          NOT NULL,
   state          VARCHAR(20)  NOT NULL DEFAULT 'idle',
   target_count   INT          NOT NULL DEFAULT 1,
   measured_count INT          NOT NULL DEFAULT 0,
   queue_state    JSON         NULL,
   last_seen      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   started_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  ended_at       DATETIME     NULL,
-  FOREIGN KEY (number_alpl) REFERENCES parts_specifications(number_alpl) ON UPDATE CASCADE
+  ended_at       DATETIME     NULL
 );
 
 -- client_uuid: UUID ที่ Agent สร้างต่อการวัด 1 ครั้ง ใช้กัน insert ซ้ำตอน retry

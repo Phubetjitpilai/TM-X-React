@@ -1524,7 +1524,7 @@
     const v = field => m ? (m[field] ?? '') : '';
     const isEdit = mode === 'edit';
 
-    document.getElementById('edit-modal-title').textContent = isEdit ? `Edit Measurement — ID ${measurementId}` : 'Add New Measurement';
+    document.getElementById('edit-modal-title').textContent = `Edit Measurement — ID ${measurementId}`;
     document.getElementById('btn-delete-inline').style.display = isEdit ? '' : 'none';
     if (isEdit) document.getElementById('btn-delete-inline').onclick = () => confirmDeleteMeas(measurementId);
 
@@ -1635,15 +1635,10 @@
     }
 
     try {
-      const r = !isEdit
-        ? await fetch(`${API}/api/measurements`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          })
-        : await fetch(`${API}/api/measurements/${editContext.key}`, {
-            // PATCH ให้ตรงกับ endpoint ใหม่ @app.patch("/api/measurements/{id}")
-            // (เดิมใช้ PUT ไปยัง route ที่ไม่มีอยู่จริง → ไม่บันทึกอะไรเลยแต่ขึ้น "สำเร็จ")
+      // มีแต่ PATCH — ปุ่ม "+ Add Measurement" ถูกถอดออกแล้วตามที่ตกลงกันว่า
+      // ผลวัดต้องมาจากการวัดจริงเท่านั้น ห้ามพิมพ์เอง (ฝั่ง backend ก็ปฏิเสธ
+      // POST ที่ไม่มี session_id ไปแล้วเช่นกัน — ดู create_measurement)
+      const r = await fetch(`${API}/api/measurements/${editContext.key}`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -1654,7 +1649,7 @@
       // ทั้ง POST (Add) และ PATCH (Edit) คืน field "result" (OK/NG ที่คำนวณใหม่ล่าสุด) มาด้วย
       const resBody = await r.json().catch(() => ({}));
       const resultNote = resBody.result ? ` (Result: ${resBody.result})` : '';
-      showToast(isEdit ? `บันทึก Measurement ID ${editContext.key} เรียบร้อยแล้ว${resultNote}` : `เพิ่ม Measurement เรียบร้อยแล้ว${resultNote}`);
+      showToast(`บันทึก Measurement ID ${editContext.key} เรียบร้อยแล้ว${resultNote}`);
       // refetch หน้าปัจจุบันของ measurements ให้ตารางตรงกับ DB จริง
       await reloadMeasAfterMutation(editContext.key);
       closeEditModal();

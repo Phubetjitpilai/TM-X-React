@@ -253,30 +253,37 @@ def _fallback_last_line():
 
 
 def get_current_session():
-    """ถาม Backend ว่าตอนนี้มี session ไหน 'running' อยู่ไหม — คืน
-    (session_id, number_alpl) หรือ (None, None) ถ้าไม่มี (เช่นค่า/รูปมาถึงช้า
-    เกินไปหลัง session จบไปแล้ว) ผู้เรียกต้องเช็ค None ก่อนใช้เสมอ
+    """ถาม Backend ว่าตอนนี้มี session ไหน 'running' อยู่ไหม
+
+    คืน session_id หรือ None ถ้าไม่มี (เช่นค่า/รูปมาถึงช้าเกินไปหลัง session
+    จบไปแล้ว) ผู้เรียกต้องเช็ค None ก่อนใช้เสมอ
+
+    หมายเหตุ: เดิมคืน number_alpl มาด้วย แต่ค่านั้นอ่านมาจาก
+    sessions.number_alpl ซึ่งไม่เคยถูก UPDATE เลย = ALPL ตัวแรกของคิวตลอด
+    ทั้ง session (ผิดตั้งแต่ชิ้นที่ 2) และฝั่ง main.py ก็เพิกเฉยอยู่แล้วเพราะ
+    เลือก ALPL จากตำแหน่งในคิวของตัวเอง จึงเลิกส่งไปเลย
     """
     try:
         resp = httpx.get(f"{BACKEND_URL}/api/session/state", timeout=5)
         data = resp.json()
         if data.get("state") == "running":
-            return data.get("session_id"), data.get("number_alpl")
+            return data.get("session_id")
     except Exception as exc:
         print(f"⚠️ query /api/session/state ไม่สำเร็จ: {exc}")
-    return None, None
+    return None
 
 
-def post_to_backend(session_id, number_alpl, value_x, value_y, offset):
+def post_to_backend(session_id, value_x, value_y, offset):
     """POST ค่าเข้า backend — format ตรงตาม MeasurementCreate ใน main.py
-    (number_alpl ตรงนี้ไม่จำเป็นต้องตรงเป๊ะ — session แบบคิว IPM/New/Rework
-    ฝั่ง main.py จะเพิกเฉยค่านี้แล้วใช้ตำแหน่งปัจจุบันในคิวของตัวเองแทนอยู่แล้ว)
+
+    ไม่ส่ง number_alpl แล้ว — backend เลือก ALPL จากตำแหน่งปัจจุบันในคิวของ
+    ตัวเองเสมอ (session_queues[session_id]["queue"][position]) เพราะสคริปต์นี้
+    ไม่มีทางรู้ว่ากำลังรับค่าของชิ้นที่เท่าไหร่ในคิว
     """
     return httpx.post(
         f"{BACKEND_URL}/api/measurements",
         json={
             "session_id":  session_id,
-            "number_alpl": number_alpl,
             "value_x":     value_x,
             "value_y":     value_y,
             "offset":      offset,
@@ -440,7 +447,7 @@ def _handle_capture_inner(image_path, t_recv):
         return
 
     # ── ด่าน 3: ต้องมี session ที่ running อยู่ ─────────────────────────
-    session_id, number_alpl = get_current_session()
+    session_id = get_current_session()
     if session_id is None:
         print(f"⚠️ {name}: ไม่มี session ที่ running อยู่ตอนนี้ — ทิ้งค่า/รูปนี้ไป")
         _remove_quietly(image_path)
@@ -450,7 +457,7 @@ def _handle_capture_inner(image_path, t_recv):
     # ── ด่าน 4: ส่งเข้า Backend ─────────────────────────────────────────
     print(f"✅ {name}  ({size_mb:.1f} MB)  →  value_x={value_x}  value_y={value_y}  offset={offset}")
     try:
-        resp = post_to_backend(session_id, number_alpl, value_x, value_y, offset)
+        resp = post_to_backend(session_id, value_x, value_y, offset)
     except Exception as exc:
         print(f"   ⚠️ POST /api/measurements ไม่สำเร็จ: {exc} — เก็บรูปไว้ไม่ลบ")
         return
