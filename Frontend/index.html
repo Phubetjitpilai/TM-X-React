@@ -101,6 +101,43 @@
       gap: 1.5rem;
       flex-wrap: wrap;
     }
+    /* ── ชิปข้อมูลในแถบ Session Control ──────────────────────────────────
+       ทุกชิปเป็น "ป้ายกำกับตัวเล็ก + ค่าในกล่องเทา" วางแนวนอนบรรทัดเดียว
+       ตัวที่ยังไม่มีค่าจะถูกซ่อนทั้งชิป (renderSessionUI เป็นคนสั่ง) ไม่ใช่โชว์
+       ขีดกลางไว้ — แถบตอน idle จะได้ไม่รกด้วยช่องว่างเปล่า
+
+       ปุ่ม Start/Stop ถูกดันไปชิดขวาด้วย margin-left:auto ที่ .session-btns
+       (ไม่ใช้ spacer div) เพื่อให้ชิปกลุ่มซ้ายเรียงชิดกันตามจำนวนที่มีจริง */
+    .session-chip { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+    .sc-label {
+      font-size: 0.7rem;
+      color: var(--muted);
+      font-weight: 600;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    /* ตัวอักษรชุดเดียวกับป้าย STATUS เป๊ะ (ขนาด/น้ำหนัก/ระยะห่างตัวอักษร +
+       padding) เพื่อให้ทั้งแถบอ่านเป็นแถวเดียวกัน ไม่ใช่ป้ายใหญ่ 1 อันแล้วมี
+       ป้ายเล็กห้อยตามหลัง — ดู .session-state-badge ถ้าจะแก้ต้องแก้คู่กัน
+
+       ⚠ ไม่ทำ text-transform: uppercase เหมือน STATUS โดยตั้งใจ — ค่าพวกนี้
+         เป็นข้อมูลจริง (ชื่อคน/โหมด) การบังคับพิมพ์ใหญ่ทำให้ "Nut" กลายเป็น
+         "NUT" ซึ่งไม่ใช่ชื่อที่เขาเขียน ส่วน STATUS เป็นคำที่เราตั้งเองจึงทำได้
+
+       สี: ใช้ var(--text) = ดำเข้มที่สุดในธีม ต่างจากป้าย STATUS ที่สีเปลี่ยน
+       ตามสถานะ (เทา=idle/stopped · ฟ้า=running · ส้ม=timeout) — แบ่งหน้าที่ให้
+       ชัดว่า "สี = สถานะ" ส่วน "ดำ = ข้อเท็จจริงที่ไม่เปลี่ยนตามสถานะ" ถ้าใส่สี
+       ให้ค่าพวกนี้ด้วยจะกลายเป็นสีแย่งความหมายกันเองทั้งแถบ */
+    .sc-value {
+      font-size: 1rem;
+      font-weight: 700;
+      letter-spacing: .04em;
+      color: var(--text);
+      background: var(--surface2);
+      border-radius: var(--radius);
+      padding: 0.2rem 0.75rem;
+    }
+
     .session-info { flex: 1; min-width: 180px; }
     .session-state-label {
       font-size: 0.75rem;
@@ -119,10 +156,8 @@
     .session-state-badge.running  { background: rgba(55,138,222,.12);  color: var(--accent); }
     .session-state-badge.stopped  { background: var(--surface2); color: var(--muted); }
     .session-state-badge.timeout  { background: var(--warn-bg);  color: var(--warn); }
-    .session-state-badge.paused   { background: var(--warn-bg);  color: var(--warn); }
-    .session-btns { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+    .session-btns { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-left: auto; }
     .btn-start   { background: var(--accent); color: #fff; }
-    .btn-pause   { background: var(--warn);   color: #fff; display: none; }
     .btn-stop    { background: var(--ng);     color: #fff; display: none; }
 
     .form-group { display: flex; flex-direction: column; gap: 0.3rem; }
@@ -218,6 +253,12 @@
     /* ── ค่าที่วัดได้ในตาราง Measurements — เขียว=อยู่ในสเปค แดง=หลุดสเปค ── */
     .val-ok { color: var(--ok); font-weight: 600; }
     .val-ng { color: var(--ng); font-weight: 600; }
+
+    /* คอลัมน์เกณฑ์ (Nominal / Tol / Offset Tol) — เป็นค่าอ้างอิงที่แก้ที่นี่ไม่ได้
+       ทำให้จางกว่าค่าที่วัดได้จริง เพื่อให้สายตาไปหยุดที่ Value X/Y ก่อน
+       white-space:nowrap กัน "5.030 / 5.030" ตัดขึ้นบรรทัดใหม่กลางตัวเลข */
+    .th-spec, .td-spec { color: var(--muted); white-space: nowrap; }
+    .th-spec::after { content: ' 🔒'; font-size: 0.85em; opacity: .6; }
 
     /* ── แถบคิว ALPL ใน Live Telemetry ────────────────────────────────────
        แสดงคิวทั้งหมดของ session ปัจจุบันเรียงตามลำดับที่จะวัด แยกสถานะด้วย
@@ -501,6 +542,7 @@
       margin-bottom: 1rem;
     }
     .entry-form-grid .form-group.span-2 { grid-column: span 2; }
+    .entry-form-grid .form-group.span-3 { grid-column: span 3; }
     .entry-form-grid label {
       font-size: 0.75rem;
       color: var(--muted);
@@ -547,6 +589,85 @@
     .entry-actions { display: flex; gap: 0.6rem; align-items: center; }
     .btn-submit-entry { background: var(--ok); color: #fff; }
     .btn-edit-entry { background: var(--accent2); color: #fff; }
+
+    /* ── กลุ่มในฟอร์ม Part Entry (กด +Add ได้หลายกลุ่ม) ────────────────────
+       1 กลุ่ม = ALPL หลายตัวที่ใช้ข้อมูลชุดเดียวกัน — กลุ่มที่กรอกเสร็จแล้วจะ
+       ถูก "ย่อ" เหลือบรรทัดเดียว ไม่งั้นกรอก 4-5 กลุ่มแล้ว modal จะสูงเกินจอ
+       จนหาปุ่ม Save ไม่เจอ */
+    .entry-group {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin-bottom: 0.85rem;
+      background: var(--surface);
+    }
+    .entry-group.collapsed .entry-group-body { display: none; }
+    .entry-group-head {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.55rem 0.75rem;
+      background: var(--surface2);
+      border-radius: var(--radius) var(--radius) 0 0;
+      cursor: pointer;
+      user-select: none;
+    }
+    .entry-group.collapsed .entry-group-head { border-radius: var(--radius); }
+    .entry-group-title { font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
+    .entry-group-sum {
+      font-size: 0.75rem;
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+    .entry-group-arrow { font-size: 0.7rem; color: var(--muted); }
+    .entry-group-del {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--ng);
+      border-radius: var(--radius);
+      font-size: 0.72rem;
+      padding: 0.2rem 0.5rem;
+      cursor: pointer;
+    }
+    .entry-group-del:hover { background: var(--ng); color: #fff; border-color: var(--ng); }
+    .entry-group-body { padding: 0.85rem 0.75rem 0.1rem; }
+    /* ── ผังช่องกรอกในกลุ่ม ────────────────────────────────────────────────
+       จำนวนคอลัมน์มาจาก --cols ที่ renderGroups ใส่ให้ตามโหมด (ดู GROUP_LAYOUT)
+       ไม่ได้ใช้ auto-fill เหมือน .entry-form-grid ปกติ เพราะผังต้องคงที่:
+       auto-fill จะยัดช่องขึ้นบรรทัดเดียวกันเองตามความกว้างที่เหลือ ทำให้
+       "ALPL | Package Size | Part Number" หลุดบรรทัดไม่เหมือนกันในแต่ละจอ
+       minmax(0,1fr) ไม่ใช่ 1fr เฉยๆ — กัน <select> ที่มีข้อความยาวดัน
+       คอลัมน์ตัวเองให้กว้างเกินส่วนแบ่ง (min-width:auto เป็นค่าเริ่มต้นของ grid) */
+    .entry-group-body .entry-form-grid {
+      grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+      margin-bottom: 0.4rem;
+    }
+    /* จอแคบ: ยุบเหลือคอลัมน์เดียว แล้วยกเลิก span ทั้งหมด ไม่งั้นช่องที่ span 2
+       จะล้นออกนอกกรอบ (span 2 ในกริดที่มีคอลัมน์เดียว) */
+    @media (max-width: 720px) {
+      .entry-group-body .entry-form-grid { grid-template-columns: 1fr; }
+      .entry-group-body .entry-form-grid .form-group[class*="span-"] { grid-column: auto; }
+    }
+    /* ช่องที่ระบบเติมให้จาก ALPL ที่ลงทะเบียนไว้ — แก้ไม่ได้
+       ใช้ disabled จริง (ไม่ใช่แค่ทำให้ดูจาง) เพราะ readonly ใช้กับ <select> ไม่ได้
+       สีพื้นเข้มกว่าช่องปกติเล็กน้อยเพื่อให้เห็นว่า "ไม่ใช่ช่องที่กรอกได้" */
+    .entry-form-grid input.auto-locked,
+    .entry-form-grid select.auto-locked {
+      background: var(--surface2);
+      color: var(--muted);
+      cursor: not-allowed;
+    }
+    .autofill-note { color: var(--muted); }
+
+    .entry-group-add {
+      display: flex;
+      align-items: center;
+      gap: 0.7rem;
+      margin-bottom: 1rem;
+    }
+    .entry-group-hint { font-size: 0.72rem; color: var(--muted); }
     .entry-status {
       font-size: 0.8rem;
       color: var(--muted);
@@ -839,6 +960,8 @@
     .rax-bar { position: relative; height: 14px; margin: 2.1rem 0 2.4rem; }
     .rax-track { position: absolute; inset: 3px 0; background: var(--surface2); border-radius: 4px; }
     .rax-zone  { position: absolute; top: 0; bottom: 0; left: 25%; width: 50%; background: #C0DD97; border-radius: 4px; }
+    /* offset ไม่มีโซน "ต่ำกว่าสเปค" (ยิ่งน้อยยิ่งดี) โซนที่รับได้จึงเริ่มจากซ้ายสุด */
+    .rax-zone.offset { left: 0; width: 75%; }
     /* left ถูกกำหนดจาก JS ตามสัดส่วนจริงของ nominal (tolerance ไม่สมมาตร) */
     .rax-nom   { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--ok); opacity: .5; }
     .rax-mark  { position: absolute; top: -6px; height: 26px; width: 4px; border-radius: 2px; transform: translateX(-50%); }
@@ -942,20 +1065,33 @@
     <section id="session">
       <div class="card">
         <div class="card-title">Session Control</div>
+        <!-- ทุกอย่างอยู่บรรทัดเดียว — ช่องที่ยังไม่มีค่าจะถูกซ่อน (ไม่ใช่โชว์ "—")
+             เพื่อไม่ให้แถบรกตอน idle · ดู renderSessionUI ที่เป็นคนเติมค่าทั้งหมด -->
         <div class="session-row">
-          <div class="session-info">
-            <div class="session-state-label">Status</div>
-            <div class="session-state-badge idle" id="sess-state-badge">IDLE</div>
+          <div class="session-chip">
+            <span class="sc-label">Status</span>
+            <span class="session-state-badge idle" id="sess-state-badge">IDLE</span>
           </div>
+          <div class="session-chip" id="sc-operator-wrap" style="display:none">
+            <span class="sc-label">Operator</span>
+            <span class="sc-value" id="sc-operator">—</span>
+          </div>
+          <div class="session-chip" id="sc-mode-wrap" style="display:none">
+            <span class="sc-label">Measure Type</span>
+            <span class="sc-value" id="sc-mode">—</span>
+          </div>
+          <div class="session-chip" id="sc-session-wrap" style="display:none">
+            <span class="sc-label">Session</span>
+            <span class="sc-value" id="sc-session">—</span>
+          </div>
+
           <div class="session-btns">
-            <!-- 3 ปุ่ม แต่เห็นพร้อมกันแค่ 2 เสมอ (ดู renderSessionUI):
+            <!-- 2 ปุ่ม เห็นทีละตัวตามสถานะ (ดู renderSessionUI):
                  idle    → Start
-                 running → Start(กดไม่ได้) + Pause
-                 paused  → Start(วัดต่อ)   + Stop
-                 ตั้งใจให้ Stop โผล่เฉพาะตอนพักอยู่ — บังคับให้กด Pause ก่อนเสมอ
-                 กันเผลอกด Stop กลางคันแล้วเสียคิวทั้งชุด -->
+                 running → Stop
+                 Pause ถูกถอดออกทั้งระบบแล้ว (7 ส.ค. 2569) เพราะฝั่ง Pi ไม่เคย
+                 รองรับ — กดแล้วหน้าเว็บขึ้น paused แต่เครื่องยังวัดต่อ -->
             <button class="btn-start" id="btn-start">▶ Start</button>
-            <button class="btn-pause" id="btn-pause">⏸ Pause</button>
             <button class="btn-stop"  id="btn-stop">■ Stop</button>
           </div>
         </div>
@@ -991,10 +1127,13 @@
                 <div class="tc-value" id="telemetry-y">—<span> mm</span></div>
                 <div class="tc-range" id="telemetry-y-range"></div>
               </div>
-              <!-- Offset เทียบกับเพดาน offset_tol ของ part_number ตัวเดียว
-                   ไม่ใช่ช่วง nominal ± tol เหมือน X/Y — tc-range จึงขึ้นว่า
-                   "ไม่เกิน x.xxx" ไม่ใช่ช่วงตัวเลข 2 ฝั่ง -->
-              <div class="telemetry-cell offset">
+              <!-- Offset เทียบกับเพดาน offset_tol ตัวเดียว ไม่ใช่ช่วง nominal ± tol
+                   เหมือน X/Y — tc-range จึงขึ้นว่า "ไม่เกิน x.xxx" ไม่ใช่ช่วง 2 ฝั่ง
+                   ⚠ โหมด IPM **ซ่อนกล่องนี้ทั้งใบ** (ยังบันทึกค่าลง DB ตามปกติ)
+                     เพราะ offset ไม่ได้ถูกใช้ตัดสินอะไรในโหมดนั้น การโชว์ตัวเลข
+                     ที่ไม่มีผลต่อ OK/NG ทำให้คนหน้าเครื่องต้องมาตีความเองว่า
+                     "แล้วตัวเลขนี้ดีหรือไม่ดี" — ดู renderOffsetCell -->
+              <div class="telemetry-cell offset" id="telemetry-offset-cell">
                 <div class="tc-head">
                   <span class="tc-label">Offset</span>
                   <span class="tc-axis" id="telemetry-offset-axis"></span>
@@ -1011,7 +1150,7 @@
           <!-- แถบคิว ALPL — ซ่อนอัตโนมัติเมื่อคิวมีตัวเดียว (เช่นโหมด IPM ชิ้นเดียว)
                หรือยังไม่มี session ดู renderQueueStrip() -->
           <div class="telemetry-queue" id="telemetry-queue" style="display:none">
-            <div class="tq-label">คิวการวัด</div>
+            <div class="tq-label">Queue</div>
             <div class="tq-strip" id="telemetry-queue-strip"></div>
           </div>
           <!-- แถบสัดส่วนผลการวัดของ session ปัจจุบัน: เขียว=OK แดง=NG เทา=ยังไม่วัด
@@ -1021,7 +1160,7 @@
             <div class="tb-ng" id="telemetry-bar-ng"></div>
           </div>
           <div class="telemetry-footer">
-            <span>Session</span>
+            <span>Progress</span>
             <span class="telemetry-counts">
               <span class="tcount ok" id="telemetry-count-ok">0 OK</span>
               <span class="tcount-sep">·</span>
@@ -1073,6 +1212,14 @@
                 <th>ID</th>
                 <th>Session</th>
                 <th>ALPL</th>
+                <!-- เกณฑ์ที่ใช้ตัดสิน "แถวนี้" — ย้ายมาจากตาราง Parts ในหน้า Edit
+                     แหล่งขึ้นกับโหมดของการวัดครั้งนั้น (IPM → package_size ·
+                     New/Rework → part_number) backend เลือกให้แล้วใน
+                     MEASUREMENTS_SELECT · วางไว้ก่อน Value X เพื่อให้อ่านไล่
+                     ซ้าย→ขวาได้ว่า "เกณฑ์เท่านี้ วัดได้เท่านี้ ผลเลยเป็นแบบนี้" -->
+                <th class="th-spec">Nominal X / Y</th>
+                <th class="th-spec">Tol (+/-)</th>
+                <th class="th-spec">Offset Tol</th>
                 <th>Value X</th>
                 <th>Value Y</th>
                 <th>Offset</th>
@@ -1085,7 +1232,7 @@
               </tr>
             </thead>
             <tbody id="meas-body">
-              <tr><td colspan="12" style="text-align:center;color:var(--muted);padding:2rem">Loading…</td></tr>
+              <tr><td colspan="15" style="text-align:center;color:var(--muted);padding:2rem">Loading…</td></tr>
             </tbody>
           </table>
         </div>
@@ -1209,172 +1356,38 @@
     <!-- Shared datalist: Package Size (ดึงจาก /api/package-sizes) -->
     <datalist id="package-size-datalist"></datalist>
 
-    <!-- IPM form -->
-    <form id="form-ipm" novalidate style="display:none">
-      <div class="entry-session-hint" id="ipm-order-hint">— / — session</div>
-      <div class="entry-form-grid">
-        <div class="form-group">
-          <label for="ipm-number_alpl">ALPL <span class="req">*</span></label>
-          <input type="text" id="ipm-number_alpl" placeholder="เช่น 201, 202, 203" />
-          <div class="field-error" id="err-ipm-number_alpl"></div>
-        </div>
-        <div class="form-group">
-          <label for="ipm-operator">Operator <span class="req">*</span></label>
-          <select id="ipm-operator">
-            <option value="">-- เลือก Operator --</option>
-          </select>
-          <div class="field-error" id="err-ipm-operator"></div>
-        </div>
-        <div class="form-group">
-          <label for="ipm-package_size">Package Size</label>
-          <input type="text" id="ipm-package_size" list="package-size-datalist" placeholder="ต้องกรอกถ้ามี ALPL ที่ยังไม่เคยลงทะเบียน" />
-          <div class="field-error" id="err-ipm-package_size"></div>
-        </div>
-        <div class="form-group">
-          <label for="ipm-part_number">Part Number</label>
-          <select id="ipm-part_number" disabled>
-            <option value="">-- เลือก Package Size ก่อน --</option>
-          </select>
-          <div class="field-error" id="err-ipm-part_number"></div>
-        </div>
-      </div>
-      <div class="entry-actions">
-        <button type="submit" class="btn-submit-entry" id="btn-submit-ipm">✔ Save</button>
-        <button type="button" class="btn-edit-entry" id="btn-edit-ipm" style="display:none">✎ Edit</button>
-        <span class="entry-status" id="ipm-status"></span>
-      </div>
-    </form>
+    <!-- ══════════════════════════════════════════════════════════════════
+         ฟอร์มเดียวใช้ได้ทั้ง 3 โหมด — ต่างกันแค่ "ลิสต์ field ต่อกลุ่ม"
+         (ดู GROUP_FIELDS ในสคริปต์ท้ายไฟล์) ของเดิมเป็นฟอร์มแยก 3 ก้อนที่มี
+         markup + validate + lock ซ้ำกันเกือบทั้งหมด แก้บั๊กทีต้องไล่ 3 ที่
+         ตัวกลุ่มถูกวาดด้วย JS (renderGroups) เพราะจำนวนกลุ่มเปลี่ยนได้ตอน
+         รันด้วยปุ่ม +Add — id ของช่องกรอกจึงเป็น index-based: g{gi}-{field}
+         ═══════════════════════════════════════════════════════════════════ -->
+    <form id="form-entry" novalidate style="display:none">
+      <div class="entry-session-hint" id="entry-order-hint"></div>
 
-    <!-- New form -->
-    <form id="form-new" novalidate style="display:none">
-      <div class="entry-session-hint" id="new-order-hint"></div>
+      <!-- Operator อยู่นอกกลุ่ม ใช้ร่วมกันทั้ง session (คนวัดคนเดียวกัน) -->
       <div class="entry-form-grid">
         <div class="form-group span-2">
-          <label for="new-number_alpl">ALPL <span class="req">*</span></label>
-          <input type="text" id="new-number_alpl" placeholder="เช่น 201, 202, 203" />
-          <div class="field-error" id="err-new-number_alpl"></div>
-        </div>
-        <div class="form-group">
-          <label for="new-package_size">Package Size <span class="req">*</span></label>
-          <input type="text" id="new-package_size" list="package-size-datalist" placeholder="เลือก package size — จะ map nominal/tolerance/template ให้อัตโนมัติ" />
-          <div class="field-error" id="err-new-package_size"></div>
-        </div>
-        <div class="form-group">
-          <label for="new-part_number">Part Number <span class="req">*</span></label>
-          <select id="new-part_number" disabled>
-            <option value="">-- เลือก Package Size ก่อน --</option>
-          </select>
-          <div class="field-error" id="err-new-part_number"></div>
-        </div>
-        <div class="form-group span-2">
-          <label for="new-description">Description <span class="req">*</span></label>
-          <input type="text" id="new-description" />
-          <div class="field-error" id="err-new-description"></div>
-        </div>
-        <div class="form-group">
-          <label for="new-po_number">PO Number <span class="req">*</span></label>
-          <input type="text" inputmode="numeric" id="new-po_number" placeholder="ตัวเลขเท่านั้น" />
-          <div class="field-error" id="err-new-po_number"></div>
-        </div>
-        <div class="form-group">
-          <label for="new-vendor">Vendor <span class="req">*</span></label>
-          <select id="new-vendor">
-            <option value="">-- เลือก Vendor --</option>
-          </select>
-          <div class="field-error" id="err-new-vendor"></div>
-        </div>
-        <div class="form-group">
-          <label for="new-operator">Operator <span class="req">*</span></label>
-          <select id="new-operator">
+          <label for="entry-operator">Operator <span class="req">*</span></label>
+          <select id="entry-operator">
             <option value="">-- เลือก Operator --</option>
           </select>
-          <div class="field-error" id="err-new-operator"></div>
-        </div>
-        <div class="form-group">
-          <label for="new-owner">Owner <span class="req">*</span></label>
-          <select id="new-owner">
-            <option value="">-- เลือก Owner --</option>
-          </select>
-          <div class="field-error" id="err-new-owner"></div>
-        </div>
-        <div class="form-group span-2">
-          <label for="new-receive_date">Receive Date</label>
-          <input type="date" id="new-receive_date" />
-          <div class="field-error" id="err-new-receive_date"></div>
+          <div class="field-error" id="err-entry-operator"></div>
         </div>
       </div>
-      <div class="entry-actions">
-        <button type="submit" class="btn-submit-entry" id="btn-submit-new">✔ Save</button>
-        <button type="button" class="btn-edit-entry" id="btn-edit-new" style="display:none">✎ Edit</button>
-        <span class="entry-status" id="new-status"></span>
-      </div>
-    </form>
 
-    <!-- Rework form — ALPL ที่เคยลงทะเบียนผ่าน New แล้ว แต่งานไม่ผ่าน ถูกส่งไป
-         Rework แล้วส่งกลับมาวัดใหม่ — auto-fill ข้อมูลเดิมทุกช่อง ยกเว้น Receive
-         Date ที่ต้องกรอกวันที่รับกลับมาใหม่เสมอ (ดู updateReworkPrefill) รองรับ
-         ทีละ 1 ALPL เท่านั้น เพราะแต่ละ ALPL มีข้อมูลเดิมของตัวเองไม่เหมือนกัน -->
-    <form id="form-rework" novalidate style="display:none">
-      <div class="entry-session-hint" id="rework-order-hint"></div>
-      <div class="entry-form-grid">
-        <div class="form-group span-2">
-          <label for="rework-number_alpl">ALPL <span class="req">*</span></label>
-          <input type="text" id="rework-number_alpl" placeholder="ต้องเคยลงทะเบียนผ่าน New มาแล้ว" />
-          <div class="field-error" id="err-rework-number_alpl"></div>
-        </div>
-        <div class="form-group">
-          <label for="rework-package_size">Package Size <span class="req">*</span></label>
-          <input type="text" id="rework-package_size" list="package-size-datalist" />
-          <div class="field-error" id="err-rework-package_size"></div>
-        </div>
-        <div class="form-group">
-          <label for="rework-part_number">Part Number <span class="req">*</span></label>
-          <select id="rework-part_number" disabled>
-            <option value="">-- เลือก Package Size ก่อน --</option>
-          </select>
-          <div class="field-error" id="err-rework-part_number"></div>
-        </div>
-        <div class="form-group span-2">
-          <label for="rework-description">Description <span class="req">*</span></label>
-          <input type="text" id="rework-description" />
-          <div class="field-error" id="err-rework-description"></div>
-        </div>
-        <div class="form-group">
-          <label for="rework-po_number">PO Number <span class="req">*</span></label>
-          <input type="text" inputmode="numeric" id="rework-po_number" placeholder="ตัวเลขเท่านั้น" />
-          <div class="field-error" id="err-rework-po_number"></div>
-        </div>
-        <div class="form-group">
-          <label for="rework-vendor">Vendor <span class="req">*</span></label>
-          <select id="rework-vendor">
-            <option value="">-- เลือก Vendor --</option>
-          </select>
-          <div class="field-error" id="err-rework-vendor"></div>
-        </div>
-        <div class="form-group">
-          <label for="rework-operator">Operator <span class="req">*</span></label>
-          <select id="rework-operator">
-            <option value="">-- เลือก Operator --</option>
-          </select>
-          <div class="field-error" id="err-rework-operator"></div>
-        </div>
-        <div class="form-group">
-          <label for="rework-owner">Owner <span class="req">*</span></label>
-          <select id="rework-owner">
-            <option value="">-- เลือก Owner --</option>
-          </select>
-          <div class="field-error" id="err-rework-owner"></div>
-        </div>
-        <div class="form-group span-2">
-          <label for="rework-receive_date">Receive Date <span class="req">*</span></label>
-          <input type="date" id="rework-receive_date" />
-          <div class="field-error" id="err-rework-receive_date"></div>
-        </div>
+      <div id="entry-groups"></div>
+
+      <div class="entry-group-add">
+        <button type="button" class="btn-pe-action" id="btn-add-group">+ Add Group</button>
+        <span class="entry-group-hint">1 กลุ่ม = ALPL ที่ใช้ข้อมูลชุดเดียวกัน (Package Size / Part Number / PO …)</span>
       </div>
+
       <div class="entry-actions">
-        <button type="submit" class="btn-submit-entry" id="btn-submit-rework">✔ Save</button>
-        <button type="button" class="btn-edit-entry" id="btn-edit-rework" style="display:none">✎ Edit</button>
-        <span class="entry-status" id="rework-status"></span>
+        <button type="submit" class="btn-submit-entry" id="btn-submit-entry">✔ Save</button>
+        <button type="button" class="btn-edit-entry" id="btn-edit-entry" style="display:none">✎ Edit</button>
+        <span class="entry-status" id="entry-status"></span>
       </div>
     </form>
   </div>
@@ -1388,11 +1401,65 @@
   document.addEventListener('station-status', renderSessionUI);
   let measurements  = [];   // "หน้าปัจจุบัน" ของตาราง Measurements เท่านั้น (server-side pagination — ดู loadMeasurementsPage)
   let parts         = [];
-  let ipmQueue      = null;
-  let newQueue      = null;
-  let reworkQueue   = null;
+  // คิว Part Entry ที่กด Save แล้ว — ตัวเดียวจบทุกโหมด (เดิมแยก 3 ตัวแปร
+  // ipmQueue/newQueue/reworkQueue ซึ่งต้องเช็ค "ตัวไหนไม่ null" ทุกจุดที่ใช้)
+  //   { mode, operator, groups: [{number_alpl:[...], package_size, ...}],
+  //     list: [ALPL ทั้งหมดเรียงตามลำดับวัด], raw: [ค่าดิบในฟอร์ม], session_id }
+  let entryQueue    = null;
   let lastTelemetry = null;
   let lastImageMeasurementId = null;   // measurement_id ของรูปล่าสุดที่โชว์ใน Camera Preview
+
+  // ── session_control — "ตัวตนของ session ที่กำลังวัด" ────────────────────
+  //   { session_id, state, measure_type, operator }
+  //
+  // ⚠ แยกจาก `entryQueue` โดยตั้งใจ ถึงจะมี operator/mode เหมือนกันก็ตาม:
+  //   entryQueue = **ร่างในฟอร์ม** — ผู้ใช้กด Edit แก้ได้ตลอด และถูกล้างทิ้ง
+  //                ทันทีที่ session จบ
+  //   sessionControl = **ของ session ที่วัดจริง** — ไม่เปลี่ยนตามที่ผู้ใช้พิมพ์
+  //                และยังอยู่หลังวัดเสร็จ ให้ดูย้อนหลังได้ว่ารอบที่เพิ่งจบเป็นของใคร
+  //
+  // กติกาการล้าง: ล้าง measure_type/operator **เมื่อ session_id เปลี่ยนเท่านั้น**
+  //   ส่วน `state` เปลี่ยนได้อิสระ (running → stopped → timeout) โดยไม่ล้างใคร
+  let sessionControl = { session_id: null, state: 'idle', measure_type: null, operator: null };
+
+  /** อัปเดต session_control จากข้อมูลที่เพิ่งได้มา (จากที่ไหนก็ได้)
+   *
+   *  รับได้ 2 หน้าตา:
+   *    • แถวจาก GET /api/session/state — มี queue_state ให้แกะ operator/measure_mode
+   *    • ก้อนย่อยจาก SSE เช่น {state:'stopped'} — อัปเดตเฉพาะ state ที่ส่งมา
+   *
+   *  ฟิลด์ที่ไม่ได้ส่งมา = "ไม่รู้" ไม่ใช่ "ให้ลบ" จึงคงค่าเดิมไว้เสมอ
+   *  (ยกเว้นกรณี session_id เปลี่ยน ซึ่งล้างทั้งก้อนตามกติกา)
+   */
+  function applySessionControl(data) {
+    if (!data) return;
+
+    // ── session ใหม่ → ล้าง measure_type/operator ทิ้ง ────────────────────
+    // เทียบเฉพาะตอนที่ data ส่ง session_id มาจริงๆ — ก้อนย่อยจาก SSE ที่มีแต่
+    // state จะไม่เข้าเงื่อนไขนี้ จึงไม่ไปล้างอะไรโดยไม่ตั้งใจ
+    if (data.session_id != null && data.session_id !== sessionControl.session_id) {
+      sessionControl = {
+        session_id: data.session_id,
+        state: sessionControl.state,   // state คงไว้ก่อน เดี๋ยวทับด้วยค่าใหม่ข้างล่างถ้ามี
+        measure_type: null,
+        operator: null,
+      };
+    }
+
+    if (data.state != null) sessionControl.state = data.state;
+
+    // operator / measure_type: รับได้ทั้งแบบส่งตรง (ตอนกด Start เติมจากฟอร์ม
+    // กันจอกระพริบ) และแบบแกะจาก queue_state ที่ backend แนบมากับ session/state
+    // — ทางหลังเป็นแหล่งความจริง ใช้ได้แม้บนแท็บ/เครื่องที่ไม่เคยกรอกฟอร์มเลย
+    let qs = data.queue_state;
+    if (typeof qs === 'string') { try { qs = JSON.parse(qs); } catch { qs = null; } }
+    const mt = data.measure_type ?? qs?.measure_mode;
+    const op = data.operator     ?? qs?.operator;
+    if (mt != null) sessionControl.measure_type = mt;
+    if (op != null) sessionControl.operator     = op;
+
+    savePartEntryState();
+  }
 
   // ── Measurements table: server-side pagination + filter (เหมือน edit.html) ──
   // เดิมดึงมาแค่ limit=50 ล่าสุด ตอนนี้เปลี่ยนเป็นแบ่งหน้าจริงจาก backend (limit/offset)
@@ -1410,7 +1477,8 @@
 
   function savePartEntryState() {
     try {
-      localStorage.setItem(PART_ENTRY_STORAGE_KEY, JSON.stringify({ ipmQueue, newQueue, reworkQueue, lastTelemetry, lastImageMeasurementId }));
+      localStorage.setItem(PART_ENTRY_STORAGE_KEY,
+        JSON.stringify({ entryQueue, sessionControl, lastTelemetry, lastImageMeasurementId }));
     } catch (e) { /* localStorage อาจใช้ไม่ได้ (private mode ฯลฯ) — ไม่ critical ปล่อยผ่าน */ }
   }
 
@@ -1419,9 +1487,10 @@
       const raw = localStorage.getItem(PART_ENTRY_STORAGE_KEY);
       if (!raw) return;
       const d = JSON.parse(raw);
-      ipmQueue              = d.ipmQueue ?? null;
-      newQueue              = d.newQueue ?? null;
-      reworkQueue           = d.reworkQueue ?? null;
+      entryQueue            = d.entryQueue ?? null;
+      // เก็บในคีย์เดียวกับก้อนอื่น — มีทางเขียน/อ่าน localStorage ทางเดียวจะได้
+      // ไม่ต้องไล่ sync หลายคีย์ให้ตรงกันเอง
+      sessionControl        = d.sessionControl ?? sessionControl;
       lastTelemetry         = d.lastTelemetry ?? null;
       lastImageMeasurementId = d.lastImageMeasurementId ?? null;
     } catch (e) { console.warn('loadPartEntryState:', e); }
@@ -1429,7 +1498,25 @@
 
   document.addEventListener('DOMContentLoaded', () => {
     loadPartEntryState();
-    if (lastTelemetry) updateTelemetry(lastTelemetry);
+    if (lastTelemetry) {
+      // เติมแถบคิวกลับ "ก่อน" วาดการ์ด — updateTelemetry จะ snapshot ตัวแปรพวกนี้
+      // กลับลง lastTelemetry อีกที ถ้ายังว่างอยู่ตอนนั้นคิวจะถูกเขียนทับด้วยของว่าง
+      if (Array.isArray(lastTelemetry.queue)) {
+        telemetryQueue   = lastTelemetry.queue;
+        telemetryResults = lastTelemetry.results ?? [];
+        telemetryMeasIds = lastTelemetry.measIds ?? [];
+      }
+      updateTelemetry(lastTelemetry);
+      // วาดทันทีจาก localStorage ไม่ต้องรอ network — syncQueueStrip() จะมา
+      // เขียนทับด้วยของจริงจาก backend อีกทีเมื่อ /api/session/state ตอบกลับ
+      // (localStorage เป็นแค่ภาพชั่วคราวกันจอว่างระหว่างรอ ไม่ใช่แหล่งความจริง)
+      renderQueueStrip();
+      // ⚠ ต้องเรียกเองด้วย — ปกติสถิติ OK/NG ถูกวาดผ่าน updateSession() ซึ่งจะ
+      //   เกิดก็ต่อเมื่อ /api/session/state ตอบกลับมาแล้วเท่านั้น ถ้า backend
+      //   ตอบช้าหรือล่ม แถบล่างจะค้างที่ "0 OK · 0 NG" ทั้งที่ชิปด้านบนโชว์ผล
+      //   ครบแล้ว — ขัดกันเองในการ์ดใบเดียว
+      updateStats();
+    }
     // เก็บแค่ measurement_id ไว้ ไม่เก็บ URL ตรงๆ เพราะ presigned URL หมดอายุ
     // ใน 1 ชม. — โหลดหน้าใหม่ทีไรขอ URL สดใหม่เสมอแทน
     if (lastImageMeasurementId) updateCameraPreview(lastImageMeasurementId);
@@ -1448,7 +1535,7 @@
     connectSSE({
         // ทุกครั้งที่ต่อ SSE ติด (รวมตอน reconnect) ต้อง resync สถานะ session
         // จริงจาก backend เพราะ SSE ไม่มี replay — event ที่ยิงตอนสายหลุดจะหาย
-        // ไปเฉยๆ แล้วปุ่ม Start/Pause จะค้างสถานะเก่า
+        // ไปเฉยๆ แล้วปุ่ม Start/Stop จะค้างสถานะเก่า
         onOpen: loadSessionState,
         // กด Back กลับมาที่หน้านี้ (เบราว์เซอร์เอาหน้าเดิมจาก BFCache มาแสดง
         // โดยไม่ยิง DOMContentLoaded อีก) — ต้องโหลดข้อมูลใหม่เอง ไม่งั้นตาราง
@@ -1460,9 +1547,8 @@
           image_updated:    onImageUpdated,
           session_started:  onSessionStarted,
           session_stopped:  onSessionStopped,
-          session_paused:   onSessionPaused,
-          session_resumed:  onSessionResumed,
           measure_timeout:  onMeasureTimeout,
+          station_event:    onStationEvent,
           session_complete: onSessionComplete,
           session_timeout:  onSessionTimeout,
           station_online:   onStationOnline,
@@ -1476,10 +1562,11 @@
     // Polling สำรองคู่กับ SSE (เหมือน checkSessionRunning ของ edit.html) — เผื่อ
     // เคส connection ค้างแบบเงียบๆ (ไม่ error เลยไม่ trigger onerror/reconnect
     // แต่ก็ไม่มี event ใหม่วิ่งเข้ามาด้วย) ซึ่งเกิดยากกว่าแต่เป็นไปได้ ไม่ต้องรอ
-    // event/reconnect ฝั่งเดียวอีกต่อไป — เรียก loadSessionState() ตรงๆ ทุก 5 วิ
+    // event/reconnect ฝั่งเดียวอีกต่อไป — เรียก pollSessionState() ทุก 5 วิ
     // ซึ่งวิ่งผ่าน updateSession() ที่มีเช็ค session_id ของคิว (queueIsStale)
     // อยู่แล้ว ไม่ต้องเขียน logic เคลียร์คิวซ้ำอีกชุด
-    setInterval(loadSessionState, 5000);
+    // (pollSessionState ยิงแค่ 1 request ถ้าสถานะไม่ขยับ — ดูคอมเมนต์ที่ตัวมัน)
+    setInterval(pollSessionState, 5000);
   });
 
   // ── Measurements filter/pagination bindings — เหมือน edit.html ─────────────
@@ -1532,13 +1619,9 @@
   // Handler อีกต่อไปตามที่ตกลงกันไว้ — /api/handlers ยังอยู่ใน backend เผื่อ
   // edit.html หรือหน้าอื่นยังใช้อยู่)
   async function loadDropdownData() {
-    const fillSelect = (ids, items, labelKey) => {
-      const optionsHtml = items.map(it => `<option value="${it[labelKey]}">${it[labelKey]}</option>`).join('');
-      ids.forEach(id => {
-        const el = document.getElementById(id);
-        if (el) el.insertAdjacentHTML('beforeend', optionsHtml);
-      });
-    };
+    // ⚠ เก็บเป็น "ตัวแปร" ไม่ใช่ยัด <option> ใส่ id ตายตัวแบบเดิม — ช่อง Vendor/
+    //   Owner อยู่ในกลุ่มที่ถูกวาดตอนรัน (renderGroups) จำนวนกลุ่มเปลี่ยนได้
+    //   ตลอดจากปุ่ม +Add จึงไม่มี id ที่รู้ล่วงหน้าให้ยิงใส่
     try {
       const [operators, owners, vendors, packageSizes] = await Promise.all([
         fetch(`${API}/api/operators`).then(r => r.ok ? r.json() : []),
@@ -1546,14 +1629,24 @@
         fetch(`${API}/api/vendors`).then(r => r.ok ? r.json() : []),
         fetch(`${API}/api/package-sizes`).then(r => r.ok ? r.json() : []),
       ]);
-      fillSelect(['ipm-operator', 'new-operator', 'rework-operator'], operators, 'operator_name');
-      fillSelect(['new-owner',   'rework-owner'],   owners,   'owner_name');
-      fillSelect(['new-vendor',  'rework-vendor'],  vendors,  'vendor_name');
+      operatorOptions = operators.map(o => o.operator_name);
+      ownerOptions    = owners.map(o => o.owner_name);
+      vendorOptions   = vendors.map(v => v.vendor_name);
+
+      const opSelect = document.getElementById('entry-operator');
+      if (opSelect) {
+        const keep = opSelect.value;
+        opSelect.innerHTML = '<option value="">-- เลือก Operator --</option>' +
+          operatorOptions.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('');
+        if (keep) opSelect.value = keep;
+      }
 
       const datalist = document.getElementById('package-size-datalist');
       if (datalist) {
         datalist.innerHTML = packageSizes.map(ps => `<option value="${ps.package_size}"></option>`).join('');
       }
+      // กลุ่มอาจถูกวาดไปแล้วก่อน dropdown จะโหลดเสร็จ — วาดใหม่ให้ตัวเลือกครบ
+      if (entryMode) renderGroups();
     } catch (e) { console.warn('loadDropdownData:', e); }
   }
 
@@ -1620,19 +1713,54 @@
     });
   }
 
+  // ลายเซ็นของสถานะ session ล่าสุดที่ "วาดไปแล้ว" — ใช้ให้ polling ข้ามงานหนัก
+  // เมื่อไม่มีอะไรเปลี่ยน (ดู pollSessionState)
+  let _sessionSig = null;
+  const _sigOf = d => `${d.session_id}|${d.state}|${d.measured_count}`;
+
+  /** โหลดสถานะ session ใหม่ทั้งชุด — ใช้ตอนเปิดหน้า / SSE reconnect
+   *  ตรงนี้ยอมจ่ายครบทุก request เสมอ เพราะเป็นจังหวะที่ "ไม่รู้ว่าพลาดอะไรไปบ้าง" */
   async function loadSessionState() {
+    let d = null;
     try {
       const r = await fetch(`${API}/api/session/state`);
-      if (r.ok) updateSession(await r.json());
+      if (r.ok) { d = await r.json(); updateSession(d); }
     } catch (e) { console.warn('loadSessionState:', e); }
     // วาดแถบคิว ALPL ใหม่ทุกครั้งที่ sync สถานะ session — ครอบคลุมทั้งตอนเปิดหน้า
     // ครั้งแรกและตอน SSE reconnect (ดู sse.onopen) ทำให้แถบไม่หายถ้า refresh
-    // หน้าเว็บกลาง session
-    await syncQueueStrip();
+    // หน้าเว็บกลาง session · ส่ง d ต่อไปเลย ไม่ให้ยิงขอซ้ำ
+    await syncQueueStrip(d);
+    if (d) _sessionSig = _sigOf(d);
   }
 
-  function updateSession(data) {
+  /** ตัวที่ setInterval เรียกทุก 5 วิ — เป็นแค่ "ตาข่ายกันพลาด" ของ SSE
+   *
+   *  ⚠ ของเดิมเรียก loadSessionState() ตรงๆ ซึ่งลากไป 5 request ทุกรอบ
+   *    (session/state 2 ครั้ง + สถิติ OK/NG 2 + measurements limit=1000 อีก 1)
+   *    วนแบบนั้นตลอดแม้ session จบไปแล้วและไม่มีอะไรเปลี่ยนเลย
+   *
+   *  ตอนนี้ยิงแค่ session/state ตัวเดียว แล้วเทียบลายเซ็น — เหมือนเดิมทุกอย่าง
+   *  ก็จบแค่นั้น ต่อเมื่อมีอะไรขยับจริงถึงค่อยไปดึงสถิติ/คิวตามมา
+   *  (เส้นทาง SSE ไม่ได้ถูกแตะ — measurement ที่เข้ามาสดยังอัปเดตทันทีเหมือนเดิม) */
+  async function pollSessionState() {
+    let d;
+    try {
+      const r = await fetch(`${API}/api/session/state`);
+      if (!r.ok) return;
+      d = await r.json();
+    } catch (e) { console.warn('pollSessionState:', e); return; }
+
+    const sig = _sigOf(d);
+    const changed = sig !== _sessionSig;
+    _sessionSig = sig;
+    updateSession(d, { skipStats: !changed });
+    if (changed) await syncQueueStrip(d);
+  }
+
+  function updateSession(data, opts = {}) {
     session = { ...session, ...data };
+    // ป้อน session_control ก่อนวาด — renderSessionUI อ่านจากก้อนนั้น
+    applySessionControl(data);
     renderSessionUI();
 
     // เคลียร์คิว Part Entry ถ้าคิวที่ค้างอยู่ผูกกับ session ที่จบไปแล้ว — เช็คจาก
@@ -1644,11 +1772,9 @@
     // เช็คแบบ transition-only เลยจับไม่ได้ ต้องเทียบ session_id ตรงๆ แบบนี้ถึง
     // จะครอบคลุมทุกเคส — คิวที่ "ยังไม่เคย Start" (session_id เป็น null) จะไม่ถูก
     // เคลียร์ทิ้ง เพราะยังไม่ผูกกับ session ไหนเลย ต้องรอผู้ใช้กด Start เอง
-    const queue = ipmQueue || newQueue || reworkQueue;
+    const queue = entryQueue;
     const queueIsStale = queue && queue.session_id != null &&
-      // นับ 'paused' เป็น session ที่ยังไม่จบ ไม่งั้นพอกด Pause คิว Part Entry
-      // จะถูกมองว่าเป็นของ session เก่าแล้วโดนล้างทิ้งทันที
-      !(['running', 'paused'].includes(session.state) && session.session_id === queue.session_id);
+      !(session.state === 'running' && session.session_id === queue.session_id);
 
     if (queueIsStale) {
       clearAllQueuesAndForms(); // เรียก renderPartEntrySummary() ให้อยู่แล้วในตัว
@@ -1661,15 +1787,21 @@
       // clearAllQueuesAndForms() ไปแล้วด้านบน กันเรียกซ้ำเฉยๆ ไม่ได้ผิดอะไร)
       renderPartEntrySummary();
     }
-    if (typeof measurements !== 'undefined') updateStats();
+    // skipStats: มาจาก polling ที่เห็นว่าสถานะไม่ขยับเลย — สถิติ OK/NG จึงเป็น
+    // ค่าเดิมแน่นอน ไม่ต้องยิง 2 request ไปถามซ้ำทุก 5 วิ
+    // (ทุกเส้นทางอื่นที่เรียก updateSession ยังอัปเดตสถิติเหมือนเดิม)
+    if (!opts.skipStats && typeof measurements !== 'undefined') updateStats();
   }
 
   function renderSessionUI() {
     const { state, measured_count: mc = 0, target_count: tc = 1 } = session;
 
+    // ป้าย STATUS อ่านจาก sessionControl.state — ค่าเดียวกับ session.state
+    // แต่ให้แถบนี้มีแหล่งข้อมูลเดียวทั้งแถบ (ทุกชิปมาจาก sessionControl หมด)
     const badge = document.getElementById('sess-state-badge');
-    badge.textContent = state.toUpperCase();
-    badge.className   = `session-state-badge ${state}`;
+    const scState = sessionControl.state || state;
+    badge.textContent = scState.toUpperCase();
+    badge.className   = `session-state-badge ${scState}`;
 
     const telemetrySessionText = document.getElementById('telemetry-session-text');
     if (telemetrySessionText) {
@@ -1679,28 +1811,44 @@
           : `${mc} / ${tc} measured`;
     }
 
-    // ── สถานะปุ่ม Start / Pause / Stop ────────────────────────────────────
-    //   running → Start กดไม่ได้, โชว์ Pause
-    //   paused  → Start กดได้ (= วัดต่อ), โชว์ Stop แทน Pause
-    //   อื่นๆ    → Start กดได้ถ้ามีคิว, ไม่โชว์ทั้ง Pause และ Stop
-    const isPaused  = state === 'paused';
+    // ── สถานะปุ่ม Start / Stop ───────────────────────────────────────────
+    //   running → Start กดไม่ได้, โชว์ Stop
+    //   อื่นๆ    → Start กดได้ถ้ามีคิว, ไม่โชว์ Stop
     const isRunning = state === 'running';
-    const hasQueue  = !!(ipmQueue || newQueue || reworkQueue);
-    // ตอน paused ไม่ต้องมีคิวใน Part Entry ก็กด "วัดต่อ" ได้ (คิวอยู่ที่ backend แล้ว)
-    const canStart = isPaused
-      ? stationStatus === 'online'
-      : (!isRunning && stationStatus === 'online' && hasQueue);
+    const canStart  = !isRunning && stationStatus === 'online' && !!entryQueue;
 
     const btnStart = document.getElementById('btn-start');
     btnStart.disabled = !canStart;
-    if (isPaused)              btnStart.textContent = `▶ Start (วัดต่อ ${mc}/${tc})`;
-    else if (ipmQueue)         btnStart.textContent = `▶ Start (IPM ×${ipmQueue.list.length})`;
-    else if (newQueue)         btnStart.textContent = `▶ Start (New ×${newQueue.list.length})`;
-    else if (reworkQueue)      btnStart.textContent = `▶ Start (Rework ×${reworkQueue.list.length})`;
-    else                       btnStart.textContent = '▶ Start (กด Save ก่อน)';
+    btnStart.textContent = entryQueue
+      ? `▶ Start (${entryQueue.mode} ×${entryQueue.list.length})`
+      : '▶ Start (กด Save ก่อน)';
 
-    document.getElementById('btn-pause').style.display = isRunning ? 'inline-block' : 'none';
-    document.getElementById('btn-stop').style.display  = isPaused  ? 'inline-block' : 'none';
+    // Stop โผล่ตอน running — เดิมโผล่เฉพาะตอน paused เพราะบังคับให้กด Pause ก่อน
+    // พอตัด Pause ออกแล้วต้องกดหยุดได้ตรงๆ (มี uiConfirm ถามยืนยันอยู่แล้ว)
+    document.getElementById('btn-stop').style.display = isRunning ? 'inline-block' : 'none';
+
+    renderSessionChips();
+  }
+
+  /** เติมข้อมูลในแถบ Session Control — อ่านจาก `sessionControl` ก้อนเดียว
+   *
+   *  ชิปไหนไม่มีค่า → ซ่อนทั้งชิป ไม่โชว์ "—" ค้างไว้ให้รกตอน idle
+   *  (ความคืบหน้า/OK/NG ไม่อยู่ที่นี่ — มีอยู่แล้วในการ์ด Live Telemetry
+   *   ด้านล่าง เอามาซ้ำอีกที่ทำให้แถบนี้ยาวโดยไม่ได้ข้อมูลใหม่) */
+  function renderSessionChips() {
+    const show = (wrapId, valueId, value) => {
+      const wrap = document.getElementById(wrapId);
+      const val  = document.getElementById(valueId);
+      if (!wrap || !val) return;
+      const has = value != null && value !== '';
+      wrap.style.display = has ? '' : 'none';
+      if (has) val.textContent = value;
+    };
+
+    show('sc-operator-wrap', 'sc-operator', sessionControl.operator);
+    show('sc-mode-wrap',     'sc-mode',     sessionControl.measure_type);
+    show('sc-session-wrap',  'sc-session',  sessionControl.session_id != null
+                                              ? String(sessionControl.session_id) : null);
   }
 
 
@@ -1710,16 +1858,21 @@
   }
 
   async function onNewMeasurement(d) {
-    updateSession({ measured_count: d.measured, target_count: d.target });
-    updateTelemetry(d);
     // อัปเดตแถบคิวแบบ incremental — ใช้ d.measured (นับจาก backend) เป็น index
     // ตรงๆ แทนการนับเองฝั่ง client กันคลาดเคลื่อนถ้ามี event หล่นหาย
+    //
+    // ⚠ ต้องทำ "ก่อน" updateSession — เพราะ updateSession เรียก updateStats()
+    //   ซึ่งตอนนี้นับ OK/NG จาก telemetryResults ถ้าเขียนทีหลังจะได้ตัวเลขช้าไป
+    //   1 ชิ้นเสมอ
     if (d.measured != null && d.measured > 0) {
       telemetryResults[d.measured - 1] = d.result;
       telemetryMeasIds[d.measured - 1] = d.measurement_id;
-      renderQueueStrip();
     }
-    updateStats();
+    updateSession({ measured_count: d.measured, target_count: d.target });
+    updateTelemetry(d);
+    if (d.measured != null && d.measured > 0) renderQueueStrip();
+    // ไม่เรียก updateStats() ซ้ำตรงนี้แล้ว — updateSession() ข้างบนเรียกให้อยู่แล้ว
+    // (ของเดิมเรียก 2 รอบ = ยิง API ซ้ำ 2 ชุดต่อการวัด 1 ชิ้น)
     // ตารางตอนนี้แบ่งหน้า/กรองแบบ server-side แล้ว — แถวใหม่จะโผล่ "สด" เฉพาะตอนที่
     // ผู้ใช้กำลังดูหน้า 1 แบบไม่มี filter ค้างอยู่เท่านั้น (ตรงกับตำแหน่งที่มันจะโผล่จริง
     // ถ้า sort ล่าสุดก่อน) ถ้ากำลังดูหน้าอื่น/มี filter ค้างอยู่ ไม่ไปรบกวนสิ่งที่ผู้ใช้ดูอยู่
@@ -1769,14 +1922,27 @@
    * ต่างจาก renderAxisCell ตรงที่ offset ไม่มี nominal — เทียบกับเพดานตัวเดียว
    * (offset_tol) ว่าเกินไหม ข้อความใต้ค่าจึงเป็น "ไม่เกิน x.xxx" ไม่ใช่ช่วง 2 ฝั่ง
    */
-  function renderOffsetCell(offset, offsetTol, okFromEvent) {
+  function renderOffsetCell(offset, offsetTol, okFromEvent, measureType) {
+    const cell   = document.getElementById('telemetry-offset-cell');
     const valEl  = document.getElementById('telemetry-offset');
     const badge  = document.getElementById('telemetry-offset-axis');
     const range  = document.getElementById('telemetry-offset-range');
     if (!valEl || !badge || !range) return;
 
+    // ⚠ โหมด IPM: ซ่อนกล่องทั้งใบ — **ค่ายังถูกส่งมาและบันทึกลง DB ตามปกติ**
+    //   แค่ไม่แสดงผลเท่านั้น เพราะ offset ไม่ได้ถูกใช้ตัดสินอะไรในโหมดนี้
+    //   (เกณฑ์มาจาก package_size ซึ่งเป็นค่าของ "ขนาด" ไม่ใช่ของชิ้นงานตัวนั้น
+    //    — ดู _offset_limit ใน main.py) ตัวเลขที่ไม่มีผลต่อ OK/NG แต่วางอยู่
+    //   ข้างๆ ตัวที่มีผล ทำให้คนหน้าเครื่องต้องตีความเองว่าดีหรือไม่ดี
+    if ((measureType || '').toUpperCase() === 'IPM') {
+      if (cell) cell.style.display = 'none';
+      return;
+    }
+    if (cell) cell.style.display = '';
+
     valEl.innerHTML = offset == null ? '—<span> mm</span>'
                                      : `${Number(offset).toFixed(3)}<span> mm</span>`;
+
     const ok = (okFromEvent != null) ? okFromEvent : offsetOk(offset, offsetTol);
     if (ok == null) {
       badge.textContent = ''; badge.className = 'tc-axis';
@@ -1794,14 +1960,28 @@
     document.getElementById('telemetry-y').innerHTML = `${d.value_y.toFixed(3)}<span> mm</span>`;
     renderAxisCell('x', d.value_x, d.nominal_x, d.upper_tol, d.lower_tol, d.ok_x);
     renderAxisCell('y', d.value_y, d.nominal_y, d.upper_tol, d.lower_tol, d.ok_y);
-    renderOffsetCell(d.offset, d.offset_tol, d.ok_offset);
+    // offset_counts มาจาก backend (ธงว่า offset ถูกนับเป็นเกณฑ์ไหม) — ถ้า event
+    // เก่าไม่มีธงนี้ ใช้ measure_type เป็นตัวตัดสินแทน
+    renderOffsetCell(d.offset, d.offset_tol, d.ok_offset,
+                     d.offset_counts === false ? 'IPM' : d.measure_type);
     const resultEl = document.getElementById('telemetry-result-value');
     const colEl    = document.getElementById('telemetry-result-col');
     const cls      = d.result === 'OK' ? 'ok' : 'ng';
     resultEl.textContent = d.result;
     resultEl.className   = `telemetry-result-value ${cls}`;
     colEl.className      = `telemetry-result-col ${cls}`;
-    lastTelemetry = d;
+
+    // คงสภาพแถบคิวที่ติดมากับ d ไว้ (เส้นทาง restore ตอนเปิดหน้า d คือก้อนที่
+    // อ่านจาก localStorage ซึ่งมี queue/results อยู่แล้ว — ถ้าเขียนทับด้วย d
+    // เปล่าๆ จากเส้นทาง SSE คิวจะหาย) ส่วนค่าล่าสุดจริงๆ renderQueueStrip
+    // เป็นคนเขียนทับให้อีกทีหลังจากนี้
+    lastTelemetry = {
+      ...d,
+      queue:    d.queue    ?? telemetryQueue,
+      results:  d.results  ?? telemetryResults,
+      measIds:  d.measIds  ?? telemetryMeasIds,
+      position: d.position ?? telemetryResults.filter(r => r != null).length,
+    };
     savePartEntryState();
   }
 
@@ -1825,12 +2005,33 @@
     const strip = document.getElementById('telemetry-queue-strip');
     if (!wrap || !strip) return;
 
-    // คิวตัวเดียว (IPM ชิ้นเดียว) ไม่มีอะไรให้ดู — ซ่อนไปเลยไม่ให้เปลืองที่
-    if (telemetryQueue.length <= 1) { wrap.style.display = 'none'; return; }
-    wrap.style.display = '';
-
     // จำนวนที่วัดไปแล้ว = ตำแหน่งของตัวที่กำลังวัดอยู่ตอนนี้พอดี (0-based)
     const done = telemetryResults.filter(r => r != null).length;
+
+    // ── เก็บสภาพแถบคิวติดไปกับ lastTelemetry ทุกครั้งที่วาด ─────────────────
+    // ทำที่นี่จุดเดียวเพราะเป็น "ที่สุดท้ายที่ข้อมูลถูกใช้จริง" — ถ้าไปเก็บใน
+    // updateTelemetry จะได้ของเก่าไป 1 ชิ้นเสมอ เนื่องจาก onNewMeasurement
+    // เรียก updateTelemetry() ก่อน แล้วค่อยเขียน telemetryResults ทีหลัง
+    //
+    // เก็บ results/measIds ไปด้วย ไม่ใช่แค่ queue+position — position บอกได้แค่
+    // "วัดไปกี่ชิ้น" แต่วาดชิปไม่ได้ว่าตัวไหน ✓ ตัวไหน ✕ (และกดเปิดรายงานไม่ได้
+    // ถ้าไม่มี measurement_id)
+    if (lastTelemetry) {
+      lastTelemetry.queue    = telemetryQueue;
+      lastTelemetry.results  = telemetryResults;
+      lastTelemetry.measIds  = telemetryMeasIds;
+      lastTelemetry.position = done;
+      savePartEntryState();
+    }
+
+    // ซ่อนเฉพาะตอนที่ "ไม่มีคิวเลย" เท่านั้น
+    //
+    // เดิมซ่อนเมื่อคิว <= 1 ด้วยเหตุผลว่า "ตัวเดียวไม่มีอะไรให้ดู ไม่ต้องเปลืองที่"
+    // — แต่ไม่จริงในการใช้งาน: ชิปตัวเดียวยังบอกได้ว่า ALPL ไหนกำลังวัด/วัดไปแล้ว
+    // ผลเป็นอะไร และกดเปิดรายงานได้ ที่สำคัญคือมันหายๆ โผล่ๆ ตามจำนวนชิ้นในรอบ
+    // ทำให้เลย์เอาต์ของการ์ดนี้ไม่นิ่ง คนใช้จำไม่ได้ว่าแถบนี้อยู่ตรงไหน
+    if (!telemetryQueue.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
 
     strip.innerHTML = telemetryQueue.map((alpl, i) => {
       const res = telemetryResults[i];
@@ -1841,13 +2042,9 @@
         const clic = mid != null ? ` onclick="openReportModal(${mid})"` : '';
         return `<button type="button" class="tq-chip ${cls}"${clic} title="ALPL ${alpl} — ${res} (กดเพื่อดูรายละเอียด)"><span class="tq-ico">${ico}</span>${alpl}</button>`;
       }
-      // ตัวที่กำลังจะวัด — ตอน running มีจุดกะพริบ ตอน paused ใช้ไอคอนพักแทน
-      // (ยังคงไฮไลต์ไว้ให้รู้ว่าค้างอยู่ตรงไหน ไม่ปล่อยให้กลายเป็นชิปเทาธรรมดา)
+      // ตัวที่กำลังจะวัด — มีจุดกะพริบให้รู้ว่าอยู่ตรงไหนของคิว
       if (i === done && session.state === 'running') {
         return `<span class="tq-chip now" title="กำลังวัด ALPL ${alpl}"><span class="tq-dot"></span>${alpl}</span>`;
-      }
-      if (i === done && session.state === 'paused') {
-        return `<span class="tq-chip now" title="พักไว้ที่ ALPL ${alpl}"><span class="tq-ico">⏸</span>${alpl}</span>`;
       }
       return `<span class="tq-chip wait" title="รอคิว ALPL ${alpl}">${alpl}</span>`;
     }).join('');
@@ -1860,28 +2057,75 @@
   // โหลดคิว + ผลที่วัดไปแล้วของ session ปัจจุบันจาก backend ใหม่ทั้งชุด
   // เรียกตอน: เปิดหน้า, SSE reconnect, และตอน session ใหม่เริ่ม — ทำให้แถบนี้
   // รอดการ refresh หน้าเว็บกลาง session (ไม่ต้องพึ่ง event ที่วิ่งผ่านไปแล้ว)
-  async function syncQueueStrip() {
-    telemetryQueue = []; telemetryResults = []; telemetryMeasIds = [];
+  //
+  // `stateData` = ผลของ GET /api/session/state ที่ผู้เรียก "เพิ่งได้มาแล้ว"
+  // ส่งต่อมาให้ใช้ซ้ำ — เดิมฟังก์ชันนี้ยิงขอเองเสมอ ทำให้ทุกรอบ poll ขอ
+  // endpoint เดียวกัน 2 ครั้งติดกันโดยเปล่าประโยชน์ (เห็นชัดในล็อกของ backend)
+  //
+  // ⚠ **ห้ามล้าง telemetryResults ทิ้งก่อนรู้ผล fetch** — ของเดิมล้าง 3 array
+  //   ตั้งแต่บรรทัดแรกแล้วค่อยไปดึงมาเติม ถ้า fetch พลาด/ตอบไม่ครบ ผลที่ SSE
+  //   ส่งมาแล้วจะหายไปเฉยๆ แล้วชิปที่เคยเป็น ✓/✕ กลายเป็น "รอคิว" ทั้งแถว
+  //   เรื่องนี้หนักขึ้นหลังจาก updateStats() เปลี่ยนมานับ OK/NG จาก array ชุดนี้
+  //   (เดิมถาม backend แยก จึงไม่พลอยผิดไปด้วย) — ตอนนี้จะเขียนทับต่อเมื่อ
+  //   ดึงข้อมูลมาได้จริงเท่านั้น
+  async function syncQueueStrip(stateData = null) {
     const sid = session.session_id;
+    // ⚠ ไม่มี session_id = "ยังไม่รู้ว่า session ไหน" ไม่ใช่ "ไม่มีคิว" — ห้ามล้างทิ้ง
+    //   เคสที่เจอจริง: เพิ่ง refresh กลับมาตอน backend ตอบช้า/ล่ม คิวถูกเติมจาก
+    //   localStorage ไปแล้วแต่ session.session_id ยังเป็น null อยู่ ถ้าล้างตรงนี้
+    //   สิ่งที่เพิ่ง restore มาจะหายทันทีในเสี้ยววินาทีถัดมา
+    //   การล้างจริงๆ มีที่ของมันอยู่แล้วคือ clearQueueStrip() ตอน session ใหม่เริ่ม
     if (sid == null) { renderQueueStrip(); return; }
     try {
-      const r = await fetch(`${API}/api/session/state`);
-      if (r.ok) {
-        const s = await r.json();
+      let s = stateData;
+      if (!s) {
+        const r = await fetch(`${API}/api/session/state`);
+        if (r.ok) s = await r.json();
+      }
+      if (s) {
         let qs = s.queue_state;
         if (typeof qs === 'string') { try { qs = JSON.parse(qs); } catch { qs = null; } }
-        telemetryQueue = (qs && Array.isArray(qs.queue)) ? qs.queue : [];
+        if (qs && Array.isArray(qs.queue)) telemetryQueue = qs.queue;
       }
+      // ── ถาม backend เฉพาะตอน "SSE ตามไม่ทัน" เท่านั้น ────────────────────
+      // ปกติ SSE `measurement` เติม results/measIds ให้ครบทีละชิ้นอยู่แล้ว การไป
+      // ดึงทั้ง session ซ้ำทุกครั้งที่สถานะขยับจึงเป็นการถามสิ่งที่รู้อยู่แล้ว
+      //
+      // แต่ตัดทิ้งไม่ได้ เพราะ **SSE ไม่มี replay** (ยืนยันจากฝั่ง backend —
+      // ไม่มี Last-Event-ID) event ที่วิ่งตอนเราไม่ได้ฟังอยู่ = หายถาวร
+      // มี 3 เคสที่ SSE ให้ไม่ได้จริงๆ และต้องพึ่ง fetch นี้:
+      //   1. เปิด dashboard เครื่อง/แท็บใหม่กลาง session — ไม่เคยได้ event ก่อนหน้า
+      //   2. SSE หลุดแล้วต่อใหม่ — ชิ้นที่วัดระหว่างสายขาดหายไปเป็นรู
+      //   3. localStorage ใช้ไม่ได้ (private mode) — restore ไม่ได้
+      //
+      // เช็คว่ามีรูจริงก่อนค่อยยิง: เทียบจำนวนที่มีในมือกับ measured_count ของ
+      // backend ถ้าครบแล้วก็ไม่ต้องถาม (เคสปกติระหว่างวัด = ไม่ยิงเลย)
+      let needFetch = true;
       if (telemetryQueue.length) {
+        const measured = Number(s?.measured_count ?? 0);
+        let have = 0, hole = false;
+        for (let i = 0; i < measured; i++) {
+          if (telemetryResults[i] == null) { hole = true; break; }
+          have++;
+        }
+        needFetch = hole || have < measured;
+      }
+
+      if (telemetryQueue.length && needFetch) {
         const m = await fetch(`${API}/api/measurements?session_id=${sid}&limit=1000`);
         if (m.ok) {
           const items = (await m.json()).items || [];
           // API เรียงจากใหม่→เก่า แต่แถบคิวต้องเรียงตามลำดับที่วัดจริง (เก่า→ใหม่)
           items.sort((a, b) => a.measurement_id - b.measurement_id);
-          items.forEach((x, i) => {
-            telemetryResults[i] = x.result;
-            telemetryMeasIds[i] = x.measurement_id;
-          });
+          const results = [], measIds = [];
+          items.forEach((x, i) => { results[i] = x.result; measIds[i] = x.measurement_id; });
+          // ยอมเขียนทับก็ต่อเมื่อของที่ backend ให้มา "ไม่น้อยกว่า" ที่มีอยู่แล้ว
+          // — กันเคส response มาไม่ครบ (เช่นถูกกรองด้วย limit หรือ measurement
+          //   เพิ่งเข้ามาระหว่างทาง) แล้วลบผลที่ SSE ส่งมาก่อนหน้าทิ้ง
+          if (results.length >= telemetryResults.filter(r => r != null).length) {
+            telemetryResults = results;
+            telemetryMeasIds = measIds;
+          }
         }
       }
     } catch (e) { console.warn('syncQueueStrip:', e); }
@@ -1889,6 +2133,10 @@
   }
 
   function resetTelemetry() {
+    // กล่อง Offset ถูกซ่อนไว้ถ้ารอบก่อนเป็น IPM — ต้องเปิดคืนตอนเคลียร์
+    // ไม่งั้นรอบถัดไปที่เป็น New/Rework จะไม่มีกล่องนี้จนกว่าจะวัดชิ้นแรกเสร็จ
+    const offCell = document.getElementById('telemetry-offset-cell');
+    if (offCell) offCell.style.display = '';
     document.getElementById('telemetry-alpl-badge').textContent = 'ALPL —';
     document.getElementById('telemetry-x').innerHTML = '—<span> mm</span>';
     document.getElementById('telemetry-y').innerHTML = '—<span> mm</span>';
@@ -1909,21 +2157,18 @@
 
   // ── [แก้ไข] เคลียร์คิวและฟอร์มทั้งหมด เรียกตอน session จบ ─────────────────
   function clearAllQueuesAndForms() {
-    ipmQueue = null;
-    newQueue = null;
-    reworkQueue = null;
+    entryQueue = null;
     savePartEntryState();
-    clearFormCompletely('ipm');
-    clearFormCompletely('new');
-    clearFormCompletely('rework');
+    entryMode = null;
+    resetEntryForm();
     // รีเซ็ต toggle ให้ไม่มีโหมดไหน active (กลับสู่ placeholder)
-    document.getElementById('entry-mode-ipm').classList.remove('active');
-    document.getElementById('entry-mode-new').classList.remove('active');
-    document.getElementById('entry-mode-rework').classList.remove('active');
+    ENTRY_MODES.forEach(m => {
+      const btn = document.getElementById(MODE_BTN_ID[m]);
+      btn.classList.remove('active');
+      btn.setAttribute('aria-selected', 'false');
+    });
     document.getElementById('entry-placeholder').style.display = '';
-    document.getElementById('form-ipm').style.display = 'none';
-    document.getElementById('form-new').style.display = 'none';
-    document.getElementById('form-rework').style.display = 'none';
+    document.getElementById('form-entry').style.display = 'none';
     renderSessionUI();
     renderPartEntrySummary();
   }
@@ -1977,11 +2222,6 @@
   // หมายเหตุ: ไม่ล้างแถบคิวตอน session จบ — ตั้งใจให้ผู้ปฏิบัติงานยังเห็นสรุป
   // OK/NG ของรอบที่เพิ่งวัดเสร็จได้อยู่ (แค่ re-render ให้จุด "กำลังวัด" หายไป)
   // จะถูกล้างจริงตอนกด Start รอบใหม่ (ดู onSessionStarted)
-  // Pause/Resume ไม่แตะคิวหรือฟอร์มเลย — session ยังมีชีวิตอยู่ ค่าที่วัดล่าสุด
-  // กับแถบคิวคงไว้เหมือนเดิม เปลี่ยนแค่สถานะ (ซึ่งไปสลับปุ่มใน renderSessionUI)
-  // renderQueueStrip() เรียกเพื่อให้จุด "กำลังวัด" หายไประหว่างพัก แล้วกลับมาตอน resume
-  function onSessionPaused(d)   { updateSession({ state: 'paused' });  renderQueueStrip(); }
-  function onSessionResumed(d)  { updateSession({ state: 'running' }); renderQueueStrip(); }
 
   // ══════════════════════════════════════════════════════════════════════════
   // สรุปผล IPM ตอนวัดครบ — ตารางสำหรับคัดลอกไปวางใน Excel
@@ -2060,11 +2300,34 @@
   // จบจากทางอื่น (เครื่องอื่นกด Stop / heartbeat timeout / วัดครบเอง) ไม่งั้น
   // modal จะค้างบนจอทั้งที่ไม่มี session ให้ตอบแล้ว แล้วกดปุ่มไหนก็ 404
   function dismissMeasureTimeoutModal() {
+    // ต้องเคลียร์นาฬิกาด้วย — ไม่งั้น session จบไปแล้วแต่ยังนับต่อ พอครบ 60 วิ
+    // จะยิง stop ใส่ session ถัดไปที่เพิ่งเริ่ม
+    clearInterval(mtTimer);
+    mtTimer = null;
     document.getElementById('mt-modal').classList.remove('open');
     mtSessionId = null;
   }
 
-  function onSessionStopped(d)  { dismissMeasureTimeoutModal(); resetTelemetry(); updateSession({ state: 'stopped' }); clearAllQueuesAndForms(); renderQueueStrip(); }
+  function onSessionStopped(d)  {
+    dismissMeasureTimeoutModal(); resetTelemetry();
+    updateSession({ state: 'stopped' }); clearAllQueuesAndForms(); renderQueueStrip();
+    // reason มาเฉพาะตอน Pi ล้มเลิกเอง (ER,PW / สาย TM-X ขาด / target_count ไม่มา)
+    // กดปุ่ม Stop เองจะไม่มี — ผู้ใช้รู้อยู่แล้วว่าตัวเองกด
+    if (d && d.reason) uiAlert(`การวัดถูกหยุด — ${escapeHtml(d.reason)}`);
+
+    // ⚠ agent_error = ปิด session ในระบบแล้วแต่ "สั่ง Pi ให้หยุดไม่สำเร็จ"
+    //   แปลว่าเครื่องอาจยังเดินอยู่จริงโดยไม่มีใครบันทึกผล — ต้องเตือนแรงกว่า
+    //   กรณีอื่น เพราะเป็นสถานการณ์เดียวที่ "สิ่งที่เห็นบนจอ" กับ "สิ่งที่เกิด
+    //   ที่เครื่อง" ไม่ตรงกัน และหน้าเว็บทำอะไรต่อไม่ได้แล้ว ต้องให้คนไปจัดการเอง
+    if (d && d.agent_error) {
+      uiAlert(
+        `<strong>หยุดในระบบแล้ว แต่สั่งเครื่องไม่สำเร็จ</strong><br>` +
+        `${escapeHtml(d.agent_error)}<br><br>` +
+        `เครื่องอาจยังวัดต่ออยู่ — <strong>กรุณาไปกดหยุดที่หน้าเครื่อง</strong> ` +
+        `ค่าที่วัดหลังจากนี้จะไม่ถูกบันทึก`,
+        { title: '⚠ สั่งหยุดเครื่องไม่สำเร็จ' });
+    }
+  }
   function onSessionComplete(d) {
     dismissMeasureTimeoutModal();
     resetTelemetry();
@@ -2078,87 +2341,50 @@
   function onSessionTimeout(d)  { dismissMeasureTimeoutModal(); resetTelemetry(); updateSession({ state: 'timeout' }); clearAllQueuesAndForms(); renderQueueStrip(); }
   function onStationOnline(d)   { resetTelemetry(); setStationBadge('online'); updateSession({ state: 'idle' }); }
 
-  document.getElementById('btn-start').onclick = async () => {
-    // ปุ่มเดียวทำ 2 หน้าที่ตามสถานะ: ตอนพักอยู่ = "วัดต่อ" (resume session เดิม)
-    // ตอนว่าง = เริ่ม session ใหม่จากคิวที่ Save ไว้
-    if (session.state === 'paused') {
-      try {
-        const r = await fetch(`${API}/api/session/resume`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: session.session_id }),
-        });
-        if (!r.ok) uiAlert(`สั่งวัดต่อไม่สำเร็จ: ${escapeHtml(String((await r.json().catch(() => ({}))).detail ?? r.status))}`);
-      } catch (e) { uiAlert(`เกิดข้อผิดพลาด: ${escapeHtml(e.message)}`); }
-      return;
-    }
-    if (ipmQueue || newQueue || reworkQueue) startFromQueue();
-  };
+  // Recieve_tm-x.py รายงานว่าเกิดอะไรขึ้นกับค่า/รูปที่เพิ่งได้มา
+  //
+  // เตือนแบบ toast ไม่บล็อกทาง — เพราะเรื่องพวกนี้ไม่ต้องให้ผู้ใช้ตัดสินใจอะไร
+  // ต่างจาก measure_timeout ที่ Pi ค้างรอคำตอบอยู่จริง
+  //
+  // ตัวที่ค่าไม่ลง DB (MEASURE_FAILED ฯลฯ) จะตามมาด้วย measure_timeout อีกทีอยู่แล้ว
+  // ส่วน IMAGE_UPLOAD_FAILED มาตัวเดียวโดดๆ เพราะค่าบันทึกสำเร็จไปแล้ว ขาดแค่รูป
+  function onStationEvent(d) {
+    if (!d || !d.detail) return;
+    showToast(`⚠ ${d.detail}`, 6000);
+  }
 
-  document.getElementById('btn-pause').onclick = async () => {
-    try {
-      const r = await fetch(`${API}/api/session/pause`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: session.session_id }),
-      });
-      if (!r.ok) uiAlert(`พัก session ไม่สำเร็จ: ${escapeHtml(String((await r.json().catch(() => ({}))).detail ?? r.status))}`);
-    } catch (e) { uiAlert(`เกิดข้อผิดพลาด: ${escapeHtml(e.message)}`); }
+  document.getElementById('btn-start').onclick = async () => {
+    // เดิมปุ่มนี้ทำ 2 หน้าที่ — ตอนพักอยู่จะกลายเป็น "วัดต่อ" (resume) ตอนนี้เหลือ
+    // หน้าที่เดียวคือเริ่ม session ใหม่จากคิวที่ Save ไว้ (Pause ถูกถอดออกแล้ว)
+    if (entryQueue) startFromQueue();
   };
 
   async function startFromQueue() {
-    const mode  = ipmQueue ? 'ipm' : newQueue ? 'new' : 'rework';
-    const queue = ipmQueue || newQueue || reworkQueue;
-    const list  = queue.list;
-    const label = mode === 'ipm' ? 'IPM' : mode === 'new' ? 'New' : 'Rework';
+    const queue = entryQueue;
+    if (!queue) return;
+    const list = queue.list;
+
+    // สรุปทีละกลุ่มก่อนยืนยัน — ผู้ใช้ต้องเห็นว่าชิ้นไหนอยู่กลุ่มไหน ไม่ใช่เห็น
+    // แค่เลขรวมกันพรืดเดียว (กลุ่มคือสิ่งที่กำหนดว่า Part แต่ละตัวจะได้ config อะไร)
+    const groupLines = queue.groups.map((g, gi) => {
+      const bits = [g.package_size, g.part_number].filter(Boolean).join(' · ');
+      return `กลุ่มที่ ${gi + 1}: ${escapeHtml(g.number_alpl.join(', '))}` +
+             (bits ? ` <span style="opacity:.7">(${escapeHtml(bits)})</span>` : '');
+    }).join('<br>');
 
     const okStart = await uiConfirm(
-      `เริ่ม session ด้วยคิว <strong>${escapeHtml(label)}</strong><br>` +
-      `จำนวน <strong>${list.length} ALPL</strong> — ${escapeHtml(list.join(', '))}`,
+      `เริ่ม session ด้วยคิว <strong>${escapeHtml(queue.mode)}</strong> ` +
+      `จำนวน <strong>${list.length} ALPL</strong><br><br>${groupLines}`,
       { title: 'เริ่มการวัด', okLabel: '▶ เริ่มวัด' });
     if (!okStart) return;
 
-    const numberAlplStrList = list.map(n => String(n));
-
-    let body;
-    if (mode === 'ipm') {
-      body = {
-        'จำนวนชิ้นงานที่ต้องวัด': list.length,
-        Measure_Type: 'IPM',
-        number_alpl:  numberAlplStrList,
-        Operator:     queue.operator,
-      };
-    } else if (mode === 'new') {
-      body = {
-        'จำนวนชิ้นงานที่ต้องวัด': list.length,
-        Measure_Type: 'New',
-        number_alpl:  numberAlplStrList,
-        Operator:       queue.operator,
-        part_number:    queue.fields.part_number,
-        description:    queue.fields.description,
-        vendor:         queue.fields.vendor,
-        po_number:      queue.fields.po_number,
-        package_size:   queue.fields.package_size,
-        owner:          queue.fields.owner,
-        recieve_date:   queue.fields.recieve_date,
-      };
-    } else {
-      // Rework: จำกัดทีละ 1 ALPL เสมอ (บังคับตอน onSubmitRework แล้ว) — ไม่มี
-      // Note/Handler เหมือน New (ตัดออกจากทั้ง 2 ฟอร์มแล้วตามที่ตกลงกันไว้)
-      body = {
-        'จำนวนชิ้นงานที่ต้องวัด': list.length,
-        Measure_Type: 'Rework',
-        number_alpl:  numberAlplStrList,
-        Operator:       queue.operator,
-        part_number:    queue.fields.part_number,
-        description:    queue.fields.description,
-        vendor:         queue.fields.vendor,
-        po_number:      queue.fields.po_number,
-        package_size:   queue.fields.package_size,
-        owner:          queue.fields.owner,
-        recieve_date:   queue.fields.recieve_date,
-      };
-    }
+    // payload แบบกลุ่ม — backend คลี่เป็นคิวเส้นเดียวเองพร้อมจำว่าชิ้นไหนอยู่
+    // กลุ่มไหน (ดู _flatten_groups / _group_config_for ใน main.py)
+    const body = {
+      Measure_Type: queue.mode,
+      Operator:     queue.operator,
+      groups:       queue.groups,
+    };
 
     console.log('[Start จาก Part Entry queue — payload]', body);
 
@@ -2179,7 +2405,14 @@
       // ก็ตาม (ดู updateSession)
       queue.session_id = data.session_id;
       savePartEntryState();
-      updateSession({ state: 'running', session_id: data.session_id, measured_count: 0, target_count: data.target_count });
+      // เติม session_control จากฟอร์มไปก่อนกันจอกระพริบ — ไม่งั้นชิป Operator/
+      // Measure Type จะหายไปชั่วครู่ตั้งแต่ session_id เปลี่ยน (ซึ่งล้างทั้งคู่)
+      // จนกว่า /api/session/state จะตอบพร้อม queue_state กลับมา
+      updateSession({
+        state: 'running', session_id: data.session_id,
+        measured_count: 0, target_count: data.target_count,
+        measure_type: queue.mode, operator: queue.operator,
+      });
       // Rework อัปเดต row ใน parts (เช่น recieve_date ใหม่) และ New insert
       // part ตัวแรกของคิว ตอน start ฝั่ง backend — cache `parts` ในหน้านี้
       // เลยเก่าทันทีหลัง start สำเร็จ refresh เลยตรงนี้ เพื่อให้ทุกจุดที่อ่าน
@@ -2218,33 +2451,81 @@
   // ตอบให้ครบทุกครั้ง ไม่มีทางปิด modal ทิ้งเฉยๆ
   let mtSessionId = null;
 
+  // ╔═══ นาฬิกานับถอยหลังของ modal — เพิ่ม 7 ส.ค. 2569 ══════════════════════╗
+  //
+  // **หน้าเว็บเป็นคนนับ ไม่ใช่ Pi** เพราะการวัดต้องมีคนวางชิ้นงานอยู่แล้ว
+  // ไม่มีคนหน้าจอ = ไม่มีการวัด = ไม่มี modal · และผู้ใช้ได้เห็นเวลาเดินจริงด้วย
+  // ต่างจากให้ Pi นับเงียบๆ แล้วจู่ๆ หยุดไปโดยไม่มีอะไรบอก
+  //
+  // ⚠ ห้ามให้ทั้ง Pi และหน้าเว็บนับพร้อมกัน — 2 นาฬิกาแข่งกัน วันหนึ่งตั้งไม่ตรง
+  //   จะงงว่าใครเป็นคนหยุด (ฝั่ง Pi จึงรอ /command อย่างเดียว ไม่มี timeout)
+  //
+  // ⚠ clearInterval ต้องเรียก "ทุกทาง" ที่ modal ปิด — กดวัดต่อ · กดหยุด ·
+  //   ได้ SSE session_stopped/timeout ไม่งั้นนาฬิกาเดินต่อแล้วยิง stop ใส่
+  //   session ถัดไปที่เพิ่งเริ่ม
+  const MT_ANSWER_TIMEOUT = 60;   // วินาที
+  let mtTimer = null;
+  let mtLeft  = 0;
+
   function onMeasureTimeout(d) {
     mtSessionId = d.session_id;
     const piece  = d.piece  ?? '—';
     const target = d.target ?? '—';
+    // number_alpl กับ detail backend เป็นคนเติมให้ (Pi ไม่รู้ทั้งคู่)
+    // detail เป็น null ได้ — เกิดตอนรูปไม่มาเลย Recieve จึงไม่เคยรายงานสาเหตุ
+    const who    = d.number_alpl != null ? `ALPL <strong>${d.number_alpl}</strong> ` : '';
+    const why    = d.detail
+      ? `<br><span style="color:var(--warn)">สาเหตุ: ${escapeHtml(d.detail)}</span>`
+      : '';
     document.getElementById('mt-modal-message').innerHTML =
-      `ส่งคำสั่งวัด <strong>ชิ้นที่ ${piece} จาก ${target}</strong> ไปแล้ว ` +
-      `แต่ไม่ได้รับค่าการวัดกลับมาภายในเวลาที่กำหนด<br>ต้องการวัดชิ้นถัดไปต่อหรือไม่?`;
+      `${who}(ชิ้นที่ <strong>${piece}/${target}</strong>) ` +
+      `ไม่ได้รับค่าการวัดกลับมาภายในเวลาที่กำหนด${why}` +
+      `<br>ต้องการวัดชิ้นถัดไปต่อหรือไม่?` +
+      `<br><span id="mt-countdown" style="color:var(--muted);font-size:0.8rem"></span>`;
     document.getElementById('mt-modal').classList.add('open');
+
+    clearInterval(mtTimer);
+    mtLeft = MT_ANSWER_TIMEOUT;
+    const tick = () => {
+      const el = document.getElementById('mt-countdown');
+      if (el) el.textContent = `จะหยุดการวัดอัตโนมัติใน ${mtLeft} วินาที`;
+      if (mtLeft-- <= 0) {
+        clearInterval(mtTimer);
+        mtTimer = null;
+        resolveMeasureTimeout('stop');
+      }
+    };
+    tick();
+    mtTimer = setInterval(tick, 1000);
   }
 
   async function resolveMeasureTimeout(action) {
+    clearInterval(mtTimer);
+    mtTimer = null;
     const sid = mtSessionId;
     document.getElementById('mt-modal').classList.remove('open');
     mtSessionId = null;
     if (sid == null) return;
+
+    // ผู้ใช้เลือกหยุด (หรือหมดเวลา) → เดินเส้นทางเดียวกับปุ่ม Stop ทุกประการ
+    // ตั้งใจไม่ให้มีทางที่สองที่ปิด session ได้ (ดู stop_session ใน main.py)
+    if (action === 'stop') { await stopSession(); return; }
+
     try {
-      await fetch(`${API}/api/measure-timeout/${sid}/resolve`, {
+      const r = await fetch(`${API}/api/session/continue`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ session_id: sid }),
       });
+      // 502 = backend ยิง /command continue ไปแล้วแต่ Pi ไม่รับ (ดู continue_session)
+      // ตำแหน่งคิวถูกขยับไปแล้วฝั่ง backend แต่ Pi ไม่รู้ตัว → มันจะรออยู่เฉยๆ
+      // ถ้าเงียบไว้ผู้ใช้จะยืนรอเครื่องที่ไม่มีวันขยับ
+      if (!r.ok) throw new Error(await errText(r, `สั่งวัดชิ้นถัดไปไม่สำเร็จ (HTTP ${r.status})`));
     } catch (e) {
-      // บอก Pi ไม่สำเร็จ — Pi มี fallback เป็น "stop" อยู่แล้ว แจ้งให้ผู้ใช้รู้ตัว
-      showToast(`ส่งคำตอบไม่สำเร็จ: ${e.message} — เครื่องจะหยุดวัดเอง`, 6000);
+      // Backend ไม่ได้ยิง /command continue ไปปลุก Pi → Pi ยังค้างรออยู่
+      // ต้องบอกให้ผู้ใช้รู้ว่ากดหยุดเองได้
+      showToast(`ส่งคำตอบไม่สำเร็จ: ${e.message} — กด Stop เพื่อหยุดการวัด`, 6000);
     }
-    // ผู้ใช้เลือกหยุด → เดินเส้นทางเดียวกับปุ่ม Stop ทุกประการ
-    if (action === 'stop') await stopSession();
   }
 
   document.getElementById('ipm-summary-copy').onclick  = copyIpmSummary;
@@ -2258,209 +2539,284 @@
   // Part Entry
   // ══════════════════════════════════════════════════════════════════════════
 
-  // ── [แก้ไข] รองรับ 3 โหมด (IPM/New/Rework) แทนที่จะ hardcode แค่ 2 ทาง —
-  // modeBtns/modeForms/modeLabels คือ source of truth เดียวของรายชื่อโหมด
-  // ทั้งหมด ถ้าจะเพิ่มโหมดใหม่ในอนาคตแก้แค่ 3 object นี้พอ (บวกเพิ่ม
-  // form/button ใน HTML และ submit handler ของโหมดนั้นเอง)
-  const ENTRY_MODES = ['ipm', 'new', 'rework'];
+  // ══════════════════════════════════════════════════════════════════════════
+  // Part Entry — กลไก "หลายกลุ่ม" ตัวเดียวใช้ได้ทั้ง 3 โหมด
+  // ══════════════════════════════════════════════════════════════════════════
+  // 1 กลุ่ม = ALPL หลายตัวที่ใช้ข้อมูลชุดเดียวกัน · กด +Add เพิ่มกลุ่มได้
+  // Operator อยู่นอกกลุ่ม ใช้ร่วมกันทั้ง session (คนวัดคนเดียวกัน)
+  //
+  // ⚠ ทั้ง 3 โหมดใช้โค้ด add/remove/validate/lock/save ชุดเดียวกันหมด ต่างกัน
+  //   แค่ `GROUP_FIELDS` — ของเดิมเขียนแยก 3 ชุด (onSubmitIpm/New/Rework +
+  //   ฟอร์ม HTML 3 ก้อน) ซึ่งซ้ำกันเกือบทั้งหมด แก้บั๊กทีต้องไล่ 3 ที่ และ
+  //   เคยพลาดจริงมาแล้วหลายรอบ (เช่น clearFieldErrors ที่ resolve prefix ผิด)
+  //   ห้ามแตกกลับเป็นรายโหมดอีก ถ้าโหมดไหนต้องการ field ต่างออกไปให้เพิ่มใน
+  //   GROUP_FIELDS/FIELD_DEFS แทน
 
-  function initPartEntry() {
-    const modeBtns = {
-      ipm:    document.getElementById('entry-mode-ipm'),
-      new:    document.getElementById('entry-mode-new'),
-      rework: document.getElementById('entry-mode-rework'),
-    };
-    const modeForms = {
-      ipm:    document.getElementById('form-ipm'),
-      new:    document.getElementById('form-new'),
-      rework: document.getElementById('form-rework'),
-    };
-    const modeLabels = { ipm: 'IPM', new: 'New', rework: 'Rework' };
-    const placeholder = document.getElementById('entry-placeholder');
+  const ENTRY_MODES  = ['IPM', 'New', 'Rework'];
+  const MODE_BTN_ID  = { IPM: 'entry-mode-ipm', New: 'entry-mode-new', Rework: 'entry-mode-rework' };
+  const MODE_CLASS   = { IPM: 'ipm', New: 'new', Rework: 'rework' };
 
-    function switchEntryMode(target) {
-      ENTRY_MODES.forEach(mode => {
-        const isActive = mode === target;
-        modeBtns[mode].classList.toggle('active', isActive);
-        modeBtns[mode].setAttribute('aria-selected', String(isActive));
-        modeForms[mode].style.display = isActive ? '' : 'none';
+  // ตัวเลือกของ dropdown ที่โหลดครั้งเดียวตอนเปิดหน้า — กลุ่มถูกวาดตอนรัน
+  // (renderGroups) จึงต้องเก็บไว้เป็นตัวแปร ไม่ใช่ยัด <option> ใส่ id ตายตัว
+  let operatorOptions = [], vendorOptions = [], ownerOptions = [];
+
+  const FIELD_DEFS = {
+    number_alpl:  { label: 'ALPL',           type: 'text',      placeholder: 'เช่น 201, 202, 203 (คั่นด้วยจุลภาค)' },
+    package_size: { label: 'Package Size',   type: 'datalist' },
+    part_number:  { label: 'Part Number',    type: 'part_number' },
+    description:  { label: 'Description',    type: 'text' },
+    po_number:    { label: 'PO Number',      type: 'text',      placeholder: 'ตัวเลขเท่านั้น' },
+    vendor:       { label: 'Vendor',         type: 'select',    options: () => vendorOptions },
+    owner:        { label: 'Owner',          type: 'select',    options: () => ownerOptions },
+    receive_date: { label: 'Receive Date',   type: 'date' },
+  };
+
+  // ── ผังของกลุ่ม ────────────────────────────────────────────────────────
+  // IPM ต้องมี Package Size ด้วย (ไม่ใช่ optional แบบเดิม) — เกณฑ์ตัดสินและ
+  // template ของโหมด IPM มาจาก package_size ตรงๆ แล้ว ไม่ได้อ้อมผ่าน part_number
+  //
+  // ⚠ ลำดับใน GROUP_FIELDS คือลำดับที่ช่องจะเรียงบนจอ (grid ไหลซ้าย→ขวา
+  //   บน→ล่าง) จับคู่กับ `cols` แล้วได้ผังตามนี้ ห้ามสลับลำดับโดยไม่ดูผังก่อน:
+  //
+  //   IPM (2 คอลัมน์)      [ ALPL | Package Size ]
+  //
+  //   New/Rework (3 คอลัมน์)
+  //     แถว 1  [ ALPL      | Package Size | Part Number ]
+  //     แถว 2  [ PO Number | Vendor       | Owner       ]
+  //     แถว 3  [ Description (กว้าง 2 ช่อง)| Receive Date ]
+  const GROUP_FIELDS = {
+    IPM:    ['number_alpl', 'package_size'],
+    New:    ['number_alpl', 'package_size', 'part_number',
+             'po_number',   'vendor',       'owner',
+             'description', 'receive_date'],
+    Rework: ['number_alpl', 'package_size', 'part_number',
+             'po_number',   'vendor',       'owner',
+             'description', 'receive_date'],
+  };
+  // cols = จำนวนคอลัมน์ของ grid · span = ช่องไหนกินกว้างกว่า 1 คอลัมน์
+  // (ส่งเข้า CSS ผ่านตัวแปร --cols เพื่อให้ media query ยุบเหลือ 1 คอลัมน์
+  //  บนจอแคบได้ — ถ้า hardcode grid-template-columns ตรงๆ จะ override ไม่ได้)
+  const GROUP_LAYOUT = {
+    IPM:    { cols: 2, span: {} },
+    New:    { cols: 3, span: { description: 2 } },
+    Rework: { cols: 3, span: { description: 2 } },
+  };
+  // field ที่เว้นว่างได้ — นอกจากนี้บังคับกรอกหมด
+  const OPTIONAL_FIELDS = { IPM: [], New: ['receive_date'], Rework: [] };
+
+  let entryMode   = null;    // โหมดที่กำลังเปิดอยู่ในฟอร์ม
+  let entryGroups = [];      // [{number_alpl:'400, 401', package_size:'5x5', ...}] — ค่าดิบจากช่องกรอก
+  let entryLocked = false;   // Save แล้ว (ช่องกรอกถูกปิด รอกด Edit)
+
+  // ── อ่านค่าจาก DOM กลับเข้า state ──────────────────────────────────────
+  // ต้องเรียกก่อน re-render ทุกครั้ง (เพิ่ม/ลบ/ย่อกลุ่ม) ไม่งั้นสิ่งที่ผู้ใช้
+  // เพิ่งพิมพ์จะหายไปเงียบๆ — เป็นข้อห้ามข้อแรกของแผน D5
+  function readGroupsFromDom() {
+    if (!entryMode) return;
+    entryGroups.forEach((g, gi) => {
+      GROUP_FIELDS[entryMode].forEach(f => {
+        const el = document.getElementById(`g${gi}-${f}`);
+        if (el) g[f] = el.value;
       });
-      placeholder.style.display = 'none';
+    });
+  }
+
+  function groupSummaryText(g) {
+    const alpl = (g.number_alpl || '').trim();
+    const bits = [alpl ? `ALPL ${alpl}` : 'ยังไม่ได้กรอก ALPL'];
+    if (g.package_size) bits.push(g.package_size);
+    if (g.part_number)  bits.push(g.part_number);
+    return bits.join(' · ');
+  }
+
+  function fieldInputHtml(gi, f) {
+    const def = FIELD_DEFS[f];
+    const id  = `g${gi}-${f}`;
+    if (def.type === 'select') {
+      const opts = def.options().map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      return `<select id="${id}"><option value="">-- เลือก ${escapeHtml(def.label)} --</option>${opts}</select>`;
     }
-
-    ENTRY_MODES.forEach(mode => {
-      modeBtns[mode].onclick = async () => {
-        if (modeBtns[mode].classList.contains('active')) return;
-        // ถ้าโหมดอื่น (ที่ไม่ใช่ตัวที่กำลังจะสลับไป) มีข้อมูลค้างอยู่ในฟอร์ม —
-        // ถามยืนยันก่อนทิ้งข้อมูลนั้น (เดิมเช็คแค่ "อีกฝั่งเดียว" พอมี 3 โหมด
-        // ต้องเช็คทั้ง 2 โหมดที่เหลือ)
-        const dirtyMode = ENTRY_MODES.find(m => m !== mode && formHasData(m));
-        if (dirtyMode && !await confirmDiscard(modeLabels[mode], modeLabels[dirtyMode])) return;
-        ENTRY_MODES.filter(m => m !== mode).forEach(m => clearFormCompletely(m));
-        switchEntryMode(mode);
-        // เข้าโหมด IPM ต้องเช็คใหม่ว่า ALPL ที่ค้างอยู่ลงทะเบียนแล้วหรือยัง
-        if (mode === 'ipm') updateIpmPackageSizeLock();
-      };
-    });
-
-    renderIpmOrderHint();
-    modeForms.ipm.addEventListener('submit', onSubmitIpm);
-    modeForms.new.addEventListener('submit', onSubmitNew);
-    modeForms.rework.addEventListener('submit', onSubmitRework);
-    // ต้องคำนวณทั้งตอน input (debounce) และ blur — ผูกแค่ blur จะค้างสถานะเก่า
-    // ถ้าผู้ใช้พิมพ์แล้วกด Save เลยโดยไม่คลิกออกจากช่อง
-    let ipmLockTimer = null;
-    const ipmAlplEl = document.getElementById('ipm-number_alpl');
-    ipmAlplEl.addEventListener('blur', updateIpmPackageSizeLock);
-    ipmAlplEl.addEventListener('input', () => {
-      clearTimeout(ipmLockTimer);
-      ipmLockTimer = setTimeout(updateIpmPackageSizeLock, 400);
-    });
-    document.getElementById('rework-number_alpl').addEventListener('blur', updateReworkPrefill);
-    // Package Size → Part Number cascading dropdown ทั้ง 3 ฟอร์ม — ต้องเลือก
-    // Package Size ก่อนถึงจะเลือก Part Number ได้ (debounce กันยิง fetch รัวๆ
-    // ตอนพิมพ์ package size เอง แทนที่จะเลือกจาก datalist โดยตรง)
-    ENTRY_MODES.forEach(mode => {
-      const pkgInput = document.getElementById(`${mode}-package_size`);
-      if (pkgInput) pkgInput.addEventListener('input', () => schedulePartNumberUpdate(mode));
-    });
-    ENTRY_MODES.forEach(mode => {
-      document.getElementById(`btn-edit-${mode}`).onclick = () => unlockFormFields(mode);
-    });
-
-    const peModal = document.getElementById('pe-modal');
-    document.getElementById('pe-modal-close').onclick = closePeModal;
-    peModal.onclick = e => { if (e.target.id === 'pe-modal') closePeModal(); };
-
-    renderPartEntrySummary();
-  }
-
-  function openPeModal() {
-    if (ipmQueue) {
-      document.getElementById('entry-mode-ipm').click();
-    } else if (newQueue) {
-      document.getElementById('entry-mode-new').click();
-    } else if (reworkQueue) {
-      document.getElementById('entry-mode-rework').click();
+    if (def.type === 'part_number') {
+      // cascade จาก Package Size — ตัวเลือกถูกเติมทีหลังโดย updatePartNumberOptions
+      return `<select id="${id}" disabled><option value="">-- เลือก Package Size ก่อน --</option></select>`;
     }
-    document.getElementById('pe-modal').classList.add('open');
-    // เปิด modal ขึ้นมาแล้วอาจมีค่าเดิมค้างอยู่ในฟอร์ม — เช็คสถานะล็อกใหม่เสมอ
-    if (document.getElementById('entry-mode-ipm').classList.contains('active')) updateIpmPackageSizeLock();
-  }
-  function closePeModal() {
-    document.getElementById('pe-modal').classList.remove('open');
+    if (def.type === 'datalist') {
+      return `<input type="text" id="${id}" list="package-size-datalist" placeholder="${escapeHtml(def.placeholder || '')}" />`;
+    }
+    if (def.type === 'date') return `<input type="date" id="${id}" />`;
+    return `<input type="text" id="${id}" placeholder="${escapeHtml(def.placeholder || '')}" />`;
   }
 
-  // ── [แก้ไข] renderPartEntrySummary — ไม่มี history dropdown แล้ว
-  //    โชว์ dropdown summary ถ้ามีคิว (ทั้งก่อนและระหว่างวัด)
-  //    โชว์ empty state + New Entry เมื่อไม่มีคิว (หลัง session จบ)
-  function renderPartEntrySummary() {
-    const el = document.getElementById('part-entry-summary');
-    const badgeLg = document.getElementById('pe-mode-badge-lg');
-    const queue = ipmQueue || newQueue || reworkQueue;
+  /** วาดกลุ่มทั้งหมดใหม่จาก entryGroups แล้วใส่ค่ากลับเข้าช่อง
+   *  (วาดใหม่ทั้งก้อนแทนการแก้ทีละ node เพราะ index ของกลุ่มเลื่อนตอนลบกลุ่มกลาง) */
+  async function renderGroups() {
+    const host = document.getElementById('entry-groups');
+    if (!host || !entryMode) return;
+    const fields = GROUP_FIELDS[entryMode];
+    const layout = GROUP_LAYOUT[entryMode];
+    const many   = entryGroups.length > 1;
 
-    if (!queue) {
-      // ไม่มีคิว → empty state เสมอ (ไม่ว่าจะมี measurement หรือไม่)
-      badgeLg.style.display = 'none';
-      el.innerHTML = `
-        <div class="pe-empty">
-          ยังไม่มีข้อมูล Part Entry ค้างอยู่ — กด "New Entry" เพื่อเตรียมคิว IPM, ลงทะเบียน Part ใหม่ หรือส่ง Rework
-        </div>
-        <div style="margin-top:1rem; text-align:center">
-          <button class="btn-pe-action" id="btn-pe-open">+ New Entry</button>
+    host.innerHTML = entryGroups.map((g, gi) => {
+      const cells = fields.map(f => {
+        const def  = FIELD_DEFS[f];
+        const span = layout.span[f] || 1;
+        const req  = OPTIONAL_FIELDS[entryMode].includes(f) ? '' : ' <span class="req">*</span>';
+        return `<div class="form-group${span > 1 ? ` span-${span}` : ''}">
+            <label for="g${gi}-${f}">${escapeHtml(def.label)}${req}</label>
+            ${fieldInputHtml(gi, f)}
+            <div class="field-error" id="err-g${gi}-${f}"></div>
+          </div>`;
+      }).join('');
+      // ปุ่มย่อ/ขยาย (ลูกศร) อยู่ขวาสุด — ชื่อกลุ่มกับสรุปอ่านจากซ้ายไปขวาตามปกติ
+      // แล้วค่อยเจอปุ่มควบคุมท้ายแถว ไม่ใช่ลูกศรมาขวางอยู่หน้าสุด
+      return `<div class="entry-group${g._collapsed ? ' collapsed' : ''}" id="group-${gi}">
+          <div class="entry-group-head" data-gi="${gi}">
+            <span class="entry-group-title">กลุ่มที่ ${gi + 1}</span>
+            <span class="entry-group-sum">${escapeHtml(groupSummaryText(g))}</span>
+            ${many ? `<button type="button" class="entry-group-del" data-del="${gi}">ลบ</button>` : ''}
+            <span class="entry-group-arrow">${g._collapsed ? '▸' : '▾'}</span>
+          </div>
+          <div class="entry-group-body">
+            <div class="entry-form-grid" style="--cols:${layout.cols}">${cells}</div>
+          </div>
         </div>`;
-      document.getElementById('btn-pe-open').onclick = openPeModal;
-      return;
-    }
-
-    // มีคิวค้างอยู่ → แสดง collapsible dropdown (ทั้งก่อน Start และระหว่างวัด)
-    const mode = ipmQueue ? 'ipm' : newQueue ? 'new' : 'rework';
-    const modeLabel = mode === 'ipm' ? 'IPM' : mode === 'new' ? 'New' : 'Rework';
-    badgeLg.style.display = '';
-    badgeLg.textContent   = modeLabel;
-    badgeLg.className     = `pe-mode-badge-lg ${mode}`;
-
-    const baseRows = mode === 'ipm'
-      ? [
-          ['Number ALPL',  queue.list.join(', ')],
-          ['Operator',     queue.operator],
-        ]
-      : mode === 'new'
-      ? [
-          ['Number ALPL',      queue.list.join(', ')],
-          ['Operator',          queue.operator],
-          null,
-          ['Part Number',       queue.fields.part_number],
-          ['Description',       queue.fields.description    || '—'],
-          ['Vendor',            queue.fields.vendor         || '—'],
-          null,
-          ['Purchase Order No', queue.fields.po_number      != null ? queue.fields.po_number            : '—'],
-          ['Package Size',      queue.fields.package_size   || '—'],
-          ['Owner',             queue.fields.owner          || '—'],
-          ['Receive Date',      queue.fields.recieve_date   || '—'],
-        ]
-      : [
-          ['Number ALPL',      queue.list.join(', ')],
-          ['Operator',          queue.operator],
-          null,
-          ['Part Number',       queue.fields.part_number],
-          ['Description',       queue.fields.description    || '—'],
-          ['Vendor',            queue.fields.vendor         || '—'],
-          null,
-          ['Purchase Order No', queue.fields.po_number      != null ? queue.fields.po_number            : '—'],
-          ['Package Size',      queue.fields.package_size   || '—'],
-          ['Owner',             queue.fields.owner          || '—'],
-          ['Receive Date',      queue.fields.recieve_date   || '—'],
-        ];
-
-    const gridRows = baseRows.map(row => {
-      if (row === null) return `<hr class="pg-divider">`;
-      return `<span class="pg-label">${row[0]}</span><span class="pg-value">${row[1]}</span>`;
     }).join('');
 
-    // Toggle bar โชว์แค่ ALPL (ทั้ง IPM และ New)
-    const summaryText = `ALPL: ${queue.list.join(', ')}`;
+    // ใส่ค่ากลับเข้าช่อง (ยกเว้น part_number ที่ต้องรอ options มาก่อน)
+    entryGroups.forEach((g, gi) => {
+      fields.forEach(f => {
+        if (f === 'part_number') return;
+        const el = document.getElementById(`g${gi}-${f}`);
+        if (el && g[f] != null) el.value = g[f];
+      });
+    });
 
-    // ปุ่ม Edit หายไปทันทีที่ session เริ่มรัน — กันแก้ไขคิวระหว่างที่ Agent
-    // กำลังวัดตามคิวเดิมอยู่ ซึ่งจะทำให้ตำแหน่ง/ข้อมูลไม่ตรงกัน
-    // รวม 'paused' ด้วย เพราะกด Start เมื่อไหร่ก็วัดต่อจากคิวเดิมทันที
-    const canEdit = !['running', 'paused'].includes(session.state);
-    el.innerHTML = `
-      <div class="pe-summary-dropdown">
-        <button class="pe-summary-toggle" id="pe-toggle-btn" type="button">
-          <span class="pe-summary-toggle-left">
-            <span>${summaryText}</span>
-          </span>
-          <span class="pe-summary-arrow" id="pe-arrow">▼</span>
-        </button>
-        <div class="pe-summary-body" id="pe-summary-body">
-          <div class="pe-summary-grid">${gridRows}</div>
-          <div class="pe-summary-actions">
-            ${canEdit ? '<button class="btn-pe-action" id="btn-pe-open">✎ Edit</button>' : ''}
-          </div>
-        </div>
-      </div>`;
+    // ── ผูก event ──────────────────────────────────────────────────────
+    host.querySelectorAll('.entry-group-head').forEach(head => {
+      head.onclick = ev => {
+        if (ev.target.dataset.del !== undefined) return;   // ปุ่มลบจัดการเอง
+        toggleGroup(Number(head.dataset.gi));
+      };
+    });
+    host.querySelectorAll('[data-del]').forEach(btn => {
+      btn.onclick = ev => { ev.stopPropagation(); removeGroup(Number(btn.dataset.del)); };
+    });
+    entryGroups.forEach((g, gi) => {
+      const pkg = document.getElementById(`g${gi}-package_size`);
+      if (pkg) pkg.addEventListener('input', () => schedulePartNumberUpdate(`g${gi}`));
+      // หัวกลุ่มต้องอัปเดตตามที่พิมพ์ ไม่งั้นย่อกลุ่มแล้วเห็นสรุปเก่า
+      const alpl = document.getElementById(`g${gi}-number_alpl`);
+      if (alpl) alpl.addEventListener('input', () => {
+        g.number_alpl = alpl.value;
+        const sum = document.querySelector(`#group-${gi} .entry-group-sum`);
+        if (sum) sum.textContent = groupSummaryText(g);
+        schedulePrefill(gi);          // เติมช่องที่เหลือระหว่างพิมพ์ (debounce)
+      });
+    });
 
-    document.getElementById('pe-toggle-btn').onclick = () => {
-      const body  = document.getElementById('pe-summary-body');
-      const arrow = document.getElementById('pe-arrow');
-      const isOpen = body.classList.toggle('open');
-      arrow.classList.toggle('open', isOpen);
-    };
+    if (entryLocked) applyEntryLock(true);
+    // วาดกลุ่มใหม่ = ช่องถูกสร้างใหม่หมด สถานะล็อกจาก autofill จึงหายไปด้วย
+    // ต้องทาสีกลับตามที่จำไว้ ไม่งั้นกด +Add แล้วช่องที่เคยล็อกจะแก้ได้เฉยๆ
+    entryGroups.forEach((g, gi) => applyPrefillLock(gi));
 
-    const btnPeOpen = document.getElementById('btn-pe-open');
-    if (btnPeOpen) btnPeOpen.onclick = openPeModal;
+    // part_number: โหลดตัวเลือกตาม package_size ของกลุ่มนั้น แล้วค่อยคืนค่าเดิม
+    await Promise.all(entryGroups.map(async (g, gi) => {
+      if (!fields.includes('part_number')) return;
+      await updatePartNumberOptions(`g${gi}`);
+      const sel = document.getElementById(`g${gi}-part_number`);
+      if (sel && g.part_number) sel.value = g.part_number;
+      if (entryLocked && sel) sel.disabled = true;
+    }));
   }
 
-  // ── [แก้ไข] คืน prefix อื่นๆ ทั้งหมดที่ไม่ใช่ตัวที่ระบุ — เดิมมีแค่ 2 โหมด
-  // (ipm/new) เลย hardcode คืนแค่ "อีกฝั่งเดียว" ได้ พอมี Rework เป็นโหมดที่ 3
-  // ต้องคืนเป็น array ของโหมดที่เหลือทั้งหมดแทน (ใช้ตอน lock/unlock ปุ่ม toggle
-  // ของโหมดอื่นๆ ทุกตัว ไม่ใช่แค่ตัวเดียว)
-  function otherPrefixes(prefix) { return ENTRY_MODES.filter(p => p !== prefix); }
+  function addGroup() {
+    readGroupsFromDom();
+    // ย่อกลุ่มที่กรอกไว้แล้วทั้งหมด เหลือกลุ่มใหม่กางอยู่ตัวเดียว — กัน modal
+    // สูงเกินจอจนกดปุ่ม Save ไม่ถึงเมื่อมีหลายกลุ่ม
+    entryGroups.forEach(g => { g._collapsed = true; });
+    entryGroups.push({ _collapsed: false });
+    renderGroups();
+  }
 
-  function formHasData(prefix) {
-    const form = document.getElementById(`form-${prefix}`);
-    return Array.from(form.querySelectorAll('input, textarea, select')).some(el => el.value.trim() !== '');
+  async function removeGroup(gi) {
+    readGroupsFromDom();
+    const g = entryGroups[gi];
+    const hasData = GROUP_FIELDS[entryMode].some(f => (g[f] || '').trim() !== '');
+    if (hasData && !await uiConfirm(
+      `ลบ <strong>กลุ่มที่ ${gi + 1}</strong> ทิ้ง (${escapeHtml(groupSummaryText(g))})`,
+      { title: 'ลบกลุ่ม', okLabel: 'ลบกลุ่ม', danger: true })) return;
+    entryGroups.splice(gi, 1);
+    if (!entryGroups.length) entryGroups.push({ _collapsed: false });
+    renderGroups();
+  }
+
+  function toggleGroup(gi) {
+    readGroupsFromDom();
+    entryGroups[gi]._collapsed = !entryGroups[gi]._collapsed;
+    renderGroups();
+  }
+
+  // ── error รายกลุ่ม ─────────────────────────────────────────────────────
+  function clearEntryErrors() {
+    document.querySelectorAll('#form-entry .field-error').forEach(el => el.textContent = '');
+    document.querySelectorAll('#form-entry input, #form-entry select').forEach(el => el.classList.remove('invalid'));
+  }
+
+  /** ตั้ง error ให้ช่องหนึ่ง — กลุ่มที่มี error ต้องถูกกางออกเสมอ ไม่งั้น
+   *  ผู้ใช้เห็นแค่ปุ่ม Save ไม่ทำงานโดยไม่รู้ว่าผิดตรงไหน */
+  function setEntryError(gi, field, message) {
+    const key = gi === null ? `entry-${field}` : `g${gi}-${field}`;
+    const errEl = document.getElementById(`err-${key}`);
+    const inEl  = document.getElementById(key);
+    if (errEl) errEl.textContent = message;
+    if (inEl)  inEl.classList.add('invalid');
+    if (gi !== null && entryGroups[gi] && entryGroups[gi]._collapsed) {
+      entryGroups[gi]._collapsed = false;
+      document.getElementById(`group-${gi}`)?.classList.remove('collapsed');
+    }
+  }
+
+  // ── ล็อก/ปลดล็อกฟอร์มหลัง Save ─────────────────────────────────────────
+  function applyEntryLock(locked) {
+    document.querySelectorAll('#form-entry input, #form-entry select')
+      .forEach(el => { el.disabled = locked; });
+    document.getElementById('btn-submit-entry').style.display = locked ? 'none' : '';
+    document.getElementById('btn-edit-entry').style.display   = locked ? '' : 'none';
+    document.getElementById('btn-add-group').disabled = locked;
+    ENTRY_MODES.forEach(m => {
+      const btn = document.getElementById(MODE_BTN_ID[m]);
+      btn.disabled = locked;
+      btn.title = locked ? 'กด Edit ก่อน ถ้าต้องการสลับโหมด' : '';
+    });
+  }
+
+  function lockEntryForm()   { entryLocked = true;  applyEntryLock(true); }
+  function unlockEntryForm() {
+    entryLocked = false;
+    applyEntryLock(false);
+    // ⚠ applyEntryLock(false) ปลด disabled ทุกช่องรวมถึงช่องที่ถูกล็อกจาก
+    //   autofill ด้วย — renderGroups() จะทาสถานะล็อกกลับให้เองท้ายฟังก์ชัน
+    renderGroups();   // part_number ต้อง sync ตัวเลือกใหม่ตาม package size ปัจจุบัน
+  }
+
+  function formHasData() {
+    if (!entryMode) return false;
+    readGroupsFromDom();
+    const opEl = document.getElementById('entry-operator');
+    if (opEl && opEl.value.trim()) return true;
+    return entryGroups.some(g => GROUP_FIELDS[entryMode].some(f => (g[f] || '').trim() !== ''));
+  }
+
+  function resetEntryForm() {
+    entryGroups = [{ _collapsed: false }];
+    entryLocked = false;
+    const opEl = document.getElementById('entry-operator');
+    if (opEl) opEl.value = '';
+    clearEntryErrors();
+    const st = document.getElementById('entry-status');
+    if (st) st.textContent = '';
+    applyEntryLock(false);
+    renderGroups();
   }
 
   function confirmDiscard(targetLabel, currentLabel) {
@@ -2470,70 +2826,12 @@
       { title: 'เปลี่ยนโหมด', okLabel: 'เปลี่ยนโหมด', danger: true });
   }
 
-  function clearFormCompletely(prefix) {
-    const form = document.getElementById(`form-${prefix}`);
-    form.reset();
-    clearFieldErrors(prefix);
-    unlockFormFields(prefix);
-    const statusEl = document.getElementById(`${prefix}-status`);
-    if (statusEl) statusEl.textContent = '';
-  }
-
-  function lockFormFields(prefix) {
-    const form = document.getElementById(`form-${prefix}`);
-    form.querySelectorAll('input, textarea, select').forEach(el => { el.disabled = true; });
-    document.getElementById(`btn-submit-${prefix}`).style.display = 'none';
-    document.getElementById(`btn-edit-${prefix}`).style.display = '';
-    otherPrefixes(prefix).forEach(p => {
-      const otherBtn = document.getElementById(`entry-mode-${p}`);
-      otherBtn.disabled = true;
-      otherBtn.title = `กด Edit ในฟอร์ม ${prefix.toUpperCase()} ก่อน ถ้าต้องการสลับโหมด`;
-    });
-  }
-
-  function unlockFormFields(prefix) {
-    const form = document.getElementById(`form-${prefix}`);
-    form.querySelectorAll('input, textarea, select').forEach(el => { el.disabled = false; });
-    document.getElementById(`btn-edit-${prefix}`).style.display = 'none';
-    document.getElementById(`btn-submit-${prefix}`).style.display = '';
-    otherPrefixes(prefix).forEach(p => {
-      const otherBtn = document.getElementById(`entry-mode-${p}`);
-      otherBtn.disabled = false;
-      otherBtn.title = '';
-    });
-    // Part Number เป็น dropdown ที่ cascade จาก Package Size — หลัง unlock ต้อง
-    // sync สถานะ disabled/ตัวเลือกใหม่ตามค่า Package Size ปัจจุบันเสมอ (กัน
-    // เปิดให้กดได้ทั้งที่ Package Size ว่างอยู่ หรือโชว์ตัวเลือกเก่าค้างจาก
-    // package size อื่น) — ฟังก์ชันนี้จะพยายามคงค่าที่เลือกไว้เดิมให้ถ้ายังมีอยู่
-    if (document.getElementById(`${prefix}-part_number`)) updatePartNumberOptions(prefix);
-  }
-
-  function renderIpmOrderHint() {
-      const msg = 'ℹ️ ลำดับ ALPL ที่กรอกจะถูกใช้ map กับค่าที่วัดได้ตามลำดับ ตอนกด Start ในรอบถัดไป';
-      ['ipm-order-hint', 'new-order-hint', 'rework-order-hint'].forEach(id => {
-        const hint = document.getElementById(id);
-        if (!hint) return;
-        hint.className = 'entry-session-hint';
-        hint.textContent = msg;
-      });
-  }
-
-  // ── [แก้ไข] เดิม hardcode ternary "prefix === 'ipm' ? 'ipm' : 'new'" ซึ่งจริงๆ
-  // แล้วเท่ากับ `prefix` ตรงๆ อยู่แล้ว (บั๊กแฝง ใช้ได้พอดีเพราะเดิมมีแค่ 2 ค่า
-  // เป็นไปได้ 'ipm'/'new') พอเพิ่ม 'rework' เข้ามาตัว ternary เดิมจะ resolve
-  // ผิดเป็น 'new' เสมอ ทำให้ error/ไฮไลต์ของฟอร์ม Rework ไม่ถูก clear ตัดออก
-  // แล้วใช้ `prefix` ตรงๆ ไปเลย (form id คือ `form-${prefix}` อยู่แล้วทุกโหมด)
-  function clearFieldErrors(prefix) {
-    document.querySelectorAll(`[id^="err-${prefix}-"]`).forEach(el => el.textContent = '');
-    document.querySelectorAll(`#form-${prefix} input, #form-${prefix} textarea, #form-${prefix} select`)
-      .forEach(el => el.classList.remove('invalid'));
-  }
-
-  function setFieldError(prefix, field, message) {
-    const errEl = document.getElementById(`err-${prefix}-${field}`);
-    const inputEl = document.getElementById(`${prefix}-${field}`);
-    if (errEl) errEl.textContent = message;
-    if (inputEl) inputEl.classList.add('invalid');
+  function renderEntryHint() {
+    const hint = document.getElementById('entry-order-hint');
+    if (!hint) return;
+    hint.className = 'entry-session-hint';
+    hint.innerHTML = 'ℹ️ ลำดับ ALPL ที่กรอก (ไล่จากกลุ่มบนลงล่าง) คือลำดับที่ค่าที่วัดได้จะถูก map เข้าไป — ' +
+                     '1 กลุ่มคือ ALPL ที่ใช้ข้อมูลชุดเดียวกัน';
   }
 
   function parseAlplList(raw) {
@@ -2550,13 +2848,9 @@
   }
 
   // ── ดึง parts "ทั้งหมด" ────────────────────────────────────────────────
-  // หน้านี้ต้องรู้ว่า ALPL ตัวไหนลงทะเบียนแล้ว (ใช้ตอนเช็ค IPM/New/Rework และ
-  // ตอนล็อกช่อง Package Size) ถ้าได้มาไม่ครบจะตัดสินผิด
-  //
-  // ⚠ เดิมขอ `?limit=100000` ทีเดียว ซึ่งพังเงียบตอน backend เพิ่มเพดาน le=1000
-  // เข้ามา — ได้ HTTP 422 กลับมา แล้ว `if (r.ok)` กลืน error ทิ้ง ทำให้ parts
-  // ว่างเปล่าตลอด ทุกอย่างที่พึ่งข้อมูลนี้เลยเงียบไปหมดโดยไม่มีอะไรเตือน
-  // ตอนนี้ไล่ดึงทีละหน้าตามเพดานจริง และแจ้งเตือนถ้าดึงไม่สำเร็จ
+  // ยังใช้อยู่สำหรับ Report modal (หาข้อมูล part ของแถวที่กด) — ส่วนการเช็คว่า
+  // ALPL ลงทะเบียนแล้วหรือยัง ย้ายไปใช้ POST /api/parts/check แทนแล้ว
+  // (ไม่ต้องลากทั้งตารางมาไว้ในหน่วยความจำเพื่อเทียบไม่กี่ตัว — ดูแผนข้อ D6)
   const PARTS_PAGE = 1000;              // ต้องไม่เกินเพดานของ /api/parts
 
   async function fetchAllParts() {
@@ -2577,387 +2871,527 @@
     try {
       parts = await fetchAllParts();
     } catch (e) {
-      // ห้ามเงียบ — ถ้า parts ไม่ครบ การตัดสินว่า ALPL ลงทะเบียนแล้วหรือยังจะผิด
       console.error('refreshParts:', e);
-      showToast(`โหลดรายการ Part ไม่สำเร็จ — การตรวจ ALPL อาจไม่ถูกต้อง (${e.message})`);
+      showToast(`โหลดรายการ Part ไม่สำเร็จ (${e.message})`);
     }
     return parts;
   }
 
-  // ── [แก้ไข] เดิมเช็คแค่ mode === 'ipm' (ต้องลงทะเบียนแล้ว) กับ else (ต้องยัง
-  // ไม่ลงทะเบียน — ใช้กับ 'new' เท่านั้นตอนนั้น) พอเพิ่ม 'rework' ที่ต้องการ
-  // เงื่อนไขเดียวกับ 'ipm' (ต้องลงทะเบียนแล้วเหมือนกัน) จึงกลับเงื่อนไขหลักมา
-  // เช็คที่ 'new' แทน แล้วให้ 'ipm'/'rework' ใช้ else ร่วมกัน
-  function checkAlplExistence(numberAlplList, mode) {
-    const registeredSet = new Set(parts.map(p => p.number_alpl));
-    if (mode === 'new') {
-      const alreadyRegistered = numberAlplList.filter(n => registeredSet.has(n));
-      if (alreadyRegistered.length > 0) {
-        return `ALPL ${alreadyRegistered.join(', ')} ลงทะเบียนชิ้นงานนี้ไปแล้ว`;
+  /** ถาม backend ทีเดียวว่า ALPL ชุดนี้ตัวไหนมี/ไม่มีในระบบ (ดูแผนข้อ D6) */
+  /** ส่ง "โครงกลุ่ม" ไปด้วย ไม่ใช่แค่ลิสต์ ALPL แบนๆ — backend จะได้ตรวจเพิ่มว่า
+   *  ALPL ที่อยู่กลุ่มเดียวกันเข้าชุดกันจริงไหม (IPM ดู Package Size ·
+   *  Rework ดู Package Size + Part Number) แล้วคืนมาใน `conflicts`
+   *
+   *  ให้ backend ตรวจแทนที่จะเทียบเองฝั่งนี้ เพราะกฎเดียวกันนี้มีอยู่แล้วตอนกด
+   *  Start (`_build_groups`) ถ้าเขียนซ้ำ 2 ที่ วันหนึ่งจะเพี้ยนกันเอง */
+  async function checkAlplInDb(parsedGroups, mode) {
+    const r = await fetch(`${API}/api/parts/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        mode,
+        groups: parsedGroups.map(p => ({ alpl: p.alpl })),
+      }),
+    });
+    if (!r.ok) throw new Error(await errText(r, 'ตรวจสอบ ALPL กับฐานข้อมูลไม่สำเร็จ'));
+    return r.json();
+  }
+
+  // ── เติมข้อมูลเดิมของ ALPL ให้อัตโนมัติ (IPM + Rework) ─────────────────
+  // ทำงานตอนออกจากช่อง ALPL ของกลุ่มนั้น
+  //
+  // ใช้กับ 2 โหมดที่ ALPL "ต้องเคยมีอยู่แล้ว" เท่านั้น — โหมด New ไม่เติม เพราะ
+  // ALPL ต้องเป็นของใหม่ ถ้ามีข้อมูลเดิมให้เติมได้แสดงว่าผู้ใช้เลือกโหมดผิด
+  // (ปล่อยให้ตอนกด Save เตือนแทน จะได้เห็นเหตุผลชัดกว่าการเติมค่าให้เงียบๆ)
+  //
+  // ⚠ เติมเฉพาะ "ช่องที่ยังว่าง" เท่านั้น ห้ามเขียนทับสิ่งที่ผู้ใช้พิมพ์ไว้เอง
+  //   (ข้อห้ามข้อแรกของแผน D5) — คนที่ตั้งใจแก้ Vendor ก่อนแล้วค่อยกรอก ALPL
+  //   ต้องไม่โดนกลืนค่าที่เพิ่งพิมพ์
+  //
+  // Receive Date เว้นว่างเสมอทั้ง 2 โหมด — ของ Rework คือวันที่รับกลับมาใหม่
+  // ไม่ใช่ของเดิม ส่วน IPM ก็เป็นการวัดรอบใหม่เช่นกัน
+  // ── ช่องที่ถูกล็อกเพราะระบบเติมให้ ─────────────────────────────────────
+  // เก็บใน `g._autofilled` (Set ของชื่อ field) ติดไปกับตัวกลุ่มเอง เพราะกลุ่ม
+  // ถูกวาดใหม่บ่อย (เพิ่ม/ลบ/ย่อ) ถ้าเก็บสถานะไว้ใน DOM อย่างเดียวจะหายทุกครั้ง
+  //
+  // ⚠ ต้องแยกให้ออกว่า "ระบบเติม" กับ "คนพิมพ์เอง" — ตอนคำนวณใหม่แล้วเติมไม่ได้
+  //   เราจะล้างเฉพาะของที่ระบบเติมไว้ ห้ามไปลบสิ่งที่ผู้ใช้พิมพ์เอง
+  //
+  // โหมด Rework ล็อกแค่ Package Size + Part Number — 2 ตัวนี้กำหนดเกณฑ์ OK/NG
+  // กับ template ของ TM-X ห้ามพิมพ์ผิด ส่วน Vendor/Owner/PO/Description ยังต้อง
+  // แก้ได้ เพราะนั่นคือสิ่งที่ฟอร์ม Rework มีไว้ทำ (ดู _update_part_row)
+  const LOCKED_FIELDS = {
+    IPM:    ['package_size', 'part_number', 'vendor', 'owner', 'po_number', 'description'],
+    Rework: ['package_size', 'part_number'],
+    New:    [],
+  };
+
+  const _prefillTimers = {};
+  function schedulePrefill(gi) {
+    clearTimeout(_prefillTimers[gi]);
+    // 400ms — พอให้พิมพ์เลข 3 หลักจบก่อนยิง ไม่งั้น "400" จะกลายเป็น 3 request
+    // (4 → 40 → 400) และค่าจะกระพริบเพราะ ALPL 4/40 อาจมีจริงแต่คนละขนาด
+    _prefillTimers[gi] = setTimeout(() => prefillGroupFromAlpl(gi), 400);
+  }
+
+  /** ทาสถานะล็อกลง DOM ตามที่จำไว้ใน g._autofilled */
+  function applyPrefillLock(gi) {
+    const g = entryGroups[gi];
+    if (!g) return;
+    (GROUP_FIELDS[entryMode] || []).forEach(f => {
+      const node = document.getElementById(`g${gi}-${f}`);
+      if (!node) return;
+      const locked = !!g._autofilled?.has(f);
+      // ใช้ disabled ทั้ง input และ select — readonly ใช้กับ <select> ไม่ได้
+      // (ค่าของ disabled ยังอ่านผ่าน .value ได้ตามปกติ readGroupsFromDom จึงไม่พัง)
+      if (!entryLocked) node.disabled = locked;
+      node.classList.toggle('auto-locked', locked);
+      const err = document.getElementById(`err-g${gi}-${f}`);
+      if (err && locked && !err.textContent) {
+        err.innerHTML = '<span class="autofill-note">มาจากข้อมูลที่ลงทะเบียนไว้ — แก้ที่หน้า Edit › Parts</span>';
+      } else if (err && !locked && err.querySelector('.autofill-note')) {
+        err.textContent = '';
       }
-    } else {
-      // ipm / rework: ต้องเคยลงทะเบียนผ่าน New มาแล้วทั้งหมด
-      const notRegistered = numberAlplList.filter(n => !registeredSet.has(n));
-      if (notRegistered.length > 0) {
-        return `ALPL ${notRegistered.join(', ')} ยังไม่ได้ลงทะเบียนชิ้นงานนี้ — กรุณาไปลงทะเบียนที่แท็บ New ก่อน`;
+    });
+  }
+
+  async function prefillGroupFromAlpl(gi) {
+    if (entryLocked) return;
+    if (entryMode !== 'Rework' && entryMode !== 'IPM') return;
+    const el = document.getElementById(`g${gi}-number_alpl`);
+    if (!el) return;
+    const { list, error } = parseAlplList(el.value.trim());
+
+    // ALPL ว่าง/รูปแบบผิด → ปลดล็อกและล้างของที่ระบบเคยเติมไว้
+    // (ถ้าปล่อยค้าง ช่องที่ล็อกจะถือค่าของ ALPL ชุดเก่าไว้ทั้งที่เลขเปลี่ยนไปแล้ว)
+    if (error || !list || !list.length) { releasePrefill(gi); return; }
+
+    // ถามทั้งกลุ่มทีเดียว (ไม่ใช่ถามตัวแรกแล้วเหมาว่าตัวอื่นเหมือนกัน) — ได้
+    // config ของทุกตัวมาเทียบกันก่อนตัดสินใจว่าจะเติมอะไร
+    let check;
+    try {
+      check = await checkAlplInDb([{ alpl: list }], entryMode);
+    } catch (e) { return; }
+
+    const known = (check.exists || []).map(a => check.detail[String(a)]).filter(Boolean);
+    // ยังไม่มีตัวไหนลงทะเบียน → ไม่มีอะไรให้เติม และต้องคืนช่องที่เคยล็อกไว้ด้วย
+    // (เคสจริง: พิมพ์ 400 ติดแล้ว ลบทิ้งพิมพ์ 999 ที่ยังไม่มีในระบบ)
+    if (!known.length) { releasePrefill(gi); return; }
+
+    /** ค่าของ field นี้ "ตรงกันทุกตัวที่ลงทะเบียนแล้ว" ไหม — ถ้าไม่ตรงคืน null
+     *
+     *  ⚠ ห้ามเติมค่าจาก ALPL ตัวแรกดื้อๆ (พฤติกรรมเดิม) เพราะถ้าในกลุ่มมีของ
+     *    คนละ Package Size อยู่ ช่องจะถูกเติมด้วยค่าของตัวแรกเงียบๆ แล้วผู้ใช้
+     *    เห็นช่องมีค่าครบก็กด Start ต่อ — กลายเป็นวัดทั้งกลุ่มด้วยเกณฑ์ของตัวแรก
+     *    ตัวเดียว (backend จะดักได้ตอน Save/Start แต่ผู้ใช้เสียเวลาไปแล้ว และ
+     *    ที่แย่กว่านั้นคือค่าที่ถูกเติมให้ดู "เหมือนระบบยืนยันแล้วว่าถูก")
+     *
+     *  ALPL ที่ยังไม่ลงทะเบียนไม่นับเข้าเงื่อนไข — มันจะถูกสร้างด้วย config ของ
+     *  กลุ่มนี้อยู่แล้วตอนวัดจริง จึงเติมให้ได้ตราบใดที่ตัวที่มีอยู่เห็นตรงกัน
+     */
+    const agreed = f => {
+      const vals = new Set(known.map(d => d[f] ?? null));
+      return vals.size === 1 ? [...vals][0] : null;
+    };
+
+    const g = entryGroups[gi];
+    const fields = GROUP_FIELDS[entryMode];
+    const lockable = LOCKED_FIELDS[entryMode] || [];
+    const auto = g._autofilled || new Set();
+
+    const put = (f, v) => {
+      if (!fields.includes(f)) return;          // โหมดนี้ไม่มีช่องนั้น (IPM มีแค่ 2 ช่อง)
+      const node = document.getElementById(`g${gi}-${f}`);
+      if (!node) return;
+      const wasAuto = auto.has(f);
+      // เขียนทับได้เฉพาะช่องที่ว่าง หรือช่องที่ "ระบบเป็นคนเติมเอง" เท่านั้น
+      // — ของที่ผู้ใช้พิมพ์เองห้ามแตะ (กฎเดิมของแผน D5)
+      if (!wasAuto && node.value) return;
+
+      if (v == null || v === '') {
+        // เติมไม่ได้แล้ว (ค่าไม่ตรงกัน/หายไป) → ถ้าเคยเติมไว้ต้องล้าง+ปลดล็อก
+        // ปล่อยค้างไว้อันตรายกว่า เพราะช่องล็อกจะถือค่าของ ALPL ชุดเก่า
+        if (wasAuto) { node.value = ''; g[f] = ''; auto.delete(f); }
+        return;
       }
+      node.value = v;
+      g[f] = String(v);
+      if (lockable.includes(f)) auto.add(f);
+    };
+
+    put('package_size', agreed('package_size'));
+    put('description',  agreed('description'));
+    put('vendor',       agreed('vendor'));
+    put('po_number',    agreed('po_number'));
+    put('owner',        agreed('owner'));
+    if (fields.includes('part_number')) {
+      // part_number เป็น dropdown ที่ cascade จาก package_size — ต้องโหลด
+      // ตัวเลือกตาม package_size ที่เพิ่งเติมไปก่อน แล้วค่อยตั้งค่าที่เลือก
+      await updatePartNumberOptions(`g${gi}`);
+      put('part_number', agreed('part_number'));
     }
-    return null;
+    g._autofilled = auto;
+    applyPrefillLock(gi);
+
+    // อัปเดตบรรทัดสรุปหัวกลุ่มให้ตรงกับค่าที่เพิ่งเติม (เผื่อกลุ่มถูกย่อทีหลัง)
+    const sum = document.querySelector(`#group-${gi} .entry-group-sum`);
+    if (sum) sum.textContent = groupSummaryText(entryGroups[gi]);
   }
 
-  // ── Package Size ของฟอร์ม IPM: ล็อก (พิมพ์ไม่ได้) ถ้า ALPL ที่กรอกทุกตัว
-  // ลงทะเบียนอยู่แล้ว เพราะไม่จำเป็นต้องใช้ (ไม่มี ALPL ไหนต้องลงทะเบียนใหม่) —
-  // เปิดให้กรอกได้ก็ต่อเมื่อมี ALPL อย่างน้อย 1 ตัวที่ยังไม่เคยลงทะเบียน
-  async function updateIpmPackageSizeLock() {
-    const raw = document.getElementById('ipm-number_alpl').value.trim();
-    const pkgInput = document.getElementById('ipm-package_size');
-    const { list, error } = parseAlplList(raw);
-    if (!list || list.length === 0 || error) {
-      // ยังกรอกไม่ครบ/รูปแบบไม่ถูกต้อง — เปิดให้กรอกไว้ก่อน (เดี๋ยว submit ค่อยเช็คซ้ำ)
-      pkgInput.disabled = false;
-      pkgInput.placeholder = 'ต้องกรอกถ้ามี ALPL ที่ยังไม่เคยลงทะเบียน';
-      return;
-    }
-    await refreshParts();
-    const registeredSet = new Set(parts.map(p => p.number_alpl));
-    const allRegistered = list.every(n => registeredSet.has(n));
-    setIpmPkgLock(allRegistered);
+  /** ปลดล็อก + ล้างเฉพาะค่าที่ระบบเติมไว้ (ของที่ผู้ใช้พิมพ์เองไม่แตะ) */
+  function releasePrefill(gi) {
+    const g = entryGroups[gi];
+    if (!g?._autofilled?.size) return;
+    g._autofilled.forEach(f => {
+      const node = document.getElementById(`g${gi}-${f}`);
+      if (node) node.value = '';
+      g[f] = '';
+    });
+    g._autofilled = new Set();
+    applyPrefillLock(gi);
+    const sum = document.querySelector(`#group-${gi} .entry-group-sum`);
+    if (sum) sum.textContent = groupSummaryText(g);
   }
 
-  /** ล็อก/ปลดล็อก Package Size + Part Number ของฟอร์ม IPM พร้อมข้อความอธิบาย
-
-      โหมด IPM ไม่ต้องใช้ 2 ช่องนี้เลยถ้า ALPL ลงทะเบียนไว้แล้วทุกตัว — backend
-      หา template_name จาก part_number ที่ผูกกับ ALPL ในฐานข้อมูลเอง ค่าที่กรอก
-      ไปจะถูกละทิ้ง ปล่อยให้กรอกได้จึงชวนให้เข้าใจผิดว่าจำเป็น */
-  function setIpmPkgLock(locked) {
-    const pkgInput = document.getElementById('ipm-package_size');
-    const pnSelect = document.getElementById('ipm-part_number');
-    pkgInput.disabled = locked;
-    if (locked) {
-      pkgInput.value = '';
-      pkgInput.placeholder = 'ไม่ต้องกรอก — ALPL ทุกตัวลงทะเบียนแล้ว';
-      pnSelect.disabled = true;
-      pnSelect.innerHTML = '<option value="">ไม่ต้องเลือก — ใช้ของที่ลงทะเบียนไว้</option>';
-    } else {
-      pkgInput.placeholder = 'ต้องกรอกถ้ามี ALPL ที่ยังไม่เคยลงทะเบียน';
-      if (!pkgInput.value.trim()) {
-        pnSelect.disabled = true;
-        pnSelect.innerHTML = '<option value="">-- เลือก Package Size ก่อน --</option>';
-      }
-    }
-  }
-
-  // ── Rework: auto-fill ทุกช่องด้วยข้อมูลเดิมของ ALPL ที่กรอก (ต้องเคยผ่าน New
-  // มาแล้ว) ยกเว้น Receive Date ที่เว้นว่างไว้เสมอให้ผู้ใช้กรอกวันที่รับกลับมา
-  // ใหม่ — ทำงานตอน blur ช่อง ALPL เหมือน updateIpmPackageSizeLock ข้างบน
-  async function updateReworkPrefill() {
-    const raw = document.getElementById('rework-number_alpl').value.trim();
-    if (!raw) return;
-    const { list, error } = parseAlplList(raw);
-    if (error !== undefined && error) return; // รูปแบบผิด ปล่อยให้ submit เป็นคนแจ้ง error เต็มๆ
-    if (!list || list.length !== 1) return;   // ไม่ใช่ 1 ALPL เป๊ะๆ — ปล่อยให้ submit แจ้ง error แทน
-
-    await refreshParts();
-    const found = parts.find(p => p.number_alpl === list[0]);
-    if (!found) {
-      setFieldError('rework', 'number_alpl', `ALPL ${list[0]} ยังไม่เคยลงทะเบียน — ไปที่แท็บ New ก่อน`);
-      return;
-    }
-    clearFieldErrors('rework');
-    document.getElementById('rework-vendor').value       = found.vendor ?? '';
-    document.getElementById('rework-description').value  = found.description ?? '';
-    document.getElementById('rework-po_number').value    = found.po_number ?? '';
-    document.getElementById('rework-package_size').value = found.package_size ?? '';
-    document.getElementById('rework-owner').value        = found.owner ?? '';
-    // Receive Date เว้นว่างเสมอ — ผู้ใช้ต้องกรอกวันที่รับชิ้นงานกลับมาใหม่เอง
-    // ไม่ใช่ค่าเดิมตอนที่เคยลงทะเบียนผ่าน New ครั้งแรก
-    document.getElementById('rework-receive_date').value = '';
-    // Part Number เป็น dropdown ที่ cascade จาก Package Size แล้ว — ต้องโหลด
-    // ตัวเลือกตาม package_size ที่เพิ่ง prefill ไปก่อน แล้วค่อยตั้งค่าที่เลือกไว้
-    // (ทำไม่ได้ตรงๆ แบบ .value = ... เหมือน field อื่นเพราะ <select> นี้ยังไม่มี
-    // <option> ของ part_number เดิมอยู่จนกว่าจะ fetch เสร็จ)
-    await updatePartNumberOptions('rework');
-    document.getElementById('rework-part_number').value = found.part_number ?? '';
-  }
-
-  async function onSubmitIpm(ev) {
+  // ── Validate + Save ────────────────────────────────────────────────────
+  async function onSubmitEntry(ev) {
     ev.preventDefault();
-    clearFieldErrors('ipm');
+    if (!entryMode) return;
+    clearEntryErrors();
+    readGroupsFromDom();
 
-    const numberAlplRaw = document.getElementById('ipm-number_alpl').value.trim();
-    const operator      = document.getElementById('ipm-operator').value.trim();
-    const packageSize   = document.getElementById('ipm-package_size').value.trim();
-    const partNumber    = document.getElementById('ipm-part_number').value.trim();
-
-    const { list: numberAlplList, error: alplError } = parseAlplList(numberAlplRaw);
-
+    const operator = document.getElementById('entry-operator').value.trim();
     let hasError = false;
-    let unregistered = [];
-    if (alplError === null) {
-      setFieldError('ipm', 'number_alpl', 'กรอก ALPL อย่างน้อย 1 ค่า');
-      hasError = true;
-    } else if (alplError) {
-      setFieldError('ipm', 'number_alpl', `"${alplError}" ไม่ใช่เลข ALPL ที่ถูกต้อง (ต้องเป็นเลขจำนวนเต็มบวก)`);
-      hasError = true;
-    } else {
-      await refreshParts();
-      const registeredSet = new Set(parts.map(p => p.number_alpl));
-      unregistered = numberAlplList.filter(n => !registeredSet.has(n));
-    }
-    if (!operator) {
-      setFieldError('ipm', 'operator', 'กรอกชื่อ Operator');
-      hasError = true;
-    }
-    if (hasError) return;
+    if (!operator) { setEntryError(null, 'operator', 'เลือก Operator'); hasError = true; }
 
-    // ── ALPL ที่ยังไม่เคยลงทะเบียน — ต้องกรอก Package Size ก่อน แล้วถามยืนยัน
-    // ก่อนดำเนินการต่อ (แทนที่จะ block ทันทีแบบเดิม) พอกดยืนยันแล้ว จะลงทะเบียน
-    // part ใหม่แบบขั้นต่ำ (number_alpl + package_size) ก่อนเริ่มคิววัด
-    if (unregistered.length > 0) {
-      if (!packageSize) {
-        setFieldError(
-          'ipm', 'package_size',
-          `ต้องเลือก Package Size ก่อน — มี ALPL ที่ยังไม่เคยลงทะเบียน: ${unregistered.join(', ')}`,
-        );
-        return;
-      }
-      // ปิด Part Entry modal ก่อน ค่อยแสดง popup ยืนยัน (กันกรณี modal 2 ชั้นซ้อนกัน
-      // ทั้งคู่ใช้ class "modal-overlay" z-index เท่ากัน — ตัวที่อยู่หลังใน DOM
-      // จะทับตัวก่อนหน้า ถ้าเปิดพร้อมกันอาจบัง popup ยืนยันจนกดไม่ได้)
-      closePeModal();
-      const proceed = await showConfirmModal(
-        `ALPL ${unregistered.join(', ')} ยังไม่เคยบันทึกมาก่อน — ระบบจะลงทะเบียน Part ใหม่ด้วย ` +
-        `Package Size "${packageSize}" แล้วดำเนินการวัดต่อเลย คุณจะดำเนินการต่อหรือไม่?`,
-      );
-      if (!proceed) {
-        // ยกเลิก — เปิด Part Entry modal กลับมาให้แก้ไขต่อ (ฟอร์ม/ค่าที่กรอกไว้ยังอยู่)
-        document.getElementById('pe-modal').classList.add('open');
-        return;
-      }
-
-      for (const alpl of unregistered) {
-        try {
-          const r = await fetch(`${API}/api/parts`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ number_alpl: alpl, package_size: packageSize, part_number: partNumber || null }),
-          });
-          if (!r.ok) {
-            const d = await r.json().catch(() => ({}));
-            throw new Error(d.detail || `ลงทะเบียน ALPL ${alpl} ไม่สำเร็จ`);
-          }
-        } catch (e) {
-          document.getElementById('pe-modal').classList.add('open'); // เปิดฟอร์มกลับมาให้เห็น error
-          setFieldError('ipm', 'package_size', e.message);
-          return;
+    // ── ตรวจทีละกลุ่ม + เก็บ ALPL ไว้เช็คซ้ำข้ามกลุ่ม ────────────────────
+    const seenAlpl = new Map();          // alpl -> ลำดับกลุ่มที่เจอครั้งแรก
+    const parsed   = [];                 // [{alpl: [...], fields}]
+    entryGroups.forEach((g, gi) => {
+      const { list, error } = parseAlplList((g.number_alpl || '').trim());
+      let alplList = [];
+      if (error === null) {
+        setEntryError(gi, 'number_alpl', 'กรอก ALPL อย่างน้อย 1 ค่า');
+        hasError = true;
+      } else if (error) {
+        setEntryError(gi, 'number_alpl', `"${error}" ไม่ใช่เลข ALPL ที่ถูกต้อง (ต้องเป็นเลขจำนวนเต็มบวก)`);
+        hasError = true;
+      } else {
+        // ⚠ ซ้ำข้ามกลุ่มคือปัญหาจริง — ชิ้นเดียวถูกวัด 2 ครั้งด้วย config คนละชุด
+        //   แล้วอันหลังเขียนทับ Part ของอันแรกโดยผู้ใช้ไม่รู้ตัว
+        const dup = list.filter(n => seenAlpl.has(n));
+        if (dup.length) {
+          setEntryError(gi, 'number_alpl',
+            `ALPL ${dup.join(', ')} ซ้ำกับกลุ่มที่ ${dup.map(n => seenAlpl.get(n) + 1).join(', ')}`);
+          hasError = true;
         }
+        list.forEach(n => { if (!seenAlpl.has(n)) seenAlpl.set(n, gi); });
+        alplList = list;
       }
-      await refreshParts(); // sync cache ในเครื่องหลังลงทะเบียน part ใหม่เสร็จ
+
+      GROUP_FIELDS[entryMode].forEach(f => {
+        if (f === 'number_alpl') return;
+        const raw = (g[f] || '').trim();
+        if (!raw && !OPTIONAL_FIELDS[entryMode].includes(f)) {
+          setEntryError(gi, f, `กรอก ${FIELD_DEFS[f].label}`);
+          hasError = true;
+        }
+        if (f === 'po_number' && raw && isNaN(Number(raw))) {
+          setEntryError(gi, f, 'ต้องเป็นตัวเลข');
+          hasError = true;
+        }
+      });
+
+      parsed.push({ gi, alpl: alplList, g });
+    });
+    if (hasError) return;
+
+    // ── เช็คกับ DB ว่า ALPL มี/ไม่มีตามที่โหมดนั้นต้องการ (แผนข้อ D5) ────
+    const allAlpl = parsed.flatMap(p => p.alpl);
+    let check;
+    try {
+      check = await checkAlplInDb(parsed, entryMode);
+    } catch (e) {
+      uiAlert(`เกิดข้อผิดพลาด: ${escapeHtml(e.message)}`);
+      return;
     }
 
-    newQueue = null;
-    reworkQueue = null;
-    ipmQueue = { list: numberAlplList, operator };
+    // ── ALPL ในกลุ่มเดียวกันต้องเข้าชุดกัน ────────────────────────────────
+    // เช็คก่อนเรื่อง มี/ไม่มี โดยตั้งใจ — ถ้ากลุ่มถูกจัดผิดตั้งแต่ต้น การไปถาม
+    // ต่อว่า "จะลงทะเบียนตัวที่ขาดไหม" ไม่มีความหมาย ต้องแก้การจัดกลุ่มก่อน
+    if (check.conflicts?.length) {
+      const lines = check.conflicts.map(c => `• ${escapeHtml(c.message)}`).join('<br>');
+      uiAlert(`<strong>ALPL ในกลุ่มเดียวกันใช้ค่าไม่ตรงกัน</strong><br>${lines}`,
+              { title: 'จัดกลุ่มไม่ถูกต้อง' });
+      check.conflicts.forEach(c => {
+        // แจกแจงว่า "ตัวไหนได้ค่าอะไร" ทั้งหมด ไม่พยายามเดาว่าตัวไหนคือตัวผิด
+        // — ถ้ามี 400=4x5 กับ 402=5x5 อย่างละตัว ไม่มีทางรู้ว่าคนตั้งใจให้ตัวไหน
+        //   ถูก การชี้ไปตัวใดตัวหนึ่งจึงชวนให้แก้ผิดข้าง
+        const breakdown = Object.entries(c.values || {})
+          .map(([v, ids]) => `${ids.join(', ')} = "${v}"`).join(' · ');
+        setEntryError(c.group, 'number_alpl', `${c.label} ไม่ตรงกัน — ${breakdown}`);
+      });
+      return;
+    }
+
+    if (entryMode === 'New' && check.exists.length) {
+      // บล็อก — ปล่อยผ่านจะเขียนทับ config เดิมของ Part ที่มีประวัติอยู่แล้ว
+      const lines = check.exists.map(a => {
+        const d = check.detail[String(a)] || {};
+        return `• ALPL ${a} — Part Number "${d.part_number ?? '—'}" · Vendor "${d.vendor ?? '—'}"`;
+      }).join('<br>');
+      uiAlert(
+        `<strong>ALPL ต่อไปนี้มีอยู่ในระบบแล้ว</strong><br>${lines}<br><br>` +
+        `ถ้าจะวัดซ้ำให้ใช้โหมด <strong>IPM</strong> · ถ้าเป็นงานแก้จาก vendor ให้ใช้ <strong>Rework</strong>`,
+        { title: 'ลงทะเบียน New ไม่ได้' });
+      markAlplError(parsed, check.exists, 'มีอยู่ในระบบแล้ว');
+      return;
+    }
+
+    if (entryMode === 'Rework' && check.missing.length) {
+      // บล็อก — Rework คือส่งกลับ vendor เดิม ไม่มีในระบบ = ผิดแน่นอน
+      uiAlert(
+        `<strong>ALPL ${check.missing.join(', ')} ไม่มีในระบบ</strong><br>` +
+        `Rework ต้องเป็นชิ้นที่เคยวัดมาก่อนเท่านั้น — ถ้าเป็นชิ้นใหม่ให้เลือกโหมด <strong>New</strong>`,
+        { title: 'เริ่ม Rework ไม่ได้' });
+      markAlplError(parsed, check.missing, 'ยังไม่มีในระบบ');
+      return;
+    }
+
+    if (entryMode === 'IPM' && check.missing.length) {
+      // ไม่บล็อก — ถามยืนยันแล้วลงทะเบียนให้ตอนวัดชิ้นนั้นจริง (backend เป็น
+      // คน insert พร้อม measurement ไม่ใช่ insert ล่วงหน้าจากหน้าเว็บแบบเดิม)
+      const pkgOf = a => {
+        const p = parsed.find(x => x.alpl.includes(a));
+        return p ? (p.g.package_size || '—') : '—';
+      };
+      const lines = check.missing.map(a => `• ALPL ${a} → Package Size "${escapeHtml(pkgOf(a))}"`).join('<br>');
+      // ไม่ต้องปิด Part Entry modal ก่อน — .ui-dialog-overlay มี z-index 400
+      // สูงกว่า .modal-overlay (200) อยู่แล้ว จึงเด้งทับได้ (ดู shared.css)
+      // ถ้าปิดแล้วเปิดใหม่จะเห็นฟอร์มกระพริบโดยไม่ได้อะไรเพิ่ม
+      const ok = await uiConfirm(
+        `<strong>ALPL ต่อไปนี้ยังไม่เคยบันทึกมาก่อน</strong><br>${lines}<br><br>` +
+        `จะลงทะเบียนให้ตอนวัดชิ้นนั้นสำเร็จ แล้ววัดต่อเลยไหม`,
+        { title: 'มี ALPL ที่ยังไม่ลงทะเบียน', okLabel: 'ลงทะเบียนแล้ววัดต่อ' });
+      // ยกเลิก → ฟอร์มยังเปิดอยู่พร้อมข้อมูลครบเหมือนเดิม + ไฮไลต์ตัวที่ต้องดู
+      if (!ok) { markAlplError(parsed, check.missing, 'ยังไม่ลงทะเบียน'); return; }
+    }
+
+    // ── ผ่านหมด → เก็บเป็นคิว ─────────────────────────────────────────────
+    const groups = parsed.map(p => {
+      const out = { number_alpl: p.alpl };
+      GROUP_FIELDS[entryMode].forEach(f => {
+        if (f === 'number_alpl') return;
+        const raw = (p.g[f] || '').trim();
+        // ชื่อคอลัมน์ฝั่ง DB สะกด "recieve_date" (สะกดผิดมาแต่แรก อย่าแก้ตรงนี้
+        // เดี่ยวๆ — ต้องแก้พร้อมกันทั้ง schema/backend/export ถึงจะปลอดภัย)
+        const key = f === 'receive_date' ? 'recieve_date' : f;
+        out[key] = raw === '' ? null : (f === 'po_number' ? Number(raw) : raw);
+      });
+      return out;
+    });
+
+    entryQueue = {
+      mode: entryMode,
+      operator,
+      groups,
+      list: allAlpl,
+      // ค่าดิบไว้เติมกลับตอนกด Edit — ตัด `_autofilled` ออก เพราะเป็น Set ซึ่ง
+      // JSON.stringify แปลงเป็น {} แล้วตอนอ่านกลับจะเรียก .has() ไม่ได้ (พัง)
+      // สถานะล็อกไม่ต้องเก็บอยู่แล้ว — กด Edit ทีไรก็คำนวณใหม่จาก DB ได้เสมอ
+      raw: entryGroups.map(({ _autofilled, ...g }) => ({ ...g })),
+    };
     savePartEntryState();
     renderSessionUI();
     renderPartEntrySummary();
-    updateSession({ target_count: numberAlplList.length, measured_count: 0 });
+    updateSession({ target_count: allAlpl.length, measured_count: 0 });
 
-    const payload = {
-      number_alpl:  numberAlplList,
-      measure_type: 'IPM',
-      Operator:     operator,
-    };
-    console.log('[IPM submit — frontend only]', payload);
-    const statusEl = document.getElementById('ipm-status');
+    const statusEl = document.getElementById('entry-status');
     statusEl.className = 'entry-status success';
-    statusEl.textContent = `✔ บันทึกสำเร็จ ${numberAlplList.length} ALPL`;
-    lockFormFields('ipm');
+    statusEl.textContent = `✔ บันทึกสำเร็จ ${allAlpl.length} ALPL (${groups.length} กลุ่ม)`;
+    lockEntryForm();
     closePeModal();
     setTimeout(() => { statusEl.textContent = ''; }, 4000);
   }
 
-  async function onSubmitNew(ev) {
-    ev.preventDefault();
-    clearFieldErrors('new');
-
-    const val = id => document.getElementById(`new-${id}`).value.trim();
-    const numberAlplRaw = val('number_alpl');
-    const partNumber    = val('part_number');
-    const operator      = val('operator');
-
-    const { list: numberAlplList, error: alplError } = parseAlplList(numberAlplRaw);
-    let alplHasError = false;
-    if (alplError === null) {
-      setFieldError('new', 'number_alpl', 'กรอก ALPL อย่างน้อย 1 ค่า');
-      alplHasError = true;
-    } else if (alplError) {
-      setFieldError('new', 'number_alpl', `"${alplError}" ไม่ใช่เลข ALPL ที่ถูกต้อง (ต้องเป็นเลขจำนวนเต็มบวก)`);
-      alplHasError = true;
-    } else {
-      await refreshParts();
-      const existenceError = checkAlplExistence(numberAlplList, 'new');
-      if (existenceError) {
-        setFieldError('new', 'number_alpl', existenceError);
-        alplHasError = true;
-      }
-    }
-
-    const numericFields = ['po_number'];
-
-    let hasError = alplHasError;
-    if (!partNumber) {
-      setFieldError('new', 'part_number', 'กรอก Part Number');
-      hasError = true;
-    }
-    if (!operator) {
-      setFieldError('new', 'operator', 'กรอกชื่อ Operator');
-      hasError = true;
-    }
-    if (!val('package_size')) {
-      // Package Size เป็นตัวกำหนด nominal/tolerance/template ทั้งหมดของ part
-      // นี้ (ผ่าน package_size lookup table) จึงบังคับกรอกเสมอตอนลงทะเบียน New
-      setFieldError('new', 'package_size', 'กรอก Package Size (จะ map nominal/tolerance/template ให้อัตโนมัติ)');
-      hasError = true;
-    }
-    // ทุก field ใน New บังคับกรอกหมด (ตัด Handler/Note ออกจากฟอร์มนี้แล้ว
-    // ตามที่ตกลงกันไว้ — Handler ไม่ใช่ field ที่ต้องกรอกตอนลงทะเบียน New อีก
-    // ต่อไป ส่วน Note เป็นหมายเหตุอิสระที่ไม่จำเป็นอยู่แล้ว เลยตัดออกไปเลย)
-    if (!val('vendor')) { setFieldError('new', 'vendor', 'เลือก Vendor'); hasError = true; }
-    if (!val('description')) { setFieldError('new', 'description', 'กรอก Description'); hasError = true; }
-    if (!val('owner')) { setFieldError('new', 'owner', 'เลือก Owner'); hasError = true; }
-    numericFields.forEach(f => {
-      const raw = val(f);
-      if (raw === '') {
-        setFieldError('new', f, 'กรอก PO Number');
-        hasError = true;
-      } else if (isNaN(Number(raw))) {
-        setFieldError('new', f, 'ต้องเป็นตัวเลข');
-        hasError = true;
-      }
+  /** ไฮไลต์ช่อง ALPL ของกลุ่มที่มีเลขผิด — **ห้ามลบเลขที่ผิดออกให้อัตโนมัติ**
+   *  ผู้ใช้จะไม่รู้ว่าหายไปตัวไหนแล้วกด Start ทั้งที่ขาดชิ้น (ข้อห้ามข้อ 2 ของ D5) */
+  function markAlplError(parsed, badList, reason) {
+    const bad = new Set(badList);
+    parsed.forEach(p => {
+      const hit = p.alpl.filter(a => bad.has(a));
+      if (hit.length) setEntryError(p.gi, 'number_alpl', `ALPL ${hit.join(', ')} ${reason}`);
     });
-    if (hasError) return;
-
-    const toNumOrNull = f => { const raw = val(f); return raw === '' ? null : Number(raw); };
-    const toStrOrNull = f => { const raw = val(f); return raw === '' ? null : raw; };
-
-    const payload = {
-      number_alpl:    numberAlplList,
-      part_number:    partNumber,
-      description:    toStrOrNull('description'),
-      vendor:         toStrOrNull('vendor'),
-      po_number:      toNumOrNull('po_number'),
-      package_size:   toStrOrNull('package_size'),
-      owner:          toStrOrNull('owner'),
-      recieve_date:   toStrOrNull('receive_date'),
-    };
-    console.log('[New part submit — frontend only]', payload);
-
-    updateSession({ target_count: numberAlplList.length, measured_count: 0 });
-
-    ipmQueue = null;
-    reworkQueue = null;
-    newQueue = { list: numberAlplList, fields: payload, operator };
-    savePartEntryState();
-    renderSessionUI();
-    renderPartEntrySummary();
-
-    const statusEl = document.getElementById('new-status');
-    statusEl.className = 'entry-status success';
-    statusEl.textContent = `✔ บันทึกสำเร็จ ${numberAlplList.length} ALPL`;
-    lockFormFields('new');
-    closePeModal();
-    setTimeout(() => { statusEl.textContent = ''; }, 4000);
   }
 
-  // ── Rework: งานที่เคยลงทะเบียนผ่าน New แล้ว ไม่ผ่าน ถูกส่งไป Rework แล้วส่ง
-  // กลับมาวัดใหม่ — ต่างจาก New ตรงที่ ALPL ต้อง "เคยลงทะเบียนแล้ว" เท่านั้น
-  // (checkAlplExistence โหมด 'rework' เช็คตรงข้ามกับ 'new') และรับได้ทีละ 1
-  // ALPL เท่านั้น เพราะฟอร์มนี้ auto-fill/แก้ config ของ Part เดิม 1 ตัวเป๊ะๆ
-  // ไม่ใช่ config กลางที่ใช้ซ้ำกับหลาย ALPL ได้แบบ New (ALPL แต่ละตัวที่ Rework
-  // กลับมามีประวัติเดิมของตัวเองไม่เหมือนกัน แชร์ config เดียวกันไม่ได้)
-  async function onSubmitRework(ev) {
-    ev.preventDefault();
-    clearFieldErrors('rework');
+  // ── init ───────────────────────────────────────────────────────────────
+  function initPartEntry() {
+    const placeholder = document.getElementById('entry-placeholder');
+    const form        = document.getElementById('form-entry');
 
-    const val = id => document.getElementById(`rework-${id}`).value.trim();
-    const numberAlplRaw = val('number_alpl');
-    const operator       = val('operator');
-
-    const { list: numberAlplList, error: alplError } = parseAlplList(numberAlplRaw);
-    let alplHasError = false;
-    if (alplError === null) {
-      setFieldError('rework', 'number_alpl', 'กรอก ALPL 1 ค่า');
-      alplHasError = true;
-    } else if (alplError) {
-      setFieldError('rework', 'number_alpl', `"${alplError}" ไม่ใช่เลข ALPL ที่ถูกต้อง (ต้องเป็นเลขจำนวนเต็มบวก)`);
-      alplHasError = true;
-    } else if (numberAlplList.length !== 1) {
-      setFieldError('rework', 'number_alpl', 'Rework รองรับทีละ 1 ALPL เท่านั้น — กรอกทีละตัว แล้วกด Start ทีละรอบ');
-      alplHasError = true;
-    } else {
-      await refreshParts();
-      const existenceError = checkAlplExistence(numberAlplList, 'rework');
-      if (existenceError) {
-        setFieldError('rework', 'number_alpl', existenceError);
-        alplHasError = true;
-      }
+    async function switchEntryMode(target) {
+      entryMode = target;
+      ENTRY_MODES.forEach(m => {
+        const btn = document.getElementById(MODE_BTN_ID[m]);
+        btn.classList.toggle('active', m === target);
+        btn.setAttribute('aria-selected', String(m === target));
+      });
+      placeholder.style.display = 'none';
+      form.style.display = '';
+      renderEntryHint();
+      await renderGroups();
     }
 
-    const numericFields = ['po_number'];
-
-    let hasError = alplHasError;
-    if (!operator) { setFieldError('rework', 'operator', 'กรอกชื่อ Operator'); hasError = true; }
-    if (!val('part_number'))  { setFieldError('rework', 'part_number', 'เลือก Part Number'); hasError = true; }
-    if (!val('vendor'))       { setFieldError('rework', 'vendor', 'เลือก Vendor'); hasError = true; }
-    if (!val('description'))  { setFieldError('rework', 'description', 'กรอก Description'); hasError = true; }
-    if (!val('package_size')) { setFieldError('rework', 'package_size', 'กรอก Package Size'); hasError = true; }
-    if (!val('owner'))        { setFieldError('rework', 'owner', 'เลือก Owner'); hasError = true; }
-    // Receive Date บังคับกรอกเสมอใน Rework (ต่างจาก New ที่ optional) — คือ
-    // วันที่รับชิ้นงานกลับมาจริงจาก Rework ไม่ใช่วันที่ลงทะเบียนครั้งแรก
-    if (!val('receive_date')) { setFieldError('rework', 'receive_date', 'กรอกวันที่รับชิ้นงานกลับมา'); hasError = true; }
-    numericFields.forEach(f => {
-      const raw = val(f);
-      if (raw === '') {
-        setFieldError('rework', f, 'กรอก PO Number');
-        hasError = true;
-      } else if (isNaN(Number(raw))) {
-        setFieldError('rework', f, 'ต้องเป็นตัวเลข');
-        hasError = true;
-      }
+    ENTRY_MODES.forEach(m => {
+      document.getElementById(MODE_BTN_ID[m]).onclick = async () => {
+        if (entryMode === m) return;
+        if (entryMode && formHasData() &&
+            !await confirmDiscard(m, entryMode)) return;
+        entryGroups = [{ _collapsed: false }];
+        entryLocked = false;
+        clearEntryErrors();
+        await switchEntryMode(m);
+      };
     });
-    if (hasError) return;
 
-    const toNumOrNull = f => { const raw = val(f); return raw === '' ? null : Number(raw); };
-    const toStrOrNull = f => { const raw = val(f); return raw === '' ? null : raw; };
+    form.addEventListener('submit', onSubmitEntry);
+    document.getElementById('btn-add-group').onclick = addGroup;
+    document.getElementById('btn-edit-entry').onclick = unlockEntryForm;
 
-    const payload = {
-      number_alpl:    numberAlplList,
-      part_number:    val('part_number'),
-      description:    toStrOrNull('description'),
-      vendor:         toStrOrNull('vendor'),
-      po_number:      toNumOrNull('po_number'),
-      package_size:   toStrOrNull('package_size'),
-      owner:          toStrOrNull('owner'),
-      recieve_date:   toStrOrNull('receive_date'),
-    };
-    console.log('[Rework submit — frontend only]', payload);
+    // IPM/Rework: เติมข้อมูลเดิมให้ตอนออกจากช่อง ALPL
+    // (ผูกแบบ delegate ที่ตัว container เพราะกลุ่มถูกวาดใหม่ทุกครั้งที่ +Add/ลบ/ย่อ
+    //  ถ้าผูกที่ตัว input ตรงๆ listener จะหายไปพร้อม node เดิม)
+    document.getElementById('entry-groups').addEventListener('focusout', ev => {
+      const m = /^g(\d+)-number_alpl$/.exec(ev.target.id || '');
+      if (m) prefillGroupFromAlpl(Number(m[1]));
+    });
 
-    updateSession({ target_count: numberAlplList.length, measured_count: 0 });
+    const peModal = document.getElementById('pe-modal');
+    document.getElementById('pe-modal-close').onclick = closePeModal;
+    peModal.onclick = e => { if (e.target.id === 'pe-modal') closePeModal(); };
 
-    ipmQueue = null;
-    newQueue = null;
-    reworkQueue = { list: numberAlplList, fields: payload, operator };
-    savePartEntryState();
-    renderSessionUI();
     renderPartEntrySummary();
+  }
 
-    const statusEl = document.getElementById('rework-status');
-    statusEl.className = 'entry-status success';
-    statusEl.textContent = `✔ บันทึกสำเร็จ ${numberAlplList.length} ALPL`;
-    lockFormFields('rework');
-    closePeModal();
-    setTimeout(() => { statusEl.textContent = ''; }, 4000);
+  /** เปิด modal Part Entry
+   *
+   *  `unlock = true` → เปิดมาแล้วแก้ได้ทันที เห็นปุ่ม Save เลย
+   *  ใช้กับปุ่ม ✎ Edit บนการ์ดสรุป — เดิมเปิดมาในสภาพล็อกแล้วต้องกด Edit ซ้ำ
+   *  อีกรอบในฟอร์ม กลายเป็นกด Edit 2 ครั้งเพื่อทำเรื่องเดียว
+   *
+   *  ส่วนปุ่ม "+ New Entry" (ตอนยังไม่มีคิว) ไม่ต้อง unlock อะไร เพราะฟอร์ม
+   *  ว่างอยู่แล้วและไม่เคยถูกล็อก */
+  async function openPeModal(unlock = false) {
+    // มีคิวที่ Save ไว้อยู่ → เปิดฟอร์มกลับมาพร้อมค่าเดิมครบ
+    if (entryQueue && entryMode !== entryQueue.mode) {
+      entryMode   = entryQueue.mode;
+      entryGroups = (entryQueue.raw || []).map(g => ({ ...g }));
+      if (!entryGroups.length) entryGroups = [{ _collapsed: false }];
+      entryLocked = true;
+      ENTRY_MODES.forEach(m => {
+        const btn = document.getElementById(MODE_BTN_ID[m]);
+        btn.classList.toggle('active', m === entryMode);
+        btn.setAttribute('aria-selected', String(m === entryMode));
+      });
+      document.getElementById('entry-placeholder').style.display = 'none';
+      document.getElementById('form-entry').style.display = '';
+      document.getElementById('entry-operator').value = entryQueue.operator || '';
+      renderEntryHint();
+      await renderGroups();
+      // คำนวณสถานะล็อกใหม่จาก DB (ไม่ได้เก็บไว้ใน localStorage — ดู raw:)
+      entryGroups.forEach((g, gi) => schedulePrefill(gi));
+    }
+    if (unlock && entryLocked) unlockEntryForm();
+    document.getElementById('pe-modal').classList.add('open');
+  }
+  function closePeModal() {
+    document.getElementById('pe-modal').classList.remove('open');
+  }
+
+  // ── สรุปคิวบนหน้า Dashboard ────────────────────────────────────────────
+  // dropdown เปิดอยู่ไหม — เก็บไว้นอก DOM เพราะการ์ดนี้ถูกวาดใหม่บ่อยมาก
+  // (ทุกรอบ poll / ทุก measurement ที่เข้ามา) ถ้าพึ่ง class ใน DOM อย่างเดียว
+  // มันจะหุบเองทุก 5 วิ ระหว่างที่ผู้ใช้กำลังอ่านข้อมูลอยู่
+  let peSummaryOpen = false;
+
+  function renderPartEntrySummary() {
+    const el = document.getElementById('part-entry-summary');
+    const badgeLg = document.getElementById('pe-mode-badge-lg');
+
+    if (!entryQueue) {
+      badgeLg.style.display = 'none';
+      el.innerHTML = `
+        <div class="pe-empty">
+          ยังไม่มีข้อมูล Part Entry ค้างอยู่ — กด "New Entry" เพื่อเตรียมคิว IPM, ลงทะเบียน Part ใหม่ หรือส่ง Rework
+        </div>
+        <div style="margin-top:1rem; text-align:center">
+          <button class="btn-pe-action" id="btn-pe-open">+ New Entry</button>
+        </div>`;
+      document.getElementById('btn-pe-open').onclick = () => openPeModal();
+      return;
+    }
+
+    badgeLg.style.display = '';
+    badgeLg.textContent   = entryQueue.mode;
+    badgeLg.className     = `pe-mode-badge-lg ${MODE_CLASS[entryQueue.mode]}`;
+
+    // แสดงทีละกลุ่ม — ของเดิมโชว์ config ชุดเดียวเพราะมีได้กลุ่มเดียว
+    const rows = [];
+    entryQueue.groups.forEach((g, gi) => {
+      if (gi > 0) rows.push(null);
+      rows.push([`กลุ่มที่ ${gi + 1} — ALPL`, g.number_alpl.join(', ')]);
+      GROUP_FIELDS[entryQueue.mode].forEach(f => {
+        if (f === 'number_alpl') return;
+        const key = f === 'receive_date' ? 'recieve_date' : f;
+        rows.push([FIELD_DEFS[f].label, g[key] ?? '—']);
+      });
+    });
+    rows.unshift(null);
+    rows.unshift(['Operator', entryQueue.operator]);
+
+    const gridRows = rows.map(row => {
+      if (row === null) return `<hr class="pg-divider">`;
+      return `<span class="pg-label">${escapeHtml(String(row[0]))}</span><span class="pg-value">${escapeHtml(String(row[1]))}</span>`;
+    }).join('');
+
+    const nGroups = entryQueue.groups.length;
+    const summaryText = `ALPL: ${entryQueue.list.join(', ')}` + (nGroups > 1 ? ` (${nGroups} กลุ่ม)` : '');
+
+    // ปุ่ม Edit หายไปทันทีที่ session เริ่มรัน — กันแก้ไขคิวระหว่างที่ Agent
+    // กำลังวัดตามคิวเดิมอยู่ ซึ่งจะทำให้ตำแหน่ง/ข้อมูลไม่ตรงกัน
+    const canEdit = session.state !== 'running';
+
+    // ⚠ ฟังก์ชันนี้ถูกเรียกซ้ำเรื่อยๆ (ทุกครั้งที่ updateSession ทำงาน = ทุกรอบ
+    //   poll 5 วิ และทุกครั้งที่มี measurement ใหม่) การ set innerHTML ใหม่ทำให้
+    //   class "open" ที่ผู้ใช้กดเปิดไว้หายไปด้วย → dropdown หุบเองเงียบๆ
+    //   ระหว่างที่กำลังอ่านอยู่ ต้องจำสถานะไว้นอก DOM แล้วใส่กลับตอนวาดใหม่
+    const openCls = peSummaryOpen ? ' open' : '';
+    el.innerHTML = `
+      <div class="pe-summary-dropdown">
+        <button class="pe-summary-toggle" id="pe-toggle-btn" type="button">
+          <span class="pe-summary-toggle-left">
+            <span>${escapeHtml(summaryText)}</span>
+          </span>
+          <span class="pe-summary-arrow${openCls}" id="pe-arrow">▼</span>
+        </button>
+        <div class="pe-summary-body${openCls}" id="pe-summary-body">
+          <div class="pe-summary-grid">${gridRows}</div>
+          <div class="pe-summary-actions">
+            ${canEdit ? '<button class="btn-pe-action" id="btn-pe-open">✎ Edit</button>' : ''}
+          </div>
+        </div>
+      </div>`;
+
+    document.getElementById('pe-toggle-btn').onclick = () => {
+      const body  = document.getElementById('pe-summary-body');
+      const arrow = document.getElementById('pe-arrow');
+      peSummaryOpen = body.classList.toggle('open');
+      arrow.classList.toggle('open', peSummaryOpen);
+    };
+
+    const btnPeOpen = document.getElementById('btn-pe-open');
+    // ปุ่ม ✎ Edit → เปิดมาแล้วแก้ได้เลย ไม่ต้องกด Edit ซ้ำในฟอร์มอีกรอบ
+    if (btnPeOpen) btnPeOpen.onclick = () => openPeModal(true);
   }
 
   // ── Measurements — server-side pagination + filter (ALPL / วันที่) ──────────
@@ -3035,10 +3469,16 @@
     return `<span class="${ok ? 'val-ok' : 'val-ng'}" title="รับได้ ${(nominal - lowerTol).toFixed(3)} – ${(nominal + upperTol).toFixed(3)}">${txt}</span>`;
   }
 
-  /** ช่อง Offset ในตาราง — เทียบกับเพดาน offset_tol ตัวเดียว ไม่ใช่ช่วง nominal±tol */
-  function offsetCell(v, offsetTol) {
+  /** ช่อง Offset ในตาราง — เทียบกับเพดาน offset_tol ตัวเดียว ไม่ใช่ช่วง nominal±tol
+   *  แถว IPM ไม่ระบายสี เพราะ offset ไม่ได้ถูกนับเป็นเกณฑ์ในโหมดนั้น
+   *  (backend คืน offset_tol = NULL ให้แถว IPM อยู่แล้ว — เช็ค measure_type ซ้ำ
+   *   อีกชั้นเพื่อให้เจตนาชัด ไม่ต้องพึ่งว่า NULL แปลว่าอะไร) */
+  function offsetCell(v, offsetTol, measureType) {
     if (v == null) return '';
     const txt = Number(v).toFixed(3);
+    if ((measureType || '').toUpperCase() === 'IPM') {
+      return `<span title="โหมด IPM — ไม่นำ Offset มาเป็นเกณฑ์ตัดสิน">${txt}</span>`;
+    }
     const ok = offsetOk(v, offsetTol);
     if (ok == null) return txt;          // ยังไม่ได้ตั้งเกณฑ์ → แสดงเฉยๆ ไม่ระบายสี
     return `<span class="${ok ? 'val-ok' : 'val-ng'}" title="ไม่เกิน ${Number(offsetTol).toFixed(3)}">${txt}</span>`;
@@ -3050,7 +3490,7 @@
     renderMeasPagination();
     if (!rows.length) {
       const msg = (measFilterAlpl || measFilterDate) ? 'ไม่พบ Measurement ที่ตรงกับตัวกรอง' : 'No measurements';
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="12">${msg}</td></tr>`;
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="15">${msg}</td></tr>`;
       return;
     }
     tbody.innerHTML = rows.map(m => {
@@ -3058,13 +3498,25 @@
       const res = m.result || '—';
       const cls = res === 'OK' ? 'ok' : res === 'NG' ? 'ng' : '';
       const hl  = m.measurement_id === highlightId ? 'highlight-new' : '';
+      // เกณฑ์ของแถวนี้ — backend เลือกแหล่งตามโหมดมาให้แล้ว (ดู MEASUREMENTS_SELECT)
+      // ว่างได้ถ้า ALPL ยังไม่ได้ผูกทั้ง Package Size และ Part Number
+      const nominal = (m.nominal_x != null && m.nominal_y != null)
+        ? `${Number(m.nominal_x).toFixed(3)} / ${Number(m.nominal_y).toFixed(3)}` : '—';
+      const tol = (m.upper_tol != null && m.lower_tol != null)
+        ? `+${Number(m.upper_tol).toFixed(3)} / -${Number(m.lower_tol).toFixed(3)}` : '—';
+      // IPM ไม่ได้ใช้ offset เป็นเกณฑ์ → backend คืน NULL มาโดยตั้งใจ
+      const offTol = m.offset_tol != null ? Number(m.offset_tol).toFixed(3)
+                   : (String(m.measure_type).toUpperCase() === 'IPM' ? 'ไม่ใช้' : '—');
       return `<tr data-id="${m.measurement_id}" data-clickable class="${hl}" onclick="openReportModal(${m.measurement_id})">
         <td>${m.measurement_id}</td>
         <td>${m.session_id ?? '—'}</td>
         <td>${m.number_alpl}</td>
+        <td class="td-spec">${nominal}</td>
+        <td class="td-spec">${tol}</td>
+        <td class="td-spec">${offTol}</td>
         <td>${valueCell(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol)}</td>
         <td>${valueCell(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol)}</td>
-        <td>${offsetCell(m.offset, m.offset_tol)}</td>
+        <td>${offsetCell(m.offset, m.offset_tol, m.measure_type)}</td>
         <td><span class="result-badge ${cls}">${res}</span></td>
         <td>${m.note ?? ''}</td>
         <td>${m.operator_name ?? '—'}</td>
@@ -3096,9 +3548,41 @@
     }
   }
 
+  /** สถิติ OK/NG ของ session ปัจจุบัน
+   *
+   *  ⚠ เดิมยิง 2 request ทุกครั้งที่เรียก (ถาม total ของ result=OK และ result=NG
+   *    แยกกัน) — แต่ `telemetryResults` มีผลของ **ทุกชิ้นในคิว** อยู่แล้วในเครื่อง
+   *    เพราะถูกเติมจาก 2 ทางที่ครอบคลุมครบ:
+   *      • onNewMeasurement  — ทุกชิ้นที่วัดสดผ่าน SSE
+   *      • syncQueueStrip    — ดึงทั้ง session มาเติมตอนเปิดหน้า/reconnect/คิวเปลี่ยน
+   *    นับเองจึงได้เลขชุดเดียวกันเป๊ะโดยไม่ต้องถาม backend ซ้ำ
+   *
+   *  เหลือเส้นทางถาม backend ไว้เฉพาะกรณีไม่มีคิวให้นับ (session เก่าที่ไม่มี
+   *  `queue_state` ใน DB) ซึ่งนับเองไม่ได้จริงๆ */
   async function updateStats() {
+    // ── นับเองก่อนเสมอถ้ามีคิวอยู่ในมือ ────────────────────────────────────
+    // เช็คก่อน `session_id` โดยตั้งใจ — ตอนเพิ่ง refresh กลับมา คิวถูกเติมจาก
+    // localStorage ไปแล้วแต่ `session.session_id` ยังเป็น null อยู่ (รอ
+    // /api/session/state ตอบ) ถ้าไปติดที่ guard ข้างล่างก่อน แถบจะขึ้น
+    // "0 OK · 0 NG" ทั้งที่ชิปด้านบนโชว์ ✓/✕ ครบแล้ว
+    if (telemetryQueue.length) {
+      let ok = 0, ng = 0;
+      for (const r of telemetryResults) {
+        if (r === 'OK') ok++;
+        else if (r === 'NG') ng++;
+      }
+      renderTelemetryStats(ok, ng);
+      return;
+    }
+
     const sid = session.session_id;
     if (sid == null) { renderTelemetryStats(0, 0); return; }
+
+    // ยังไม่ได้วัดสักชิ้น → 0/0 แน่นอนโดยนิยาม ไม่ต้องถาม backend
+    // (เคสนี้เกิดทุกครั้งที่กด Start: คิวถูกล้างรอโหลดชุดใหม่ ทำให้ตกมาถึงตรงนี้
+    //  แล้วยิง 2 request ไปถามสิ่งที่รู้อยู่แล้วว่าเป็นศูนย์)
+    if (Number(session.measured_count) === 0) { renderTelemetryStats(0, 0); return; }
+
     try {
       const [okD, ngD] = await Promise.all([
         fetch(`${API}/api/measurements?session_id=${sid}&result=OK&limit=1`).then(r => r.ok ? r.json() : { total: 0 }),
@@ -3149,10 +3633,13 @@
     const hasSpec = value != null && nominal != null && upperTol != null && lowerTol != null;
 
     if (!hasSpec) {
+      // ไม่มีเกณฑ์จริงๆ = ALPL นี้ยังไม่ได้ผูกทั้ง Package Size และ Part Number
+      // (โหมด IPM ใช้เกณฑ์จาก Package Size ได้โดยไม่ต้องมี Part Number — ข้อความ
+      //  เดิมที่บอกให้ไปตั้ง Part Number จึงชี้ผิดจุดสำหรับแถว IPM)
       return `<div class="rax">
         <div class="rax-head"><span class="rax-name">Actual ${axis}</span></div>
         <div class="rax-value">${fmt(value)} <span class="unit">mm</span></div>
-        <div class="rax-dev ok">ยังไม่ได้ตั้ง Part Number ให้ ALPL นี้ — เทียบสเปคไม่ได้</div>
+        <div class="rax-dev ok">ยังไม่ได้ผูกเกณฑ์ให้ ALPL นี้ (Package Size / Part Number) — เทียบสเปคไม่ได้</div>
       </div>`;
     }
 
@@ -3174,18 +3661,6 @@
       if (under > 1) farSym = `<span class="rax-far" style="left:${pos}%;transform:translateX(60%)">≪</span>`;
     }
 
-    // ข้อความบอกระยะห่าง — ตอนผ่านบอก "ห่างขอบที่ใกล้ที่สุดเท่าไหร่"
-    // (ใกล้ขอบมากแปลว่าเสี่ยง ควรรู้) ตอนไม่ผ่านบอกว่าเกินไปเท่าไหร่
-    let dev;
-    if (ok) {
-      const margin = Math.min(value - lo, hi - value);
-      dev = `<div class="rax-dev ok">อยู่ในสเปค — ห่างขอบที่ใกล้สุด ${margin.toFixed(3)} mm</div>`;
-    } else if (value > hi) {
-      dev = `<div class="rax-dev ng">↗ เกินขอบบน ${(value - hi).toFixed(3)} mm</div>`;
-    } else {
-      dev = `<div class="rax-dev ng">↙ ต่ำกว่าขอบล่าง ${(lo - value).toFixed(3)} mm</div>`;
-    }
-
     // ตำแหน่งของ nominal บนแถบ — ต้องคำนวณตามสัดส่วนจริง ไม่ใช่ตรึงไว้ที่ 50%
     // เพราะ upper_tol กับ lower_tol ไม่เท่ากัน (เช่น +0.020/-0.010) nominal จึง
     // ไม่ได้อยู่กึ่งกลางช่วงสเปค ถ้าตรึงไว้ 50% เส้นกับตัวเลขจะไม่ตรงกับความจริง
@@ -3193,10 +3668,13 @@
     // ซ่อนตัวเลข nominal ถ้าใกล้ตัวเลขขอบเกินไปจนซ้อนกัน (เส้นยังอยู่)
     const showNomTick = Math.abs(nomPos - 25) > 10 && Math.abs(nomPos - 75) > 10;
 
+    // หัวการ์ดเป็นชื่อค่าเฉยๆ ("Value X") — ตัวเลข nominal ไปอยู่เป็น tick ใต้แถบ
+    // แล้ว การเขียนซ้ำบนหัวทำให้บรรทัดยาวโดยไม่ได้ข้อมูลใหม่
+    // และไม่มีบรรทัดสรุประยะห่างใต้แถบอีกต่อไป — แถบบอกด้วยตำแหน่งอยู่แล้ว
     const cls = ok ? 'ok' : 'ng';
     return `<div class="rax">
       <div class="rax-head">
-        <span class="rax-name">Actual ${axis} · nominal ${fmt(nominal)}</span>
+        <span class="rax-name">Value ${axis}</span>
         <span class="rax-tag ${cls}">${ok ? 'OK' : 'NG'}</span>
       </div>
       <div class="rax-value ${cls}">${fmt(value)} <span class="unit">mm</span></div>
@@ -3213,7 +3691,55 @@
         ${showNomTick ? `<span class="rax-tick" style="left:${nomPos}%">${fmt(nominal)}</span>` : ''}
         <span class="rax-tick" style="left:75%">${fmt(hi)}</span>
       </div>
-      ${dev}
+    </div>`;
+  }
+
+  /** การ์ด Offset ในรายงาน — ไม่มี nominal เทียบแค่เพดานตัวเดียว จึงไม่มีแถบ
+   *  3 โซนแบบ X/Y · โหมด IPM ไม่นับ offset เป็นเกณฑ์ ต้องบอกให้ชัดว่า
+   *  "โชว์เฉยๆ" ไม่งั้นคนอ่านจะเข้าใจว่ามันผ่าน/ไม่ผ่าน */
+  function renderOffsetReport(offset, offsetTol, measureType) {
+    if (offset == null) return '';
+    const fmt = v => (v != null && !isNaN(v)) ? Number(v).toFixed(3) : '—';
+
+    // โหมด IPM: ไม่แสดงการ์ดนี้เลย — ค่ายังอยู่ใน DB ครบ (ดูได้จาก Export/
+    // Power BI) แค่ไม่เอามารกหน้ารายงานที่คนหน้าเครื่องใช้ตัดสินใจ เพราะมันไม่มี
+    // ส่วนร่วมกับผล OK/NG ของแถวนั้นเลย — เหตุผลเดียวกับที่ซ่อนใน Live Telemetry
+    if ((measureType || '').toUpperCase() === 'IPM') return '';
+
+    // มีค่าแต่ยังไม่ได้ตั้งเกณฑ์ → โชว์ค่าเฉยๆ ไม่มีแถบ ไม่มีป้าย OK/NG
+    // (วาดแถบให้ทั้งที่ไม่มีเกณฑ์จะชวนให้อ่านว่า "ผ่าน" ทั้งที่ไม่เคยตรวจ)
+    if (offsetTol == null) {
+      return `<div class="rax">
+        <div class="rax-head"><span class="rax-name">Offset</span></div>
+        <div class="rax-value">${fmt(offset)} <span class="unit">mm</span></div>
+        <div class="rax-dev ok">ยังไม่ได้ตั้ง Offset Tol</div>
+      </div>`;
+    }
+
+    // แถบของ offset มี 2 โซน ไม่ใช่ 3 แบบ X/Y — เพราะ offset ไม่มี "ต่ำกว่าสเปค"
+    // (ยิ่งน้อยยิ่งดี 0 คือดีที่สุด) โซนที่รับได้จึงกินตั้งแต่ซ้ายสุดถึงเพดาน
+    const tol = Number(offsetTol);
+    const val = Math.abs(Number(offset));
+    const ok  = offsetOk(offset, offsetTol);
+    const cls = ok ? 'ok' : 'ng';
+    // ให้เพดานอยู่ที่ 75% ของความกว้าง เท่ากับขอบบนของการ์ด X/Y — อ่านเทียบกันได้
+    const pos = ok ? (val / tol) * 75
+                   : Math.min(97, 75 + ((val - tol) / tol) * 25);
+    return `<div class="rax">
+      <div class="rax-head">
+        <span class="rax-name">Offset</span>
+        <span class="rax-tag ${cls}">${ok ? 'OK' : 'NG'}</span>
+      </div>
+      <div class="rax-value ${cls}">${fmt(offset)} <span class="unit">mm</span></div>
+      <div class="rax-bar">
+        <div class="rax-track"></div>
+        <div class="rax-zone offset"></div>
+        <div class="rax-mark ${cls}" style="left:${pos}%"></div>
+        <span class="rax-zlabel mid" style="left:37.5%">ช่วงที่รับได้</span>
+        <span class="rax-zlabel" style="left:87.5%">สูงกว่าสเปค</span>
+        <span class="rax-tick" style="left:0%">0.000</span>
+        <span class="rax-tick" style="left:75%">${fmt(tol)}</span>
+      </div>
     </div>`;
   }
 
@@ -3246,12 +3772,22 @@
     statusVal.className = `report-verdict ${resCls}`;
 
     // ── การ์ดผลรายแกน + แถบเทียบสเปค ──────────────────────────────────
-    // upper_tol/lower_tol เป็นค่าเดียวใช้ร่วมกันทั้งแกน X/Y (schema part_number)
-    const nomX = part?.nominal_x, nomY = part?.nominal_y;
-    const upTol = part?.upper_tol, loTol = part?.lower_tol;
+    // upper_tol/lower_tol เป็นค่าเดียวใช้ร่วมกันทั้งแกน X/Y
+    //
+    // ⚠ เกณฑ์เอามาจาก "แถว measurement" ไม่ใช่จาก /api/parts/{alpl}
+    //   เพราะ backend เลือกแหล่งให้ตามโหมดของแถวนั้นมาแล้ว (MEASUREMENTS_SELECT:
+    //   IPM → package_size · New/Rework → part_number) ส่วน /api/parts คืนของ
+    //   part_number เสมอ ซึ่งเป็น NULL สำหรับ ALPL ที่ลงทะเบียนแบบ IPM →
+    //   report เลยขึ้น "ยังไม่ได้ตั้ง Part Number — เทียบสเปคไม่ได้" ทั้งที่มีเกณฑ์อยู่
+    //
+    //   ใช้ค่าจากแถวเดียวกับที่ใช้ตัดสิน result ยังการันตีอีกอย่างว่าแถบเทียบสเปค
+    //   ในรายงานจะไม่ขัดกับป้าย OK/NG ที่อยู่ข้างบนมันเอง
+    const nomX = m.nominal_x, nomY = m.nominal_y;
+    const upTol = m.upper_tol, loTol = m.lower_tol;
     document.getElementById('report-axes').innerHTML =
       renderAxisReport('X', m.value_x, nomX, upTol, loTol) +
-      renderAxisReport('Y', m.value_y, nomY, upTol, loTol);
+      renderAxisReport('Y', m.value_y, nomY, upTol, loTol) +
+      renderOffsetReport(m.offset, m.offset_tol, m.measure_type);
 
     // ── ข้อมูล Part (อ้างอิง) ────────────────────────────────────────────
     const specsGrid = document.getElementById('report-specs-grid');

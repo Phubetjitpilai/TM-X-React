@@ -1,8 +1,3 @@
-# Backend-server/main.py
-# How to run:
-#   cd Backend-server
-#   pip install -r requirements.txt
-#   uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 import asyncio
 import json
@@ -33,57 +28,26 @@ from sse_starlette.sse import EventSourceResponse
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 
-# ── Config ──────────────────────────────────────────────────────────────────
 DB_CONFIG = dict(
     host=os.getenv("DB_HOST", "localhost"),
     user=os.getenv("DB_USER", "root"),
     password=os.getenv("DB_PASSWORD", ""),
     database=os.getenv("DB_NAME", "tmx_db"),
-    # default 3306 = port ปกติของ MySQL ที่ติดตั้งบนเครื่องโดยตรง (เดิม 3307
-    # คือ port ที่ map ออกมาจาก Docker container ซึ่งเลิกใช้แล้ว)
     port=int(os.getenv("DB_PORT", 3306)),
     cursorclass=pymysql.cursors.DictCursor,
     autocommit=True,
-    # CLIENT.FOUND_ROWS: ค่า default ของ MySQL/pymysql คือ cur.rowcount หลัง UPDATE
-    # จะนับเฉพาะ "แถวที่ค่าจริงเปลี่ยน" ไม่ใช่ "แถวที่ WHERE เจอ" — ทำให้กด Save โดย
-    # ไม่แก้อะไรเลย (ส่ง payload ค่าเดิมกลับมา) แล้ว rowcount == 0 ทั้งที่แถวมีอยู่จริง
-    # โค้ดที่เช็ค `if cur.rowcount == 0: raise 404 not found` (update_part,
-    # update_measurement) เลยฟ้อง "not found" หลอกๆ ตั้ง flag นี้เพื่อให้ rowcount
-    # นับจากแถวที่ WHERE จับคู่เจอแทน ทำให้เช็ค 404 เดิมถูกต้องอีกครั้ง
     client_flag=CLIENT.FOUND_ROWS,
 )
 
-# หมายเหตุ (architecture ใหม่): เลิกใช้ MinIO แล้ว — รูปภาพเก็บเป็นไฟล์จริงใน
-# โฟลเดอร์บนเครื่อง PC ที่รัน backend นี้เอง ดีไซน์สรุปแล้ว (ดู
-# POST /api/measurements/{id}/image-upload ด้านล่าง):
-#   Agent (Pi) รับภาพจาก TM-X ผ่าน FTP ของตัวเองเก็บไว้ที่ Store_image_temporary
-#   ก่อน แล้วอัปโหลดไฟล์จริง (multipart) มาที่ endpoint นี้ผ่าน HTTP — backend
-#   เป็นคนตัดสินใจ path ปลายทางเอง: ALPL_IMAGE_DIR/<วันที่ DD-MM-YYYY (พ.ศ.)>/
-#   <number_alpl>_<วันที่ DD-MM-YYYY (พ.ศ.)>.jpg (เปลี่ยนจากเดิมที่แยกโฟลเดอร์ตาม
-#   package_size มาเป็นแยกตามวันที่วัดแทน ตามที่ตกลงกันไว้ — ดู
-#   upload_measurement_image ด้านล่าง) ไฟล์ต้นทางจาก TM-X (มักเป็น .bmp) ถูก
-#   แปลงเป็น .jpg เสมอก่อนเซฟ (ไม่ใช่ Agent ส่ง path ตรงๆ มาแบบเดิมสมัย MinIO
-#   เพราะ Agent อยู่คนละเครื่องกับ backend แล้ว path ฝั่ง Agent ไม่มีความหมายกับ
-#   backend เลย)
 _PROJECT_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 )
 
 ALPL_IMAGE_DIR = os.getenv("ALPL_IMAGE_DIR", os.path.join(_PROJECT_ROOT, "image_ALPL"))
-# ⚠ ค่าใน .env เป็น path สัมพัทธ์ ("./image_ALPL") ซึ่งถ้าปล่อยไว้จะอิงกับ
-#   "โฟลเดอร์ที่สั่งรัน uvicorn" ไม่ใช่รากโปรเจกต์ — สั่ง `cd Backend-server`
-#   ก่อนรันตามคู่มือ รูปจะไปลงที่ Backend-server/image_ALPL/ แทน แล้วหน้าเว็บ
-#   หารูปไม่เจอเพราะ static mount ชี้คนละที่ (เคยเกิดกับ TEMP_IMAGE_DIR มาแล้ว)
 if not os.path.isabs(ALPL_IMAGE_DIR):
     ALPL_IMAGE_DIR = os.path.abspath(os.path.join(_PROJECT_ROOT, ALPL_IMAGE_DIR))
 
 
-# ระยะเผื่อสำหรับเทียบทศนิยม — ค่าที่ตกขอบ tolerance พอดี (เช่น nominal 3.02
-# lower_tol 0.01 แล้ววัดได้ 3.010 เป๊ะ) ต้องถือว่า "ผ่าน" แต่ถ้าเทียบตรงๆ จะได้ NG
-# เพราะ 3.02 - 0.01 ในเลขทศนิยมฐานสองได้ 3.0100000000000002 (มากกว่า 3.010)
-# ซ้ำร้ายคอลัมน์พวกนี้เป็น FLOAT (single precision) ค่าที่อ่านกลับจาก DB จึงคลาด
-# จากค่าที่ตั้งไว้อีกชั้น (3.02 → 3.0199999809265137) — 1e-6 เล็กกว่าความละเอียด
-# ของการวัดจริง (ทศนิยม 3 ตำแหน่ง) มาก จึงไม่ทำให้ชิ้นที่หลุดสเปคจริงกลายเป็น OK
 _TOL_EPS = 1e-6
 
 
@@ -109,25 +73,6 @@ def _offset_ok(offset: Optional[float], offset_tol: Optional[float]) -> bool:
     return abs(offset) <= offset_tol + _TOL_EPS
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# เกณฑ์ตัดสิน OK/NG — แยกแหล่งตามโหมด
-# ══════════════════════════════════════════════════════════════════════════════
-# | โหมด        | nominal/tolerance จาก | offset นับเป็นเกณฑ์ |
-# |-------------|-----------------------|---------------------|
-# | IPM         | package_size          | ❌ เก็บค่าไว้ แต่ไม่ตัดสิน |
-# | New/Rework  | part_number           | ✅ ใช้                |
-#
-# ทำไม IPM ต้องใช้ package_size: IPM คือการวัดซ้ำของ ALPL ที่ลงทะเบียนไว้แล้ว
-# ซึ่ง "อาจยังไม่ได้ตั้ง part_number" (ฟอร์ม IPM กรอกแค่ ALPL + Package Size)
-# ถ้าบังคับให้หาเกณฑ์ผ่าน part_number เหมือนโหมดอื่น ALPL พวกนี้จะวัดไม่ได้เลย
-#
-# ทำไม IPM ไม่เอา offset มาตัดสิน: offset เป็นค่าเฉพาะของ part นั้นๆ (ผูกกับ
-# part_number) ไม่ใช่ค่าของ "ขนาด package" — เอา offset_tol ของ package_size
-# มาตัดสินจะเป็นการเทียบกับเกณฑ์ที่ไม่ใช่ของชิ้นงานตัวนั้นจริง
-#
-# ⚠ ต้องตรงกับฝั่ง Pi ที่ตัดสินเองผ่าน GM (ดู PLAN_criteria_and_multigroup.md F2)
-#   — Backend ส่ง `offset_max: null` ให้ Pi เมื่อไหร่ ที่นี่ก็ต้องไม่ตรวจเมื่อนั้น
-#   ถ้าสองฝั่งไม่ตรงกัน จะเกิดสภาพ "Pi บอก MCU ว่า OK แต่ DB บันทึก NG"
 
 def _offset_limit(measure_type: Optional[str], row) -> Optional[float]:
     """เพดาน offset ที่ต้องตรวจจริงของการวัดครั้งนี้ — `None` = ไม่นับเป็นเกณฑ์
@@ -152,9 +97,6 @@ def _load_criteria(cur, number_alpl: int, measure_type: str):
     ไม่พบ → raise HTTPException พร้อมบอกว่าขาดตรงไหนและไปแก้ที่หน้าไหน
     """
     if (measure_type or "").upper() == "IPM":
-        # COALESCE: ALPL ที่ลงทะเบียนสมัยก่อนมีแต่ part_number_id ยังไม่มี
-        # package_size_id ของตัวเอง — ยอมไล่ต่อผ่าน part_number ให้ ไม่งั้น
-        # ข้อมูลเก่าทั้งหมดจะวัดไม่ได้ทันทีที่ deploy
         cur.execute(
             "SELECT ps.nominal_x, ps.nominal_y, ps.upper_tol, ps.lower_tol, ps.offset_tol, "
             "       ps.package_size "
@@ -204,8 +146,6 @@ def _judge(value_x: float, value_y: float, offset: Optional[float],
 
     limit = _offset_limit(measure_type, crit)
     offset_counts = limit is not None
-    # ok_offset = None (ไม่ใช่ True) เมื่อไม่นับเป็นเกณฑ์ — หน้าเว็บจะได้แยกออก
-    # ระหว่าง "ผ่าน" กับ "ไม่ได้ตรวจ" แล้วไม่ติดป้ายเขียวให้ค่าที่ไม่เคยถูกตรวจ
     ok_offset = _offset_ok(offset, limit) if offset_counts else None
 
     passed = ok_x and ok_y and (ok_offset is not False)
@@ -230,25 +170,10 @@ def _thai_date_str(dt: Optional[datetime] = None) -> str:
     return f"{dt.day:02d}-{dt.month:02d}-{dt.year + 543}"
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ถังขยะ (Deleted) — สำรองข้อมูลก่อนลบ เพื่อให้กู้คืนได้
-# ══════════════════════════════════════════════════════════════════════════════
-# ทำไมเลือกวิธีนี้แทน soft delete (เพิ่มคอลัมน์ deleted_at):
-#   มี 12 จุดในไฟล์นี้ที่ query ตาราง measurements — soft delete ต้องเติม
-#   "WHERE deleted_at IS NULL" ให้ครบทุกจุด ลืมจุดเดียว = ข้อมูลที่ลบไปแล้ว
-#   โผล่กลับมาในรายงาน/export เงียบๆ โดยไม่มีอะไรเตือน (เคยเจอบั๊กแบบนี้มาแล้ว
-#   ตอน latest_only ที่ลืม WHERE ใน subquery)
-#   วิธีนี้แค่ "แทรกขั้นตอนอ่านข้อมูลไปเก็บก่อนลบ" — ตรรกะเดิมไม่ถูกแตะเลย
-#
-# โครงสร้างที่เก็บ:
-#   Deleted/<DD-MM-YYYY พ.ศ. ของวันที่ลบ>/<kind>_<id>.json
-#   + ไฟล์รูป (ถ้ามี) วางคู่กันในโฟลเดอร์เดียวกัน
-# แยกตาม "วันที่ลบ" ไม่ใช่วันที่วัด เพื่อให้ตัวลบอัตโนมัติลบทั้งโฟลเดอร์ได้เลย
 DELETED_DIR = os.getenv("DELETED_DIR", os.path.join(_PROJECT_ROOT, "Deleted"))
 if not os.path.isabs(DELETED_DIR):
     DELETED_DIR = os.path.abspath(os.path.join(_PROJECT_ROOT, DELETED_DIR))
 
-# เก็บของในถังขยะกี่วันก่อนลบทิ้งถาวร
 DELETED_RETENTION_DAYS = int(os.getenv("DELETED_RETENTION_DAYS", 30))
 
 
@@ -289,12 +214,10 @@ def _archive_before_delete(
         pk_value = "_".join(str(v) for v in pk.values())
         stem = f"{kind}_{pk_value}"
 
-        # ── ย้ายไฟล์รูปมาเก็บคู่กับ JSON (ไม่ลบทิ้ง) ────────────────────────
         image_file = None
         if image_path and "://" not in image_path:
             src = os.path.realpath(os.path.join(ALPL_IMAGE_DIR, image_path))
             base = os.path.realpath(ALPL_IMAGE_DIR)
-            # กัน path ที่หลุดออกนอกโฟลเดอร์รูป (ค่าใน DB อาจถูกแก้มาก่อน)
             if (src == base or src.startswith(base + os.sep)) and os.path.isfile(src):
                 image_file = f"{stem}_{os.path.basename(image_path)}"
                 try:
@@ -316,7 +239,6 @@ def _archive_before_delete(
             "image_file": image_file,
         }
 
-        # กันชื่อชนกันถ้าลบ id เดิมซ้ำในวันเดียวกัน (ลบ → กู้ → ลบอีก)
         json_name = f"{stem}.json"
         n = 2
         while os.path.exists(os.path.join(day_dir, json_name)):
@@ -374,60 +296,24 @@ def _delete_image_file(image_path: Optional[str]) -> bool:
         os.remove(target)
         return True
     except OSError:
-        return False  # ไฟล์อาจถูกลบไปแล้ว/หาไม่เจอ — ไม่ใช่เรื่องผิดปกติ
+        return False
 
-# AGENT_HOST: เดิม hardcode เป็น "localhost" ตรงๆ (สมมติว่า Agent รันอยู่เครื่อง
-# เดียวกับ Backend เสมอ) — ตอนนี้ Agent อาจย้ายไปรันบนเครื่องแยก (เช่น Raspberry
-# Pi ที่ทำหน้าที่คุยกับ sensor/MCU โดยตรง) จึงต้องดึงจาก .env แทน ถ้าไม่ตั้งค่า
-# ใน .env จะ fallback เป็น "localhost" เหมือนเดิมทุกประการ (เทสต์บน PC เครื่อง
-# เดียวได้ปกติ ไม่กระทบ) พอมี Pi จริงแค่ตั้ง AGENT_HOST=<IP ของ Pi> ใน .env
-# ไม่ต้องแก้โค้ดจุดนี้อีก
 AGENT_HOST      = os.getenv("AGENT_HOST", "localhost")
 AGENT_PORT      = int(os.getenv("AGENT_PORT", 9998))
 AGENT_BASE_URL  = f"http://{AGENT_HOST}:{AGENT_PORT}"
 
-# heartbeat: Agent ยิง POST /api/heartbeat มาทุก HEARTBEAT_INTERVAL วิ ระหว่างที่
-# ยังรันอยู่ (ดู agent.py heartbeat_loop) — heartbeat_checker() ด้านล่างเช็คเป็น
-# ระยะว่า session ที่ 'running' ยังได้ heartbeat ต่อเนื่องไหม ถ้าเงียบเกิน
-# HEARTBEAT_TIMEOUT วิ (Agent process ตาย/แฮงค์กลาง session) จะ mark เป็น
-# 'timeout' อัตโนมัติ (เอากลับมาใหม่ตามที่ตกลงกันไว้)
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", 5))
 HEARTBEAT_TIMEOUT  = int(os.getenv("HEARTBEAT_TIMEOUT", 15))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Server] %(message)s")
 log = logging.getLogger(__name__)
 
-# ── CORS ────────────────────────────────────────────────────────────────────
-# ค่าเริ่มต้นเป็น "*" โดยตั้งใจ — เคยลองบีบให้เหลือเฉพาะ localhost แล้วพัง:
-# เปิดหน้าเว็บผ่าน IP ของเครื่องในวง (เช่น http://192.168.1.50:8000) จะกลายเป็น
-# cross-origin ทันที แล้ว SSE ถูกบล็อก ป้ายสถานะค้างที่ Offline ตลอดโดยไม่มี
-# error อะไรให้เห็นนอกจาก console ของเบราว์เซอร์
-#
-# และต้องเข้าใจให้ตรงกันว่า CORS ไม่ใช่ระบบความปลอดภัยของ API — มันกันได้แค่
-# JavaScript ในเบราว์เซอร์ ส่วน curl/Postman/สคริปต์ใดๆ ไม่สนใจ CORS เลย
-# ช่องโหว่จริงของระบบนี้คือ "ไม่มี auth" ซึ่งต้องแก้ด้วยการทำ auth ไม่ใช่บีบ CORS
-#
-# ตั้ง CORS_ORIGINS ใน .env เป็นรายการคั่นด้วยคอมมาได้ถ้าอยากจำกัดจริงๆ เช่น
-#   CORS_ORIGINS=http://localhost:8000,http://192.168.1.50:8000
 CORS_ORIGINS = [
     o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.strip()
 ]
 
-# ── SSE broadcast queue ──────────────────────────────────────────────────────
 subscribers: List[asyncio.Queue] = []
 
-# ── In-memory queue state สำหรับ session แบบ IPM/New/Rework ──────────────────
-# เก็บ "คิว" ALPL + ตำแหน่งปัจจุบันของ session ที่เริ่มจาก Part Entry card
-# (โหมด IPM/New/Rework) — เป็นตัวแปร memory ธรรมดา ไม่ใช่ column ใน DB เลย เพราะ
-# schema ของ `sessions` ไม่มีที่เก็บลำดับ ALPL ทั้งคิว มีแค่ number_alpl ตัวเดียว
-# (ที่เราใส่เป็น ALPL ตัวแรกในคิวไปแทน) — ถ้า server restart กลางที่ session
-# กำลัง running อยู่ คิวนี้จะหาย (ยอมรับความเสี่ยงนี้ได้ตามที่คุยกันไว้)
-#
-# โครงสร้าง: { session_id: {"entry_mode": "IPM"|"New", "queue": [1011, 1002, ...],
-#                            "position": 0} }
-# หมายเหตุ: entry_mode มีแค่ 2 ค่า (ไม่มี "Rework") เพราะโหมด Rework ที่เลือก
-# จากหน้าเว็บถูก map เป็น entry_mode='New' + note='Rework' ตั้งแต่ start_session
-# แล้ว (ดู start_session) — ค่านี้ถูกเอาไปใส่คอลัมน์ measurements.measure_type ตรงๆ
 session_queues: Dict[int, Dict[str, Any]] = {}
 
 
@@ -446,7 +332,6 @@ async def push_event(event_type: str, data: dict) -> None:
     log.info("SSE ▶ %s: %s", event_type, payload)
 
 
-# ── DB helpers ───────────────────────────────────────────────────────────────
 def get_db():
     """เปิด MySQL connection ใหม่สำหรับ 1 request
 
@@ -468,7 +353,6 @@ def get_db():
         raise HTTPException(503, f"เชื่อมต่อฐานข้อมูลไม่สำเร็จ: {exc}")
 
 
-# ── Lifespan ─────────────────────────────────────────────────────────────────
 async def _reload_session_queues() -> None:
     """โหลด session_queues กลับเข้า memory จากคอลัมน์ sessions.queue_state
 
@@ -506,9 +390,6 @@ async def _reload_session_queues() -> None:
             except Exception as exc:
                 log.warning("Failed to parse queue_state for session %s: %s", row["session_id"], exc)
     except Exception as exc:
-        # DB อาจยังไม่พร้อมตอน boot — อย่าทำให้แอปบูตไม่ขึ้นเพราะเรื่องนี้ แค่
-        # log ไว้ (session ที่ running อยู่ตอน restart แบบนี้จะพลาดการกู้คืนคิว
-        # แต่ยังใช้งานต่อได้ปกติถ้าไม่ใช่ queue-based หรือกด Stop แล้วเริ่มใหม่)
         log.warning("Reload session_queues failed: %s", exc)
 
 
@@ -553,7 +434,7 @@ async def heartbeat_checker() -> None:
 
         for sid in timed_out:
             session_queues.pop(sid, None)
-            measure_timeouts.pop(sid, None)  # คำถามค้างของ session ที่ตายไปแล้ว ไม่มีใครตอบได้อีก
+            measure_timeouts.pop(sid, None)
             log.warning("Session %s: ไม่ได้ heartbeat เกิน %ss — mark เป็น 'timeout'", sid, HEARTBEAT_TIMEOUT)
             await push_event("session_timeout", {"session_id": sid})
 
@@ -567,9 +448,9 @@ async def lifespan(app: FastAPI):
     _reload_session_queues() ต้อง await ให้เสร็จก่อน yield เพราะต้องกู้คืนคิว
     ให้ครบก่อนรับ request
     """
-    asyncio.create_task(heartbeat_checker())     # fire-and-forget, never blocks
-    asyncio.create_task(_deleted_purge_loop())   # ล้างถังขยะที่เกินอายุ
-    await _reload_session_queues()               # ต้องเสร็จก่อนรับ request
+    asyncio.create_task(heartbeat_checker())
+    asyncio.create_task(_deleted_purge_loop())
+    await _reload_session_queues()
     yield
 
 
@@ -596,9 +477,6 @@ app.add_middleware(
 )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SSE Stream
-# ══════════════════════════════════════════════════════════════════════════════
 @app.get("/api/stream")
 async def sse_stream(request: Request):
     """Endpoint SSE ที่ dashboard เชื่อมต่อเข้ามาเพื่อรับข้อมูล real-time
@@ -629,12 +507,8 @@ async def sse_stream(request: Request):
     return EventSourceResponse(generator())
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Session endpoints
-# ══════════════════════════════════════════════════════════════════════════════
 class StopSessionRequest(BaseModel):
     session_id: int
-    # Pi ส่งมาตอนล้มเลิกเอง (ER,PW / T1 retry ครบ / สาย TM-X ขาด) — หน้าเว็บไม่ส่ง
     reason: str | None = None
 
 
@@ -649,9 +523,6 @@ async def get_session_state():
     db = get_db()
     try:
         with db.cursor() as cur:
-            # queue_state แนบไปด้วย — frontend ใช้วาดแถบคิว ALPL ใน Live Telemetry
-            # (ต้องได้คิวเต็มไม่ใช่แค่ ALPL ตัวแรก) และทำให้แถบนี้รอดการ refresh
-            # หน้าเว็บกลาง session ด้วย เพราะอ่านคิวกลับจาก DB ได้ตรงๆ
             cur.execute(
                 "SELECT session_id, state, target_count, measured_count, "
                 "queue_state, last_seen, started_at, ended_at "
@@ -663,13 +534,6 @@ async def get_session_state():
         db.close()
 
 
-# หมายเหตุ: เดิมมีฟังก์ชัน _insert_new_parts_from_payload() ที่ insert Part
-# "ทุกตัวในคิว" ทีเดียวตอน start_session — เปลี่ยนพฤติกรรมแล้ว (ดู start_session
-# และ create_measurement) เพราะถ้า user กด Stop กลางคัน ALPL ที่ยังไม่ทันวัดจะ
-# ค้างเป็น Part "ผี" อยู่ใน DB ทั้งที่ไม่เคยมีการวัดจริงเกิดขึ้นเลย ตอนนี้จึง
-# insert Part แค่ตัวแรกตอน start_session (จำเป็นเพราะ sessions.number_alpl มี
-# FK ไป parts ต้องมี row อยู่ก่อนถึงจะ insert sessions ได้) ส่วนตัวที่เหลือใน
-# คิวจะถูก insert ทีละตัว "ตอนได้ผลวัดจริงจาก Agent" ใน create_measurement เท่านั้น
 
 
 def _get_template_name_for_alpl(cur, first_alpl: int) -> str:
@@ -808,21 +672,12 @@ def _build_groups(cur, groups, group_of, queue, templates, entry_mode: str):
         alpl = [queue[i] for i, gg in enumerate(group_of) if gg == gi]
         crit = _criteria_from_config(cur, gi, g, entry_mode)
 
-        # ── กันเกณฑ์ 2 ฝั่งไม่ตรงกันแบบเงียบๆ (เฉพาะ IPM) ──────────────────
-        # IPM ไม่แตะ config ของ Part ที่ลงทะเบียนไว้แล้ว ถ้าผู้ใช้พิมพ์ Package
-        # Size ในฟอร์มไม่ตรงกับที่ Part ตัวนั้นผูกไว้จริง จะเกิดสภาพ:
-        #   Pi คัดของตามเกณฑ์ของกลุ่ม · backend บันทึกตามเกณฑ์รายตัว
-        # ไม่มีใครรู้จนกว่าจะไปนับของจริง — เปลี่ยนเป็นข้อความตอนกด Start แทน
-        #
-        # New: ยังไม่มีแถว Part เลย (validate แล้ว) ไม่มีอะไรให้ชน
-        # Rework: `_update_part_row` จะเขียนทับ config เดิมด้วยค่าจากฟอร์มอยู่แล้ว
-        #         "ไม่ตรง" คือเจตนาของผู้ใช้ ไม่ใช่ความผิดพลาด
         if entry_mode == "IPM":
             want = _limits_of(crit, entry_mode)
             for a in alpl:
                 cur.execute("SELECT 1 FROM parts_specifications WHERE number_alpl = %s", (a,))
                 if not cur.fetchone():
-                    continue                      # ยังไม่ลงทะเบียน — จะถูกสร้างด้วย config นี้อยู่แล้ว
+                    continue
                 got = _limits_of(_load_criteria(cur, a, entry_mode), entry_mode)
                 if got != want:
                     raise HTTPException(
@@ -891,9 +746,6 @@ async def _notify_agent_start(
         "target_count": target_count,
         "groups": groups,
     }
-    # log ก่อนยิงเสมอ — เป็นจุดเดียวที่เห็น "สิ่งที่ backend ส่งให้ Agent" ได้จริง
-    # (POST นี้ไม่ผ่านเบราว์เซอร์ DevTools จึงมองไม่เห็น) ถ้า Agent ไม่ตอบ
-    # อย่างน้อยยังรู้ว่าเราส่งอะไรออกไป ไม่ต้องเดา
     log.info("📤 ส่งไป Agent %s/command:\n%s",
              AGENT_BASE_URL, json.dumps(payload, ensure_ascii=False, indent=2))
     try:
@@ -902,41 +754,21 @@ async def _notify_agent_start(
                 f"{AGENT_BASE_URL}/command", json=payload,
                 timeout=httpx.Timeout(connect=3.0, read=10.0, write=10.0, pool=3.0),
             )
-    # ⚠ ลำดับ except สำคัญมาก — `ConnectTimeout` เป็นลูกของ `TimeoutException`
-    #   ถ้าเขียน TimeoutException ไว้บนสุดจะกลืน ConnectTimeout ไปด้วย แล้ว
-    #   ข้อความจะบอกว่า "Pi ค้าง" ทั้งที่จริงคือ "หา Pi ไม่เจอ" — ชี้ผิดทางเลย
     except httpx.ConnectError:
-        # ต่อไปถึงเครื่องแล้วแต่ไม่มีใครฟังพอร์ตนั้น (โดน RST กลับมาทันที)
         _fail_start(session_id,
                     f"ติดต่อโปรแกรมบนเครื่อง Pi ไม่ได้ ({AGENT_BASE_URL}) — "
                     f"ตรวจว่า send_command.py รันอยู่ไหม · สาย LAN · IP ของ Pi เปลี่ยนหรือเปล่า")
     except httpx.ConnectTimeout:
-        # ไม่มีใครอยู่ที่ IP นั้นเลย (ไม่มีแม้แต่ RST) — IP ผิด/เครื่องดับ/สายหลุด
         _fail_start(session_id,
                     f"หาเครื่อง Pi ไม่เจอที่ {AGENT_BASE_URL} — ตรวจ IP หรือสาย LAN")
     except httpx.TimeoutException:
-        # ── ReadTimeout: อันตรายที่สุดในกลุ่มนี้ ──────────────────────────
-        # ต่อติดแล้ว payload ส่งออกไปแล้ว แต่ Pi ไม่ตอบใน 10 วิ — **เป็นไปได้ว่า
-        # มันรับไปแล้วและกำลังยิง T1 อยู่** ต่างจาก ConnectError/ConnectTimeout
-        # ที่รู้แน่ว่าไม่มีอะไรเริ่ม
-        #
-        # ถ้าปิด session เงียบๆ โดยไม่บอก Pi จะได้สภาพ: DB บอก stopped แต่ Pi
-        # ยังวัดต่อและยิงค่าเข้ามาเรื่อยๆ → create_measurement ปฏิเสธ → Pi รอ
-        # measured_count ขยับจนครบ MEASURE_TIMEOUT → เด้ง modal ถามผู้ใช้ทั้งที่
-        # หน้าเว็บบอกว่าไม่มี session แล้ว
         await _notify_agent_action("stop", session_id)
         _fail_start(session_id,
                     "Pi ไม่ตอบภายใน 10 วินาที — อาจติดคำสั่งเดิมค้างอยู่ "
                     "(สั่งหยุดกลับไปแล้ว) ลองรีสตาร์ท send_command.py")
     except Exception as exc:
-        # กันไว้ไม่ให้ exception แปลกๆ หลุดออกไปเป็น 500 ที่ไม่มี CORS header
-        # (browser จะเข้าใจผิดว่าเป็น CORS error ทั้งที่จริงคือ Agent ไม่ตอบ)
         _fail_start(session_id, f"สั่งงาน Pi ไม่สำเร็จ: {exc}")
 
-    # ต่อติดและตอบกลับมาแล้ว — แต่ยังต้องดูว่า "ตอบว่าอะไร"
-    # Pi ปฏิเสธด้วย 400 ได้ 2 กรณี: action ที่ไม่รู้จัก · payload ไม่สมเหตุสมผล
-    # (เช่น len(groups) ไม่ตรงกับ target_count) ทั้งคู่แปลว่า **Pi ไม่ได้เริ่มวัด**
-    # จึงไม่ต้องส่ง stop ตามไป ต่างจากเคส ReadTimeout ข้างบน
     if resp.status_code != 200:
         _fail_start(session_id, f"Pi ปฏิเสธคำสั่ง (HTTP {resp.status_code}): {resp.text[:300]}")
 
@@ -974,7 +806,6 @@ def _fail_start(session_id: int, msg: str) -> None:
         finally:
             db.close()
     except Exception as exc:
-        # ปิด session ไม่สำเร็จก็ยังต้องแจ้งผู้ใช้ให้ได้ — ห้ามกลืน error ต้นทาง
         log.error("_fail_start: ปิด session %s ไม่สำเร็จ: %s", session_id, exc)
     log.warning("Start session %s ล้มเหลว — %s", session_id, msg)
     raise HTTPException(502, msg)
@@ -1085,7 +916,6 @@ def _validate_group(cur, gi: int, group: Dict[str, Any], measure_type: str,
         if not cur.fetchone():
             raise HTTPException(400, f"{label}: ไม่รู้จัก Part Number \"{part_number}\"")
 
-    # ── ALPL มี/ไม่มีใน DB ตามที่โหมดนั้นต้องการไหม ──────────────────────
     placeholders = ", ".join(["%s"] * len(alpls))
     cur.execute(
         f"SELECT number_alpl FROM parts_specifications WHERE number_alpl IN ({placeholders})",
@@ -1107,10 +937,7 @@ def _validate_group(cur, gi: int, group: Dict[str, Any], measure_type: str,
             f"{label}: ALPL {', '.join(map(str, missing))} ไม่มีในระบบ — "
             f"Rework ต้องเป็นชิ้นที่เคยวัดมาก่อนเท่านั้น ถ้าเป็นชิ้นใหม่ให้ใช้โหมด New",
         )
-    # IPM: ตัวที่ยังไม่มีจะถูกลงทะเบียนให้ตอนวัดจริง (ผู้ใช้ยืนยันมาแล้วจากหน้าเว็บ)
-    # จึงไม่บล็อกที่นี่ — แต่ต้องมี Package Size ในกลุ่ม ซึ่งเช็คไปแล้วข้างบน
 
-    # template ผูกกับ package_size ของกลุ่ม (ไม่ต้องพึ่ง Part ที่อาจยังไม่มี)
     cur.execute(
         "SELECT t.template_name FROM package_size ps "
         "LEFT JOIN template t ON ps.template_id = t.template_id "
@@ -1168,24 +995,11 @@ async def start_session(request: Request):
     first_alpl = alpl_queue[0]
     target_count = len(alpl_queue)
 
-    # **การ map โหมดที่เลือกหน้าเว็บ → ค่าที่บันทึกลง measurements**
-    # (ตามที่ตกลงกันไว้ — Rework ไม่ใช่ measure_type ของตัวเอง แต่ถือเป็นการวัด
-    # แบบ New ที่มีหมายเหตุกำกับว่าเป็นงาน Rework):
-    #   หน้าเว็บเลือก "Rework" → measure_type = 'New',  note = 'Rework'
-    #   หน้าเว็บเลือก "New"    → measure_type = 'New',  note = NULL
-    #   หน้าเว็บเลือก "IPM"    → measure_type = 'IPM',  note = NULL
-    # entry_mode ตรงนี้คือค่าที่ create_measurement จะเอาไปใส่คอลัมน์ measure_type
-    # ตรงๆ และเป็นตัวเลือกแหล่งเกณฑ์ (`_load_criteria`) ด้วย จึงต้อง map ให้เสร็จ
-    # ตั้งแต่ก่อนเข้า DB block เพราะ `_build_groups` ต้องใช้
     entry_mode = "New" if measure_type in ("New", "Rework") else "IPM"
     entry_note = "Rework" if measure_type == "Rework" else None
 
     db = get_db()
     try:
-        # GET_LOCK ครอบทั้ง Button Guard + insert — ให้ทั้งสองเป็น atomic
-        # section เดียวกันจริงๆ ในระดับ DB (ไม่ใช่แค่ระดับ Python) กันสอง
-        # request "Start" ที่มาถึงพร้อมกันเป๊ะๆ ผ่าน check ทั้งคู่ก่อนจะมีใคร
-        # insert ทัน — timeout 5 วิ พอสำหรับ critical section สั้นๆ นี้
         with db.cursor() as cur:
             cur.execute("SELECT GET_LOCK('tmx_start_session', 5) AS got")
             if not cur.fetchone()["got"]:
@@ -1193,26 +1007,15 @@ async def start_session(request: Request):
 
         try:
             with db.cursor() as cur:
-                # Button Guard — กันรัน 2 session ซ้อนกัน (เหมือนของเดิมก่อนหน้านี้)
                 cur.execute("SELECT session_id FROM sessions WHERE state = 'running'")
                 if cur.fetchone():
                     raise HTTPException(400, "A session is already running")
 
-                # 1) ตรวจทุกกลุ่มให้ครบก่อน — **ยังไม่เขียนอะไรลง DB**
-                #    ตรวจให้จบทุกกลุ่มแล้วค่อยตัดสิน ไม่ใช่เจอกลุ่มแรกผิดแล้วหยุด
-                #    เพราะผู้ใช้ควรได้แก้ทีเดียวจบ ไม่ใช่กด Start ซ้ำทีละรอบ
-                #    ต่อ 1 กลุ่มที่ผิด (ตอนนี้ _validate_group ยัง raise ทันทีที่
-                #    เจอ — ยอมรับได้เพราะหน้าเว็บกรองชั้นแรกให้แล้วตอนกด Save)
                 templates: List[str] = []
                 for gi, g in enumerate(groups):
                     alpls_of_group = [a for a, gg in zip(alpl_queue, group_of) if gg == gi]
                     templates.append(_validate_group(cur, gi, g, measure_type, alpls_of_group))
 
-                # ⚠ ยังสลับ template กลางคันไม่ได้ — Pi รับ template_name ตัวเดียว
-                #   ตอน start แล้วส่ง PW ครั้งเดียว (การสลับ PW ระหว่างคิวคือแผน E
-                #   ใน PLAN_criteria_and_multigroup.md ซึ่งยังไม่ได้ทำ)
-                #   ถ้าปล่อยผ่าน กลุ่มที่ 2 เป็นต้นไปจะถูกวัดด้วยโปรแกรมของกลุ่มแรก
-                #   → ได้ค่าที่ "ดูเหมือนใช้ได้" แต่ผิดทั้งกลุ่มโดยไม่มีอะไรเตือน
                 distinct = sorted(set(templates))
                 if len(distinct) > 1:
                     raise HTTPException(
@@ -1224,16 +1027,10 @@ async def start_session(request: Request):
                     )
                 template_name = templates[0]
 
-                # 1.5) ประกอบ `groups` ที่จะแนบไปกับ /command ให้ Pi
-                #      ทำ "ก่อน" insert sessions โดยตั้งใจ — ถ้าเกณฑ์ 2 ฝั่งไม่ตรงกัน
-                #      (ดู _build_groups) จะ raise ตรงนี้แล้วไม่มี session ค้างใน DB
                 agent_groups = _build_groups(
                     cur, groups, group_of, alpl_queue, templates, entry_mode
                 )
 
-                # 2) Insert sessions row — ไม่มี number_alpl แล้ว (ถอดออกพร้อม FK
-                #    เพราะเก็บได้แค่ ALPL ตัวแรกของคิว ไม่เคยถูก UPDATE ระหว่าง
-                #    session จึงไม่มีใครใช้ได้จริง — คิวตัวจริงอยู่ใน queue_state)
                 cur.execute(
                     "INSERT INTO sessions (state, target_count, measured_count) "
                     "VALUES ('running', %s, 0)",
@@ -1244,44 +1041,26 @@ async def start_session(request: Request):
             with db.cursor() as cur:
                 cur.execute("SELECT RELEASE_LOCK('tmx_start_session')")
 
-        # 3) เก็บคิวไว้ใน memory ผูกกับ session_id นี้ (หลัง insert สำเร็จแล้ว
-        # ค่อยผูก กัน insert fail แล้วมี state ค้างอยู่ใน session_queues)
-        # entry_mode / entry_note ถูก map ไว้ตั้งแต่ต้นฟังก์ชันแล้ว
         queue_state = {
             "entry_mode": entry_mode,
-            "measure_mode": measure_type,   # โหมดดิบที่ผู้ใช้เลือก (แยก New/Rework ออกจากกัน)
+            "measure_mode": measure_type,
             "queue": alpl_queue,
-            # group_of[i] = ชิ้นที่ i อยู่กลุ่มไหน — create_measurement ใช้หา
-            # config ของชิ้นที่กำลังวัด ไม่ใช่ใช้ config ของกลุ่มแรกกับทุกชิ้น
             "group_of": group_of,
-            # config ของแต่ละกลุ่ม (part_number/package_size/vendor/owner/PO/…)
-            # เก็บไว้ให้ create_measurement สร้าง/อัปเดต Part พร้อม measurement
-            # ของชิ้นนั้น — ไม่มีการเขียน Part ล่วงหน้าตอน Start อีกแล้วทุกโหมด
             "groups": groups,
-            # template ต่อกลุ่ม — ตอนนี้บังคับให้เหมือนกันหมด (ดูเช็คด้านบน)
-            # แต่เก็บแยกรายกลุ่มไว้ก่อน เพื่อให้แผน E (Pi สลับ PW กลางคิว) มา
-            # ต่อได้เลยโดยไม่ต้องรื้อโครงสร้างนี้ใหม่
             "group_templates": templates,
             "position": 0,
             "operator": data.get("Operator"),
             "note": entry_note,
         }
         session_queues[session_id] = queue_state
-        measure_timeouts.pop(session_id, None)  # session ใหม่ต้องไม่มีคำถามค้างจากรอบก่อน
+        measure_timeouts.pop(session_id, None)
 
-        # เขียนสำเนา queue_state ลง DB ด้วย (คอลัมน์ sessions.queue_state) — ถ้า
-        # backend restart กลาง session นี้ จะโหลดกลับเข้า memory ได้ตอน boot
-        # แทนที่จะ fallback ไปใช้ ALPL ตัวแรกผิดๆ ตลอดที่เหลือ (ดู create_measurement
-        # และ lifespan())
         with db.cursor() as cur:
             cur.execute(
                 "UPDATE sessions SET queue_state = %s WHERE session_id = %s",
                 (json.dumps(queue_state), session_id),
             )
 
-        # 4) Notify Agent ให้เริ่มวัด — ส่ง groups (template + ขอบเขต OK/NG
-        #    รายกลุ่ม) ไปทั้งก้อน เพื่อให้ Pi สลับ PW ได้เองและตัดสิน OK/NG เอง
-        #    แล้วสั่ง MCU ได้โดยไม่ต้องถาม backend กลับ (ดู _build_groups / PLAN ข้อ F)
         await _notify_agent_start(session_id, target_count, agent_groups)
 
         await push_event(
@@ -1323,8 +1102,6 @@ async def stop_session(req: StopSessionRequest):
             if not cur.fetchone():
                 raise HTTPException(404, "Session not found")
             if req.reason:
-                # Pi ล้มเลิกเอง — เก็บสาเหตุไว้เป็นบันทึกถาวรว่า session นี้จบเพราะอะไร
-                # (session ปิดแล้ว จึงไม่มีอะไรมาเขียนทับ last_event อีก)
                 cur.execute(
                     "UPDATE sessions SET state = 'stopped', ended_at = NOW(), "
                     "last_event = 'PI_ERROR', last_event_detail = %s, last_event_at = NOW() "
@@ -1341,13 +1118,9 @@ async def stop_session(req: StopSessionRequest):
 
         agent_err = await _notify_agent_action("stop", req.session_id)
 
-        session_queues.pop(req.session_id, None)  # กดหยุดเองก่อนคิวหมด ก็เคลียร์ memory ทิ้งด้วย
-        measure_timeouts.pop(req.session_id, None)  # กันคำถามค้างจาก session ที่จบไปแล้ว
+        session_queues.pop(req.session_id, None)
+        measure_timeouts.pop(req.session_id, None)
 
-        # ⚠ สั่ง Pi ไม่สำเร็จ = **เครื่องอาจยังวัดอยู่จริง** ทั้งที่ DB ปิดไปแล้ว
-        #   ไม่ raise (DB หยุดไปเรียบร้อยแล้ว กดซ้ำไม่ช่วยอะไร) แต่ต้องบอกให้คน
-        #   หน้าเครื่องรู้ว่า "ต้องไปกดหยุดที่เครื่องเอง" ไม่งั้นของจะไหลต่อโดย
-        #   ไม่มีใครบันทึก — อันตรายกว่ากรณี Start พังมาก
         if agent_err:
             with db.cursor() as cur:
                 cur.execute(
@@ -1365,22 +1138,6 @@ async def stop_session(req: StopSessionRequest):
         db.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Measure timeout — Pi ไม่ได้รับค่าการวัดกลับมา
-# ══════════════════════════════════════════════════════════════════════════════
-# ที่มา: send_command.py ส่ง T1 แล้ว "รอยืนยัน" ว่าค่าถูกบันทึกจริงไหม โดยดูว่า
-# sessions.measured_count ขยับขึ้นหรือเปล่า (poll /api/session/state) ถ้าครบเวลา
-# แล้วยังไม่ขยับ แปลว่าอย่างใดอย่างหนึ่ง:
-#   - TM-X วัดไม่ติด (ส่ง -9999.999 มา ซึ่ง Recieve_tm-x.py ข้ามไม่บันทึก) —
-#     จากข้อมูลจริงหน้างานเจอบ่อยมาก (8 ครั้งติดแค่ 1)
-#   - FTP มาช้าเกินเวลาที่รอ หรือ Recieve_tm-x.py ไม่ได้รัน/ล่ม
-# Pi แยกสองกรณีนี้ไม่ออก จึงโยนให้คนตัดสินใจแทน: แจ้งขึ้นหน้าเว็บว่าไม่ได้รับค่า
-# แล้วถามว่าจะวัดต่อหรือหยุด
-#
-# ทำไมเก็บใน memory ไม่ลง DB: เป็นคำถามที่มีอายุแค่ไม่กี่วินาที ผูกกับ session ที่
-# กำลัง running อยู่เท่านั้น ถ้า backend restart กลางคัน Pi จะ poll ไม่เจอแล้ว
-# หลุด loop ไปเอง (ดู wait_for_decision ใน send_command.py) — เหมือน session_queues
-# ที่ยอมรับข้อจำกัดเดียวกันอยู่แล้ว
 measure_timeouts: dict[int, dict] = {}
 
 
@@ -1434,8 +1191,6 @@ async def _notify_agent_action(action: str, session_id: int | None = None) -> Op
                 f"{AGENT_BASE_URL}/command", json=body,
                 timeout=httpx.Timeout(connect=3.0, read=10.0, write=10.0, pool=3.0),
             )
-    # ลำดับ except เดียวกับ _notify_agent_start — ConnectTimeout ต้องมาก่อน
-    # TimeoutException ไม่งั้นโดนกลืนแล้วข้อความชี้ผิดสาเหตุ
     except httpx.ConnectError:
         msg = (f"ติดต่อโปรแกรมบนเครื่อง Pi ไม่ได้ ({AGENT_BASE_URL}) — "
                f"ตรวจว่า send_command.py รันอยู่ไหม")
@@ -1480,7 +1235,6 @@ async def session_event(body: SessionEventRequest):
     return {"ok": True}
 
 
-# นานแค่ไหนถึงถือว่า last_event เป็นของ "ชิ้นนี้" ไม่ใช่ของชิ้นก่อนหน้า
 LAST_EVENT_FRESH_SEC = 30
 
 
@@ -1515,7 +1269,6 @@ async def report_measure_timeout(req: MeasureTimeoutRequest):
         if age < LAST_EVENT_FRESH_SEC:
             detail = row["last_event_detail"]
 
-    # ALPL ที่กำลังวัดอยู่ — มาจากคิวของ Backend เท่านั้น
     number_alpl = None
     qstate = session_queues.get(req.session_id)
     if qstate is not None:
@@ -1563,32 +1316,6 @@ async def continue_session(body: SessionContinueRequest):
         raise HTTPException(404, "ไม่พบคำถามค้างของ session นี้ (อาจหมดอายุไปแล้ว)")
     measure_timeouts.pop(session_id, None)
 
-    # ╔═══ ขยับตำแหน่งคิวตอนข้ามชิ้น — เริ่มส่วนที่เพิ่ม ═════════════════════╗
-    #
-    # บั๊กที่แก้: number_alpl ของแต่ละ measurement ไม่ได้มาจาก Agent แต่ Backend
-    # เลือกเองจาก "ตำแหน่งในคิว" (ดู create_measurement: number_alpl = queue[pos])
-    # และตำแหน่งนั้นขยับที่เดียวในระบบคือตอน INSERT สำเร็จ
-    #
-    # ชิ้นที่ผู้ใช้เลือกข้าม (action="continue") ไม่มี INSERT → ตำแหน่งไม่ขยับ →
-    # ผลวัดของ "ทุกชิ้นที่เหลือ" ถูกแปะ ALPL เลื่อนไปหมด:
-    #
-    #   คิว [A, B, C, D]
-    #   ชิ้น 1 (ของจริง A) → บันทึกเป็น A ✓   pos 0→1
-    #   ชิ้น 2 (ของจริง B) → บันทึกเป็น B ✓   pos 1→2
-    #   ชิ้น 3 (ของจริง C) → ข้าม            pos ค้างที่ 2
-    #   ชิ้น 4 (ของจริง D) → บันทึกเป็น C ✗   ← ผิด
-    #
-    # อันตรายกว่า "ข้อมูลหาย" เพราะข้อมูลหายเห็นได้จาก measured_count ที่ไม่ครบ
-    # แต่ข้อมูลผิด ALPL หน้าตาปกติทุกอย่าง ไม่มีใครรู้จนกว่าจะไปเทียบของจริง
-    #
-    # ทำไมแก้ตรงนี้: นี่คือจุดเดียวในระบบที่รู้ว่า "ผู้ใช้ตัดสินใจข้ามชิ้นนี้"
-    # (Pi แค่รับคำตอบไปเดินต่อ ไม่ได้บอก Backend อีกที)
-    #
-    # ⚠ ข้อจำกัดที่ยังเหลือ: ถ้าค่าของชิ้นที่ถูกข้ามมาถึงทีหลัง (FTP ช้ากว่า
-    #   MEASURE_TIMEOUT) มันจะไปกินตำแหน่งของชิ้นถัดไปแทน ยังแปะผิดอยู่ดี —
-    #   แต่เป็นเคสที่แคบกว่าเดิมมาก (ต้องมาถึงในช่วงหลังผู้ใช้กดตอบ แต่ก่อนที่
-    #   ชิ้นถัดไปจะวัดเสร็จ) ต่างจากของเดิมที่ผิด "ทุกชิ้นที่เหลือ" แน่นอน 100%
-    #   ปิดช่องนี้ได้ด้วย client_uuid = ts_key + เลข 10 หลัก (ดู IMPROVEMENT_PLAN.md)
     qstate = session_queues.get(session_id)
     if qstate is not None:
         qstate["position"] += 1
@@ -1606,35 +1333,13 @@ async def continue_session(body: SessionContinueRequest):
             "ชิ้นที่เหลือถูกแปะ ALPL ผิด",
             session_id, qstate["position"], len(qstate.get("queue", [])),
         )
-    # ╚═══ ขยับตำแหน่งคิวตอนข้ามชิ้น — จบส่วนที่เพิ่ม ═══════════════════════╝
 
-    # ปลุก Pi "หลัง" ขยับคิวเสร็จแล้วเท่านั้น (ดู docstring)
-    #
-    # ⚠ ต่างจาก stop: continue สั่งไม่ถึง = **Pi ยังรออยู่เฉยๆ ไม่มีอะไรเดินหน้า**
-    #   ตำแหน่งคิวถูกขยับไปแล้วฝั่ง backend แต่ Pi ไม่รู้ตัว จึงต้องบอกผู้ใช้ให้
-    #   ชัดว่ากดแล้วไม่ผ่าน จะได้กดซ้ำหรือไปกด Stop — ถ้าเงียบไว้ผู้ใช้จะยืนรอ
-    #   เครื่องที่ไม่มีวันขยับ
     agent_err = await _notify_agent_action("continue", session_id)
     if agent_err:
         raise HTTPException(502, f"สั่งให้ Pi วัดชิ้นถัดไปไม่สำเร็จ — {agent_err}")
     return {"ok": True}
 
 
-# ╔═══ Pause/Resume ถูกถอดออกทั้งระบบ — 7 ส.ค. 2569 ═══════════════════════════╗
-#
-# เดิมมี POST /api/session/pause กับ /resume พร้อมฟังก์ชัน _notify_agent() ที่ยิง
-# {"action": "pause"} ไปหา Pi — **แต่ send_command(Pi).py ไม่เคยรองรับ action นี้เลย**
-# มันรู้จักแค่ start/stop คำสั่งจึงตกท้ายไปที่ `return {"status": "ok"}` แล้วตอบกลับมาว่า
-# สำเร็จ ทั้งที่ไม่ได้ทำอะไร
-#
-#   ผล: หน้าเว็บขึ้น 'paused' แต่เครื่องจริงยังวัดต่อ และค่าที่วัดได้ยังถูกบันทึกลง DB
-#        ตามปกติ (create_measurement ไม่เช็ค state)
-#
-# ไม่เคยเจอตอนเทสต์เพราะ mockup.py รองรับ pause/resume ครบ — เจอเฉพาะกับเครื่องจริง
-#
-# ตัดออกแล้ว state เหลือ 4 ค่า: idle | running | stopped | timeout
-# ถ้าจะเอา Pause กลับมา ต้องทำฝั่ง Pi ให้รองรับจริงก่อนเสมอ (ดู Handle_Pi_Error.md 1.1)
-# ╚═══════════════════════════════════════════════════════════════════════════╝
 
 
 class HeartbeatRequest(BaseModel):
@@ -1667,13 +1372,6 @@ async def heartbeat(req: HeartbeatRequest):
     return {"ok": True}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Lookup endpoints (dropdown data สำหรับ index.html / edit.html)
-# ══════════════════════════════════════════════════════════════════════════════
-# Dropdown ทุกตัวนี้เป็นแบบ "ปิด" (closed) — frontend เลือกได้เฉพาะค่าที่มีอยู่
-# จริงใน DB เท่านั้น ไม่มีช่องพิมพ์เพิ่มค่าใหม่ในฟอร์ม ถ้าต้องเพิ่ม
-# owner/vendor/handler/operator ใหม่ ต้อง insert ตรงเข้า DB เอง
-# (ตามที่คุยกันไว้ — ไม่ทำ "add new" inline ในฟอร์ม)
 @app.get("/api/operators")
 async def list_operators():
     db = get_db()
@@ -1811,13 +1509,6 @@ async def list_all_part_numbers():
         db.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Lookup table management (Database Editor — Add/Rename/Delete)
-# ══════════════════════════════════════════════════════════════════════════════
-# operator/owner/vendor/handler/template เป็นตารางรูปแบบเดียวกันหมด (id + ชื่อ
-# ตัวเดียว) เลยใช้ helper function ชุดเดียวกัน 3 ตัวนี้ร่วมกันได้ทั้งหมด แทนที่
-# จะเขียน insert/rename/delete แยกกันซ้ำๆ ทีละตาราง — ยังคง endpoint แยกกัน
-# ตามตารางเหมือนเดิม (ไม่ทำ dynamic routing) เพื่อให้ URL คาดเดาได้ตรงไปตรงมา
 def _create_lookup(table: str, name_col: str, name: str) -> int:
     db = get_db()
     try:
@@ -1845,8 +1536,6 @@ def _rename_lookup(table: str, id_col: str, name_col: str, id_value: int, name: 
         db.close()
 
 
-# ชื่อตารางจริงในหน้าจอ → ชื่อที่อ่านง่ายสำหรับ error message (ผู้ใช้ไม่ควรเห็น
-# ชื่อตารางดิบๆ อย่าง "parts_specifications" ในข้อความแจ้งเตือน)
 _TABLE_DISPLAY_NAME = {
     "parts_specifications": "Part",
     "measurements":         "Measurement",
@@ -1874,8 +1563,6 @@ def _delete_lookup(table: str, id_col: str, id_value: int, references: List[tupl
                         f"ลบไม่ได้ — ยังมีข้อมูลใน {display_name} ที่อ้างอิงถึงอยู่ "
                         f"กรุณาเปลี่ยนชื่อแทนถ้าต้องการแก้ไข",
                     )
-            # ── สำรองก่อนลบ ── ต้องอ่านตอนแถวยังอยู่ และหลังผ่านด่านเช็ค FK แล้ว
-            # (ถ้าเช็คไม่ผ่านจะ raise 409 ไปก่อน ไม่มีอะไรถูกลบ ไม่ต้องสำรอง)
             row = _fetch_one(cur, f"SELECT * FROM {table} WHERE {id_col} = %s", (id_value,))
             if row is None:
                 raise HTTPException(404, "ไม่พบข้อมูล")
@@ -1911,7 +1598,6 @@ async def rename_operator(operator_id: int, body: LookupUpdate):
 
 @app.delete("/api/operators/{operator_id}")
 async def delete_operator(operator_id: int):
-    # operator ถูกอ้างอิงจาก measurements.operator_id เท่านั้น
     _delete_lookup("operator", "operator_id", operator_id, [("measurements", "operator_id")])
     return {"ok": True}
 
@@ -1929,7 +1615,6 @@ async def rename_owner(owner_id: int, body: LookupUpdate):
 
 @app.delete("/api/owners/{owner_id}")
 async def delete_owner(owner_id: int):
-    # owner ถูกอ้างอิงจาก parts_specifications.owner_id เท่านั้น
     _delete_lookup("owner", "owner_id", owner_id, [("parts_specifications", "owner_id")])
     return {"ok": True}
 
@@ -1947,7 +1632,6 @@ async def rename_vendor(vendor_id: int, body: LookupUpdate):
 
 @app.delete("/api/vendors/{vendor_id}")
 async def delete_vendor(vendor_id: int):
-    # vendor ถูกอ้างอิงจาก parts_specifications.vendor_id เท่านั้น
     _delete_lookup("vendor", "vendor_id", vendor_id, [("parts_specifications", "vendor_id")])
     return {"ok": True}
 
@@ -1965,8 +1649,6 @@ async def rename_handler(handler_id: int, body: LookupUpdate):
 
 @app.delete("/api/handlers/{handler_id}")
 async def delete_handler(handler_id: int):
-    # handler ถูกอ้างอิงจาก part_number.handler_id เท่านั้น (parts_specifications
-    # ไม่มี handler_id ตรงๆ แล้ว — derive ผ่าน part_number)
     _delete_lookup("handler", "handler_id", handler_id, [("part_number", "handler_id")])
     return {"ok": True}
 
@@ -1984,13 +1666,10 @@ async def rename_template(template_id: int, body: LookupUpdate):
 
 @app.delete("/api/templates/{template_id}")
 async def delete_template(template_id: int):
-    # template ถูกอ้างอิงจาก package_size.template_id เท่านั้น
     _delete_lookup("template", "template_id", template_id, [("package_size", "template_id")])
     return {"ok": True}
 
 
-# nominal/tolerance ทั้ง 5 ตัวเป็น FLOAT NOT NULL ใน DB (ดู init.sql) จึงบังคับ
-# ให้ส่งมาครบตอน Create — ต่างจาก template_name ที่ nullable ได้
 class PackageSizeCreate(BaseModel):
     package_size:  str
     nominal_x:     float
@@ -2011,8 +1690,6 @@ class PackageSizeUpdate(BaseModel):
     template_name: Optional[str] = None
 
 
-# คอลัมน์ตัวเลขของ package_size ที่ Create/Update ใช้ร่วมกัน — ประกาศไว้ที่เดียว
-# กันลืมเติมตอนเพิ่ม field ใหม่ (เคยพลาดแบบนี้มาแล้วกับ offset_tol ของ part_number)
 _PKG_NUM_FIELDS = ("nominal_x", "nominal_y", "upper_tol", "lower_tol", "offset_tol")
 
 
@@ -2076,7 +1753,6 @@ async def update_package_size(package_size_id: int, body: PackageSizeUpdate):
 
 @app.delete("/api/package-sizes/{package_size_id}")
 async def delete_package_size(package_size_id: int):
-    # package_size ถูกอ้างอิงจาก part_number.package_size_id เท่านั้น
     _delete_lookup("package_size", "package_size_id", package_size_id, [("part_number", "package_size_id")])
     return {"ok": True}
 
@@ -2089,7 +1765,6 @@ class PartNumberCreate(BaseModel):
     nominal_y:        float
     upper_tol:        float
     lower_tol:        float
-    # มี default 0 เพื่อให้ payload เก่าที่ยังไม่ส่ง offset_tol มา ยัง POST ผ่านได้
     offset_tol:       float = 0
 
 
@@ -2172,34 +1847,10 @@ async def update_part_number(part_number_id: int, body: PartNumberUpdate):
 
 @app.delete("/api/part-numbers/{part_number_id}")
 async def delete_part_number(part_number_id: int):
-    # part_number ถูกอ้างอิงจาก parts_specifications.part_number_id เท่านั้น
     _delete_lookup("part_number", "part_number_id", part_number_id, [("parts_specifications", "part_number_id")])
     return {"ok": True}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Parts endpoints
-# ══════════════════════════════════════════════════════════════════════════════
-# SELECT ที่ join parts_specifications กับทุกตาราง lookup ไว้ในที่เดียว — ใช้
-# ร่วมกันทั้ง list_parts และ get_part เพื่อให้ response มีทั้งชื่อ (handler/
-# vendor/owner/package_size) และรายละเอียดของ part_number (nominal/tolerance/
-# template_name) ไม่ใช่แค่ id เปล่าๆ ที่ frontend เอาไปแสดงตรงๆ ไม่ได้ รวม
-# recieve_date ด้วย — ใช้ prefill ฟอร์ม Rework (auto-fill ข้อมูลเดิมของ ALPL
-# ที่กรอกกลับเข้ามา ยกเว้น recieve_date ที่ต้องเว้นว่างให้กรอกใหม่)
-#
-# schema: handler/package_size/nominal/tolerance/template_name ทั้งหมด derive
-# มาจาก part_number_id (ไม่ได้เก็บตรงที่ parts_specifications เอง) — join ทอด
-# parts_specifications -> part_number -> handler / package_size -> template
-# ⚠ package_size/template ต้อง join ผ่าน COALESCE(p.package_size_id, pn.package_size_id)
-#   ไม่ใช่ผ่าน part_number อย่างเดียวแบบเดิม — ALPL ที่ลงทะเบียนจากโหมด IPM มีแค่
-#   package_size_id ของตัวเอง ยังไม่มี part_number ถ้า join ทางเดียวจะได้
-#   package_size/template เป็น NULL ทั้งที่ข้อมูลครบ (หน้า Report/Part Entry
-#   เลยขึ้น "—" แล้วดูเหมือนข้อมูลหาย)
-#
-# nominal/tolerance คืนมาทั้ง 2 ชุดโดยตั้งใจ — ผู้เรียกเลือกเองตามโหมด:
-#   *_pkg  มาจาก package_size  → โหมด IPM ใช้ชุดนี้
-#   ชุดไม่มี suffix มาจาก part_number → โหมด New/Rework ใช้ชุดนี้
-#   (กติกาเดียวกับ _load_criteria — ห้ามให้ frontend คิดเองว่าเอาจากไหน)
 PARTS_SELECT = """
     SELECT p.part_id, p.number_alpl, pn.part_number_name AS part_number,
            p.description, p.po_number,
@@ -2287,52 +1938,22 @@ def _block_if_session_running(cur, action: str) -> None:
 
 
 class PartCreate(BaseModel):
-    # schema: parts_specifications ไม่เก็บ handler/package_size/nominal/
-    # tolerance/template_name ตรงๆ เลย — ทั้งหมด derive มาจาก part_number_id
-    # ตัวเดียว (ดู init.sql: part_number ผูก package_size_id + handler_id +
-    # nominal/tolerance ของตัวเองไว้แล้ว) เลือก part_number ก็ map ค่าพวกนี้
-    # ให้อัตโนมัติหมด ไม่ต้องส่ง handler/package_size แยกมาที่ endpoint นี้อีก
-    # (frontend ยังส่ง package_size มาด้วยเพื่อใช้ cascade dropdown Part Number
-    # เฉยๆ — เป็นแค่ field ส่วนเกินที่ endpoint นี้เพิกเฉยไม่ได้ใช้)
-    #
-    # part_number เป็น Optional เพราะตอน IPM เจอ ALPL ที่ยังไม่เคยลงทะเบียน
-    # (ดู POST /api/session/start) จะลงทะเบียน part ใหม่แบบขั้นต่ำผ่าน endpoint
-    # นี้ — อาจมีแค่ number_alpl เท่านั้น ยังไม่รู้ part_number จริง (แต่ถ้าไม่รู้
-    # part_number จะหา template_name ไม่เจอตอน start_session — ต้องตั้งให้
-    # ครบก่อนถึงจะเริ่มวัดได้จริง)
-    #
-    # vendor/owner ยังเป็น FK ไป lookup table เหมือนเดิม — frontend ส่งมาเป็น
-    # "ชื่อ" (string จาก dropdown) แล้ว backend resolve เป็น id เอง (ดู _lookup_id)
-    #
-    # recieve_date เป็น Optional — ถ้าไม่ส่งมา/ส่งค่าว่าง จะถูกบันทึกเป็น NULL
-    # ตรงๆ (เว้นว่างแล้วว่างจริง ไม่เติมวันที่ปัจจุบันให้อัตโนมัติ — ดู
-    # _insert_part_row)
     number_alpl:   int
     part_number:   Optional[str] = None
     description:   Optional[str] = None
     vendor:        Optional[str] = None
     po_number:     Optional[int] = None
-    package_size:  Optional[str] = None  # ไม่ได้ใช้ resolve อะไรที่นี่ (เก็บไว้เผื่อ frontend ส่งมา)
+    package_size:  Optional[str] = None
     owner:         Optional[str] = None
     recieve_date:  Optional[str] = None
 
 
 class PartsCheckRequest(BaseModel):
-    # แบบเดิม: ลิสต์แบนๆ ไม่รู้ว่าตัวไหนอยู่กลุ่มไหน — ยังใช้ได้ (เช็คแค่ มี/ไม่มี)
     alpl: List[int] = []
-    # แบบใหม่: ส่งเป็นกลุ่มมาด้วย เพื่อให้ตรวจ "ในกลุ่มเดียวกันต้องเข้าชุดกัน" ได้
-    #   groups: [{"alpl": [400, 401]}, {"alpl": [402]}]
-    #   mode:   IPM | New | Rework — ตัวกำหนดว่าต้องตรงกันกี่ field
     groups: Optional[List[Dict[str, Any]]] = None
     mode: Optional[str] = None
 
 
-# field ที่ ALPL ในกลุ่มเดียวกันต้องมีค่าตรงกัน แยกตามโหมด
-#   IPM     → เกณฑ์ตัดสินมาจาก package_size ถ้าในกลุ่มเดียวกันคนละขนาด แปลว่า
-#             ชิ้นงานในช่องเดียวกันใช้เกณฑ์คนละชุด ซึ่งผิดตั้งแต่ต้น
-#   Rework  → เกณฑ์มาจาก part_number และ template มาจาก package_size ต้องตรงทั้งคู่
-#   New     → ไม่ตรวจ เพราะ ALPL ยังไม่มีในระบบ ไม่มีอะไรให้เทียบ (config มาจาก
-#             ฟอร์มชุดเดียวกันอยู่แล้วโดยนิยามของกลุ่ม)
 _GROUP_MATCH_FIELDS = {
     "IPM":    [("package_size", "Package Size")],
     "Rework": [("package_size", "Package Size"), ("part_number", "Part Number")],
@@ -2377,15 +1998,11 @@ async def check_parts(body: PartsCheckRequest):
     ⚠ **ห้ามใส่ `_block_if_session_running()`** — เป็นการอ่านอย่างเดียว และต้อง
       ใช้ได้ตอนที่ยังไม่ได้เริ่มวัด (ซึ่งคือตอนเดียวที่มีคนเรียกจริงๆ)
     """
-    # รับได้ทั้ง 2 หน้าตา — ถ้ามี groups ให้คลี่เอา alpl ทั้งหมดออกมาเช็ค
-    # มี/ไม่มี เหมือนเดิม แล้วเก็บโครงกลุ่มไว้ตรวจ conflicts ต่อ
     groups_in = body.groups or []
     flat: List[int] = list(body.alpl or [])
     for g in groups_in:
         flat.extend(int(a) for a in (g.get("alpl") or g.get("number_alpl") or []))
 
-    # ตัดตัวซ้ำออกก่อน (ผู้ใช้พิมพ์ ALPL ซ้ำข้ามกลุ่มได้) แต่ยังคงลำดับเดิมไว้
-    # เพื่อให้ข้อความเตือนบนหน้าเว็บเรียงตามที่ผู้ใช้กรอกมา ไม่ใช่เรียงเลข
     seen: set = set()
     wanted: List[int] = []
     for a in flat:
@@ -2402,10 +2019,6 @@ async def check_parts(body: PartsCheckRequest):
     try:
         with db.cursor() as cur:
             placeholders = ", ".join(["%s"] * len(wanted))
-            # ดึง config ให้ครบทุก field ที่ฟอร์ม Part Entry มี — หน้าเว็บเอาไป
-            # ทั้งเตือน (ข้อความ New/conflicts) และ **เติมช่องให้อัตโนมัติ**
-            # ตอนผู้ใช้กรอก ALPL ที่เคยลงทะเบียนแล้ว (ดู prefillGroupFromAlpl)
-            # ยิงทีเดียวได้ทั้งกลุ่ม แทนที่จะไล่ถาม /api/parts/{alpl} ทีละตัว
             cur.execute(
                 "SELECT p.number_alpl, pn.part_number_name, ps.package_size, "
                 "       v.vendor_name, o.owner_name, p.po_number, p.description "
@@ -2435,17 +2048,14 @@ async def check_parts(body: PartsCheckRequest):
     }
     found = {r["number_alpl"] for r in rows}
 
-    # ── conflicts: ALPL ในกลุ่มเดียวกันต้องมีค่าตรงกันตามโหมด ────────────────
     conflicts: List[Dict[str, Any]] = []
     for field, label in _GROUP_MATCH_FIELDS.get((body.mode or "").strip(), []):
         for gi, g in enumerate(groups_in):
             alpls = [int(a) for a in (g.get("alpl") or g.get("number_alpl") or [])]
-            # จับกลุ่มตามค่าที่ได้ — ใช้ dict เพื่อให้รู้ด้วยว่า "ค่าไหนมาจาก ALPL ตัวไหน"
-            # (ข้อความเตือนต้องบอกเลขให้ครบ ไม่งั้นผู้ใช้ไม่รู้ว่าต้องไปแก้ตัวไหน)
             by_value: Dict[str, List[int]] = {}
             for a in alpls:
                 if a not in found:
-                    continue                      # ยังไม่ลงทะเบียน — ไม่มีอะไรให้เทียบ
+                    continue
                 v = detail[str(a)].get(field)
                 by_value.setdefault("—" if v is None else str(v), []).append(a)
 
@@ -2476,7 +2086,7 @@ async def check_parts(body: PartsCheckRequest):
 
 @app.get("/api/parts")
 async def list_parts(
-    limit:  int = Query(10, ge=1, le=1000),   # มีเพดาน กันยิง limit=999999 ดึงทั้งตาราง
+    limit:  int = Query(10, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     search: Optional[str] = None,
 ):
@@ -2558,15 +2168,8 @@ def _insert_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
     part_number_id = _lookup_id(cur, "part_number", "part_number_id", "part_number_name", config.get("part_number"))
     vendor_id      = _lookup_id(cur, "vendor",      "vendor_id",      "vendor_name",      config.get("vendor"))
     owner_id       = _lookup_id(cur, "owner",       "owner_id",       "owner_name",       config.get("owner"))
-    # package_size_id เก็บตรงที่ Part ด้วย (ไม่ derive ผ่าน part_number อย่างเดียว
-    # เหมือนเดิม) เพราะโหมด IPM ลงทะเบียน Part จากฟอร์มที่มีแค่ ALPL + Package Size
-    # ยังไม่รู้ Part Number — ถ้าไม่เก็บไว้ตรงนี้จะหา template/เกณฑ์ให้มันไม่ได้เลย
     package_size_id = _lookup_id(cur, "package_size", "package_size_id", "package_size", config.get("package_size"))
 
-    # recieve_date: ใส่คอลัมน์นี้ใน INSERT เสมอ แม้จะเป็นค่าว่าง (จะได้ NULL) —
-    # ตั้งใจให้ "เว้นว่างแล้วว่างจริง" ไม่ใช่เติมวันที่ปัจจุบันให้อัตโนมัติ
-    # (ถ้าไม่ใส่คอลัมน์นี้เลย DEFAULT CURRENT_TIMESTAMP ของ schema จะทำงานแทน
-    # ซึ่งไม่ใช่พฤติกรรมที่ต้องการ)
     columns = [
         "number_alpl", "part_number_id", "package_size_id", "description",
         "vendor_id", "po_number", "owner_id", "recieve_date",
@@ -2642,14 +2245,7 @@ async def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
     (เพราะ FOREIGN KEY ไม่มี ON UPDATE CASCADE) เราจับ error นั้นแล้วแปลงเป็น
     409 ที่อ่านง่ายแทนที่จะปล่อยให้เป็น 500 ดิบๆ
     """
-    # field ที่แก้ตรงๆ ได้เลย ไม่ต้อง resolve ผ่าน lookup table
     direct_fields = {"number_alpl", "description", "po_number", "recieve_date"}
-    # field ที่เป็น "ชื่อ" จาก dropdown — ต้อง resolve เป็น id ก่อน (key ที่รับจาก
-    # request → (คอลัมน์จริงใน parts_specifications, ตาราง lookup, id column,
-    # name column)) — part_number ย้ายมาอยู่ตรงนี้แล้ว (ไม่ใช่ direct_fields
-    # อีกต่อไป) เพราะตอนนี้ต้อง resolve เป็น part_number_id ก่อน ไม่ใช่คอลัมน์
-    # VARCHAR ตรงๆ — handler/package_size ไม่มีในนี้แล้ว เพราะ derive มาจาก
-    # part_number_id ทั้งคู่ ไม่ได้เก็บที่ parts_specifications โดยตรง
     lookup_fields = {
         "part_number": ("part_number_id", "part_number", "part_number_id", "part_number_name"),
         "vendor":      ("vendor_id",      "vendor",      "vendor_id",      "vendor_name"),
@@ -2724,9 +2320,6 @@ async def delete_part(part_id: int):
         with db.cursor() as cur:
             _block_if_session_running(cur, "ลบ")
 
-            # เช็คก่อนเลยว่ามี Measurement ของ ALPL นี้เหลืออยู่ไหม — ถ้ามี ปฏิเสธ
-            # ทันที ไม่แตะอะไรใน DB เลย (ตรวจเองแทนที่จะรอ FK error เพื่อให้ได้
-            # ข้อความบอกจำนวนที่ติดอยู่ชัดเจน ผู้ใช้จะได้รู้ว่าต้องไปจัดการอะไรต่อ)
             cur.execute("SELECT COUNT(*) AS n FROM measurements WHERE number_alpl = %s", (part_id,))
             measurement_count = cur.fetchone()["n"]
             if measurement_count:
@@ -2738,7 +2331,6 @@ async def delete_part(part_id: int):
                     f"แล้วค่อยลบ Part",
                 )
 
-            # ── สำรองก่อนลบ ── เก็บ Part row ไว้ในถังขยะเผื่อกดผิด
             part_row = _fetch_one(
                 cur, "SELECT * FROM parts_specifications WHERE number_alpl = %s", (part_id,)
             )
@@ -2765,26 +2357,6 @@ async def delete_part(part_id: int):
         db.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Measurements endpoints
-# ══════════════════════════════════════════════════════════════════════════════
-# SELECT ที่ join measurements กับ operator ไว้ในที่เดียว — ใช้ร่วมกันทั้ง
-# list_measurements และ export_csv เพื่อให้ response/CSV มีชื่อ operator (ไม่ใช่
-# แค่ operator_id เปล่าๆ) หลังจากย้าย Operator จากคอลัมน์ VARCHAR ตรงๆ ไปเป็น
-# FK ชี้ตาราง operator
-# nominal/tolerance ที่ join มาด้วย ใช้ให้ frontend คำนวณเองได้ว่า value_x/value_y
-# แต่ละตัว "ผ่านหรือไม่ผ่าน" แยกรายแกน (DB เก็บแค่ result รวมของทั้ง 2 แกน) —
-# ตาราง Measurement ทั้งหน้า Home และ Edit ใช้ระบายสีเขียว/แดงรายค่า
-# หมายเหตุ: CSV export ใช้ SELECT ชุดนี้ด้วย จึงมีคอลัมน์พวกนี้ติดไปในไฟล์ export
-# ด้วย (ตั้งใจ — มีประโยชน์ตอนเอาไปวิเคราะห์ต่อใน Power BI/Excel)
-# ⚠ เกณฑ์ต้องมาจากแหล่งเดียวกับที่ใช้ตัดสินตอนวัดจริง (ดู _load_criteria)
-#   IPM → package_size · New/Rework → part_number
-#   ถ้า join แต่ part_number อย่างเดียวแบบเดิม แถว IPM ของ ALPL ที่ยังไม่ได้ตั้ง
-#   Part Number จะได้ nominal/tol เป็น NULL ทั้งแถว → หน้าเว็บไม่ระบายสีให้เลย
-#   ทั้งที่ DB มี result เป็น OK/NG อยู่ (ดูเหมือนตารางพังทั้งที่ข้อมูลถูก)
-#
-#   CASE เลือกทีละคอลัมน์ (ไม่ใช่ join ทีเดียว) เพราะแถวในผลลัพธ์ชุดเดียวกัน
-#   อาจมีทั้ง IPM และ New ปนกัน — เลือกเป็นราย "แถว" ไม่ใช่ราย "query"
 MEASUREMENTS_SELECT = """
     SELECT m.*, op.operator_name AS operator_name,
            CASE WHEN m.measure_type = 'IPM' THEN ips.nominal_x  ELSE pn.nominal_x  END AS nominal_x,
@@ -2802,31 +2374,16 @@ MEASUREMENTS_SELECT = """
 
 
 class MeasurementCreate(BaseModel):
-    # session_id บังคับแล้ว (Optional ไว้เพื่อให้ error message อ่านง่ายกว่า 422
-    # ดิบๆ ของ Pydantic — create_measurement เช็คเองแล้วตอบ 400 พร้อมคำอธิบาย)
     session_id:  Optional[int] = None
-    # ⚠ ไม่ได้ใช้แล้ว — เก็บ field ไว้เฉยๆ เพื่อให้ Agent รุ่นเก่าที่ยังส่งมา POST
-    #   ผ่านได้เหมือนเดิม backend เลือก ALPL จากตำแหน่งในคิวของตัวเองเสมอ
-    #   (ดู create_measurement) ค่าที่ Agent ส่งมาคือ ALPL ตัวแรกของคิวตลอด
-    #   ซึ่งผิดตั้งแต่ชิ้นที่ 2 จึงห้ามเอาไปใช้เด็ดขาด
     number_alpl: Optional[int] = None
     value_x:     float
     value_y:     float
-    # ค่าที่ 3 จากไฟล์ .txt ของ TM-X (+0000.003) — ความเยื้องของชิ้นงาน
-    # default 0 เพื่อให้สคริปต์เก่าที่ยังไม่ส่งฟิลด์นี้มา ยัง POST ผ่านได้เหมือนเดิม
     offset:      float = 0
     note:        Optional[str] = None
-    # UUID ที่ Agent สร้างขึ้นต่อการวัด 1 ครั้ง (uuid4) — ส่งมาด้วยทุกครั้งที่มา
-    # จาก agent.py (ไม่มีถ้าเป็น manual add จาก edit.html) ใช้กัน insert ซ้ำ
-    # ตอน Agent retry POST นี้ (ดู create_measurement)
     client_uuid: Optional[str] = None
 
 
 class ImageUpdate(BaseModel):
-    # image_path เป็น Optional แล้ว — กรณี Agent จัดการรูปไม่สำเร็จ
-    # จะ PATCH มาด้วย image_path=None,
-    # upload_failed=True แทน เพื่อให้ backend รู้ว่า "พยายามแล้วแต่ไม่สำเร็จ"
-    # ต่างจาก "ยังไม่เคยพยายามเลย" (NULL เฉยๆ ตอน insert)
     image_path:    Optional[str] = None
     upload_failed: bool = False
 
@@ -2912,7 +2469,6 @@ async def create_measurement(req: MeasurementCreate):
         = ALPL ตัวแรกของคิวตลอดทั้ง session → ข้อมูลผิด ALPL เข้า DB แบบเงียบๆ
         ตอนนี้เปลี่ยนเป็น "ปฏิเสธไปเลย" ดีกว่าเดา (ดู HTTPException 409 ด้านล่าง)
     """
-    # ผลวัดต้องผูกกับ session ที่ Agent กำลัง running อยู่จริงเท่านั้น
     if req.session_id is None:
         raise HTTPException(
             400,
@@ -2922,10 +2478,6 @@ async def create_measurement(req: MeasurementCreate):
     qstate = None
     db = get_db()
     try:
-        # กันการ insert ซ้ำถ้า Agent retry POST นี้ด้วย client_uuid เดิม (เช่น
-        # ตอบกลับจาก request ครั้งก่อนหลุดหายระหว่างทาง ทั้งที่จริง backend
-        # insert สำเร็จไปแล้ว) — เช็คก่อนทำอะไรอื่นเลย ถ้าเคยเห็น UUID นี้แล้ว
-        # คืนผลเดิมไปตรงๆ ไม่ insert แถวใหม่ ไม่นับ measured_count ซ้ำ
         if req.client_uuid:
             with db.cursor() as cur:
                 cur.execute(
@@ -2955,7 +2507,6 @@ async def create_measurement(req: MeasurementCreate):
 
         with db.cursor() as cur:
             session_id = req.session_id
-            # Session ต้องอยู่ในสถานะ running
             cur.execute(
                 "SELECT state, target_count, measured_count FROM sessions WHERE session_id = %s",
                 (session_id,),
@@ -2966,44 +2517,21 @@ async def create_measurement(req: MeasurementCreate):
 
             qstate = session_queues.get(session_id)
             if qstate is None:
-                # คิวหาย (backend restart แล้ว _reload_session_queues() กู้กลับไม่ได้)
-                # — ปฏิเสธดีกว่าเดา เพราะการเดาจะได้ ALPL ตัวแรกของคิวเสมอ ซึ่งผิด
-                # ตั้งแต่ชิ้นที่ 2 และผิดแบบเงียบๆ ไม่มีใครรู้ ส่วนการปฏิเสธจะทำให้
-                # measured_count ไม่ขยับ → Pi รอจนครบ MEASURE_TIMEOUT → เด้งถาม
-                # ผู้ใช้บนหน้าเว็บ → มีคนเห็นแน่นอน
                 raise HTTPException(
                     409,
                     f"คิว ALPL ของ session {session_id} หายไป (backend อาจถูก restart) "
                     "— กด Stop ที่หน้าเว็บแล้วเริ่ม session ใหม่",
                 )
 
-            # ── Queue-based (IPM / New) ─────────────────────────────────────
             queue = qstate["queue"]
             pos = qstate["position"]
             if pos >= len(queue):
                 raise HTTPException(400, "Measurement queue หมดแล้วสำหรับ session นี้")
             number_alpl = queue[pos]
-            # entry_mode/note ถูก map ไว้แล้วตั้งแต่ start_session ตามโหมด
-            # ที่ผู้ใช้เลือกหน้าเว็บ: Rework → ('New', 'Rework'),
-            # New → ('New', None), IPM → ('IPM', None)
-            # ⚠ measure_type จึงมีได้แค่ 'IPM' กับ 'New' เท่านั้น — 'Manual' ถูก
-            #   ถอดออกแล้วพร้อมกับปุ่ม Add Measurement ส่วน 'Rework' ไม่เคยลง DB
-            #   อยู่แล้ว (เก็บเป็น note แทน)
-            measure_type = qstate["entry_mode"]  # 'IPM' หรือ 'New'
+            measure_type = qstate["entry_mode"]
             operator_name = qstate.get("operator")
             note = qstate.get("note")
 
-            # ── Part เกิด/ถูกอัปเดต "พร้อมกับ" measurement ของชิ้นนี้ ─────────
-            # ไม่มีการเขียน Part ล่วงหน้าตอน Start อีกแล้วทุกโหมด — ผลคือกด Start
-            # แล้วกด Stop ทันที หรือวัดชิ้นแรกไม่ติด จะไม่มี Part ผีค้างใน DB เลย
-            #
-            #   New   ยังไม่มีแถว → insert ด้วย config ของกลุ่มที่ชิ้นนี้อยู่
-            #   IPM   ยังไม่มีแถว → insert เหมือนกัน (ผู้ใช้ยืนยันจากหน้าเว็บแล้ว
-            #                       ว่าจะลงทะเบียนให้ — ดู D5) มีแล้วก็ไม่แตะ
-            #   Rework มีแถวอยู่แล้วเสมอ → update ด้วยค่าที่ผู้ใช้แก้ในฟอร์ม
-            #
-            # ⚠ ใช้ config ของ "กลุ่มที่ชิ้นนี้อยู่" ไม่ใช่กลุ่มแรก — ฟอร์มกด +Add
-            #   ได้หลายกลุ่ม แต่ละกลุ่มมี part_number/vendor/PO คนละชุด
             group_cfg = _group_config_for(qstate, pos)
             if group_cfg is not None:
                 cur.execute("SELECT 1 FROM parts_specifications WHERE number_alpl = %s", (number_alpl,))
@@ -3016,23 +2544,13 @@ async def create_measurement(req: MeasurementCreate):
                 except pymysql.MySQLError as exc:
                     raise HTTPException(409, f"บันทึก Part ALPL {number_alpl} ไม่สำเร็จ: {exc}")
 
-            # หาเกณฑ์ตัดสิน — แหล่งต่างกันตามโหมด (IPM → package_size,
-            # New/Rework → part_number) ดูเหตุผลที่ _load_criteria
             part = _load_criteria(cur, number_alpl, measure_type)
 
-            # เช็ค OK/NG — tolerance ตัวเดียวใช้ร่วมกันทั้งแกน X และ Y
-            # offset จะถูกนับเป็นเกณฑ์หรือไม่ ขึ้นกับโหมด (ดู _judge/_offset_limit)
             verdict = _judge(req.value_x, req.value_y, req.offset, part, measure_type)
             result = verdict["result"]
 
-            # resolve ชื่อ operator (จาก dropdown) เป็น operator_id ก่อน insert —
-            # measurements.operator_id เป็น FK ไป operator table แล้ว (เดิมเป็น
-            # คอลัมน์ VARCHAR ชื่อ "Oparetor" ที่เก็บชื่อ operator ตรงๆ)
             operator_id = _lookup_id(cur, "operator", "operator_id", "operator_name", operator_name)
 
-            # Insert row ของ measurement (รวม measure_type/operator_id/note ถ้าเป็น
-            # queue-based หรือ manual add — สำหรับ manual session (ผ่าน Agent) แบบเดิม
-            # ทั้ง 3 ค่านี้จะเป็น NULL)
             try:
                 cur.execute(
                     "INSERT INTO measurements "
@@ -3043,22 +2561,15 @@ async def create_measurement(req: MeasurementCreate):
                      measure_type, operator_id, note, req.client_uuid),
                 )
             except pymysql.IntegrityError:
-                # race เล็กๆ ที่ทฤษฎีมีได้: สอง request ที่มี client_uuid เดียวกัน
-                # มาถึงพร้อมกันเป๊ะๆ ผ่านเช็ค dedup ด้านบนพร้อมกันทั้งคู่ (เช็คแล้ว
-                # ยังไม่เจอ เพราะอีกฝั่งยัง insert ไม่เสร็จ) — unique index บน
-                # client_uuid จะกันไม่ให้ insert ซ้ำจริงๆ ระดับ DB อยู่ดี แค่ต้อง
-                # จับ error แล้วบอกให้รู้ว่าเป็นการซ้ำ ไม่ใช่ปล่อยเป็น 500 ดิบๆ
                 raise HTTPException(409, "Measurement นี้ถูกบันทึกไปแล้ว (duplicate client_uuid)")
             measurement_id = cur.lastrowid
 
-            # เพิ่มตัวนับของ session
             cur.execute(
                 "UPDATE sessions SET measured_count = measured_count + 1 "
                 "WHERE session_id = %s",
                 (session_id,),
             )
 
-            # อ่านค่าตัวนับล่าสุดอีกครั้ง เพื่อเช็คว่าครบ target แล้วหรือยัง
             cur.execute(
                 "SELECT measured_count, target_count FROM sessions WHERE session_id = %s",
                 (session_id,),
@@ -3067,10 +2578,6 @@ async def create_measurement(req: MeasurementCreate):
             measured = updated["measured_count"]
             target   = updated["target_count"]
 
-        # เพิ่มตำแหน่งในคิว (memory) แล้ว sync สำเนาลง DB ทันที (คอลัมน์
-        # sessions.queue_state) — กัน backend restart กลาง session นี้แล้ว
-        # ตำแหน่งคิวหาย ทำให้ measurement หลังจากนั้นถูกบันทึกผิด ALPL ไปเรื่อยๆ
-        # แบบเงียบๆ (ดู lifespan() ที่โหลดค่านี้กลับตอน boot)
         if qstate is not None:
             qstate["position"] += 1
             with db.cursor() as cur:
@@ -3079,25 +2586,6 @@ async def create_measurement(req: MeasurementCreate):
                     (json.dumps(qstate), session_id),
                 )
 
-        # Auto-complete session เมื่อถึง target_count แล้ว
-        #
-        # ⚠️ ห้ามใส่ `await` ระหว่าง UPDATE measured_count ข้างบน (ราวบรรทัด 2239)
-        # กับ UPDATE state='stopped' ข้างล่าง — มีคนพึ่งพาช่วงนี้อยู่:
-        #   send_command.py บน Pi poll GET /api/session/state เพื่อรอให้
-        #   measured_count ขยับ พอครบ target มันจะหลุด loop เข้า finally แล้วอ่าน
-        #   state อีกครั้ง ถ้าเจอ 'running' จะยิง POST /api/session/stop
-        #   (ดูบล็อก "ปิด session ที่ค้าง running" ท้าย command_flow)
-        # ตอนนี้ autocommit=True ทำให้ measured_count ถูก commit ทันที แต่ Pi ยัง
-        # อ่านค่าคาบเกี่ยวไม่ได้ เพราะ handler นี้เป็น async def ที่เรียก pymysql
-        # (sync ล้วน ไม่ยอมคืน control) → event loop สลับไปเสิร์ฟ
-        # /api/session/state ระหว่างสอง UPDATE นี้ไม่ได้ Pi จึงเห็นทั้งคู่พร้อมกัน
-        # เสมอ ไม่มีทางยิง stop ทับ session ที่กำลังจะปิดตัวเองอยู่พอดี
-        #
-        # การรับประกันนี้จะหายไปทันทีถ้า: ย้ายไป async DB driver, ยัด DB call ลง
-        # threadpool, เปลี่ยน endpoint นี้เป็น `def` ธรรมดา (FastAPI จะโยนเข้า
-        # threadpool ให้รันขนานได้), หรือรัน uvicorn หลาย worker
-        # → ถ้าทำอย่างใดอย่างหนึ่ง ต้องรวมสอง UPDATE นี้เป็น transaction เดียว
-        #   หรือให้ stop_session เช็ค state ก่อน UPDATE แทน
         status = "continue"
         if measured >= target:
             with db.cursor() as cur:
@@ -3107,16 +2595,13 @@ async def create_measurement(req: MeasurementCreate):
                     (session_id,),
                 )
             status = "complete"
-            session_queues.pop(session_id, None)  # session จบแล้ว ลบคิวออกจาก memory
+            session_queues.pop(session_id, None)
             measure_timeouts.pop(session_id, None)
             await push_event(
                 "session_complete",
                 {"session_id": session_id, "measured": measured, "target": target},
             )
 
-        # broadcast ให้ทุก dashboard ที่เปิดอยู่ (เดิมมีเงื่อนไขข้ามตอน manual add
-        # เพราะ onNewMeasurement ฝั่ง index.html ไม่ได้เช็คว่า session_id ตรงกับ
-        # session ที่กำลังแสดงอยู่ไหม — ตอนนี้ไม่มีเส้นทาง manual แล้วจึงยิงเสมอ)
         await push_event(
             "measurement",
             {
@@ -3126,16 +2611,7 @@ async def create_measurement(req: MeasurementCreate):
                 "value_x":        req.value_x,
                 "value_y":        req.value_y,
                 "result":         result,
-                # ผลแยกรายแกน + ช่วงที่รับได้ — ให้ Live Telemetry โชว์ได้ว่า
-                # "พังที่แกนไหน" ไม่ใช่รู้แค่ result รวม (DB เก็บแค่ result
-                # รวมอย่างเดียว ค่าพวกนี้จึงต้องส่งมาทาง event ตอนวัดเสร็จ
-                # ส่วนตอน refresh หน้าเว็บ frontend คำนวณเองจาก nominal/tol
-                # ที่ /api/measurements แนบมาให้ — ดู MEASUREMENTS_SELECT)
                 "offset":         req.offset,
-                # ok_x / ok_y / ok_offset / offset_counts / offset_tol มาจาก
-                # _judge() ก้อนเดียวกับที่ใช้ตัดสิน result ข้างบน — หน้าเว็บจึง
-                # ไม่มีทางแสดงผลแยกแกนที่ขัดกับ result ที่บันทึกลง DB
-                #   offset_counts=false → IPM: โชว์ค่า offset เฉยๆ ห้ามติดป้าย OK/NG
                 **{k: verdict[k] for k in ("ok_x", "ok_y", "ok_offset", "offset_counts", "offset_tol")},
                 "measure_type":   measure_type,
                 "nominal_x":      part["nominal_x"],
@@ -3181,12 +2657,6 @@ async def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(..
     จึงคำนวณ result ใหม่เสมอหลัง update ทุกครั้ง (ไม่ว่าจะแก้ field ไหนก็ตาม) แทนที่
     จะรับค่าจาก frontend ตรงๆ กัน Result ค้างไม่ตรงกับ ALPL/ค่าที่วัดได้จริง
     """
-    # แก้ได้เฉพาะ number_alpl กับ operator เท่านั้น (ตามที่ตกลงกันไว้) —
-    # value_x/value_y เป็นผลวัดจริงจากเครื่อง ส่วน note/measure_type เป็นข้อมูล
-    # ของ session ที่ระบบกำหนดตอนวัด ไม่ควรถูกแก้ย้อนหลังผ่าน endpoint นี้
-    # operator ส่งมาเป็น "ชื่อ" จาก dropdown แล้ว resolve เป็น operator_id เอง
-    # (เหมือน pattern ของ update_part) — measurements.operator_id เป็น NOT NULL
-    # จึงไม่รับค่าว่าง ต้องเลือก operator ที่มีอยู่จริงเสมอ
     allowed = {"number_alpl"}
     db = get_db()
     try:
@@ -3221,12 +2691,6 @@ async def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(..
             if cur.rowcount == 0:
                 raise HTTPException(404, "Measurement not found")
 
-            # คำนวณ OK/NG ใหม่จากค่า value_x/value_y/number_alpl "ปัจจุบัน" ของ row
-            # นี้เสมอ (หลัง update) — ครอบคลุมทั้งกรณีแก้ ALPL, แก้ value, หรือแก้แค่ note
-            #
-            # ⚠ ต้องอ่าน measure_type ของแถวนั้นมาด้วย แล้วส่งเข้า _load_criteria/
-            #   _judge ชุดเดียวกับตอนวัดจริง — ถ้าคำนวณใหม่ด้วยเกณฑ์คนละแหล่ง
-            #   แค่กดแก้ note เฉยๆ ก็ทำให้ผล OK/NG ของแถวนั้นพลิกได้เงียบๆ
             cur.execute(
                 "SELECT number_alpl, value_x, value_y, `offset`, measure_type "
                 "FROM measurements WHERE measurement_id = %s",
@@ -3325,26 +2789,22 @@ async def upload_measurement_image(measurement_id: int, file: UploadFile = File(
             if not row:
                 raise HTTPException(404, "Measurement not found")
 
-            old_image_path = row["image_path"]  # ไฟล์เก่า (ถ้ามี) ของ ALPL นี้ — ต้องลบทิ้งเองหลังเซฟไฟล์ใหม่สำเร็จ
+            old_image_path = row["image_path"]
 
             date_str = _thai_date_str()
             dest_dir = os.path.join(ALPL_IMAGE_DIR, date_str)
             os.makedirs(dest_dir, exist_ok=True)
 
-            # ตัวสุ่มต่อท้ายชื่อไฟล์ — ใช้ secrets (CSPRNG) ไม่ใช่ random module
-            # เพราะเป็นงานที่เกี่ยวกับความปลอดภัย (เดาไม่ได้จริงในทางปฏิบัติ)
-            # 8 ไบต์ (16 ตัวอักษร hex) พอสำหรับ defense-in-depth ชั้นเสริม ไม่ต้อง
-            # ยาวถึงระดับกัน brute-force จากอินเทอร์เน็ตแบบ token รีเซ็ตรหัสผ่าน
             token = secrets.token_hex(8)
             filename = f"{row['number_alpl']}_{measurement_id}_{token}.jpg"
             dest_path_abs = os.path.join(dest_dir, filename)
-            image_path_rel = f"{date_str}/{filename}"  # เก็บลง DB แบบ forward-slash เสมอ (ใช้ต่อ URL ตรงๆ ได้)
+            image_path_rel = f"{date_str}/{filename}"
 
             try:
                 image_bytes = await file.read()
                 img = Image.open(BytesIO(image_bytes))
                 if img.mode != "RGB":
-                    img = img.convert("RGB")  # JPEG ไม่รองรับ alpha/palette (RGBA/P/LA ฯลฯ)
+                    img = img.convert("RGB")
                 img.save(dest_path_abs, "JPEG", quality=90)
             except Exception as exc:
                 raise HTTPException(500, f"บันทึก/แปลงไฟล์รูปเป็น .jpg ไม่สำเร็จ: {exc}")
@@ -3357,14 +2817,7 @@ async def upload_measurement_image(measurement_id: int, file: UploadFile = File(
                 (image_path_rel, measurement_id),
             )
 
-            # ลบไฟล์เก่าทิ้ง "หลัง" เซฟไฟล์ใหม่และอัปเดต DB สำเร็จแล้วเท่านั้น —
-            # ชื่อไฟล์มีตัวสุ่มแล้วจึงไม่ทับกันเองอัตโนมัติแบบเดิมอีกต่อไป ถ้าไม่ลบ
-            # เอง ไฟล์เก่าจะค้างสะสมในโฟลเดอร์ทุกครั้งที่วัด ALPL เดิมซ้ำวันเดียวกัน
             if old_image_path and old_image_path != image_path_rel:
-                # ใช้ _delete_image_file เพื่อให้ได้การกัน 2 ชั้นเหมือนตอน DELETE
-                # (URL ตกค้างจากยุค MinIO + path ที่หลุดออกนอกโฟลเดอร์รูป) —
-                # เดิม os.remove ตรงๆ ถ้าเจอแถวเก่าที่เก็บ URL เต็มไว้จะได้ path
-                # มั่วๆ ที่ไม่ควรไปแตะตั้งแต่แรก
                 _delete_image_file(old_image_path)
         await push_event(
             "image_updated",
@@ -3405,7 +2858,6 @@ async def delete_measurement(measurement_id: int):
                 raise HTTPException(404, "Measurement not found")
             image_path = row["image_path"]
 
-            # ── สำรองก่อนลบ ── ตัวนี้ "ย้าย" ไฟล์รูปเข้าถังขยะให้ด้วย ไม่ได้ลบ
             archived = _archive_before_delete(
                 kind="measurement", table="measurements",
                 pk={"measurement_id": measurement_id}, row=row,
@@ -3418,9 +2870,6 @@ async def delete_measurement(measurement_id: int):
             if cur.rowcount == 0:
                 raise HTTPException(404, "Measurement not found")
 
-        # ลบไฟล์รูปเฉพาะตอนที่ "สำรองไม่สำเร็จ" เท่านั้น — ถ้าสำรองได้ ไฟล์ถูก
-        # ย้ายเข้าถังขยะไปแล้ว (_delete_image_file จะหาไม่เจอและคืน False เอง
-        # อยู่แล้ว แต่เขียนเงื่อนไขให้ชัดดีกว่าพึ่งผลข้างเคียง)
         if archived is None and _delete_image_file(image_path):
             log.info("ลบไฟล์รูปของ measurement %s แล้ว (%s)", measurement_id, image_path)
         return {"ok": True}
@@ -3428,20 +2877,6 @@ async def delete_measurement(measurement_id: int):
         db.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Image URL endpoint (stub — รอดีไซน์การจัดเก็บรูปแบบ local folder)
-# ══════════════════════════════════════════════════════════════════════════════
-# เดิมตรงนี้มี 2 endpoint ที่ผูกกับ MinIO ทั้งคู่:
-#   POST /api/upload-url          — ออก presigned PUT URL ให้ Agent อัปโหลดรูป
-#   GET  /api/image-url/{id}      — ออก presigned GET URL ให้ dashboard ดูรูป
-# architecture ใหม่เลิกใช้ MinIO แล้ว รูปจะเก็บเป็นไฟล์ในโฟลเดอร์บนเครื่อง PC
-# แทน แต่ดีไซน์การจัดเก็บ (โครงสร้างโฟลเดอร์/ชื่อไฟล์/ใครเป็นคนย้ายไฟล์) ยังไม่
-# fix — จึงตัด /api/upload-url ทิ้งไปเลย (Agent ตอนนี้ไม่อัปโหลดรูปแล้ว) ส่วน
-# /api/image-url: ดีไซน์เสร็จแล้ว — image_path ใน DB เป็น path สัมพัทธ์ต่อ
-# ALPL_IMAGE_DIR เสมอ (เช่น "22-07-2569/203_22-07-2569.jpg" — แยกโฟลเดอร์ตาม
-# วันที่วัด ดู upload_measurement_image ด้านบน) จึงต่อ URL ตรงๆ ได้จาก static
-# mount "/media/alpl" (ท้ายไฟล์) ไม่ต้อง
-# ออก presigned URL แบบ MinIO เดิมอีกต่อไป (ไฟล์อยู่บนดิสก์เครื่องนี้ตรงๆ)
 @app.get("/api/image-url/{measurement_id}")
 async def get_image_url(measurement_id: int):
     db = get_db()
@@ -3466,15 +2901,6 @@ async def get_image_url(measurement_id: int):
         db.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Export (CSV) — เทมเพลตเลือกคอลัมน์ + filter + preview
-# ══════════════════════════════════════════════════════════════════════════════
-# SELECT ก้อนเดียวที่ join ครบทุกตารางที่ export อาจต้องใช้ — ดึงมาทั้งหมดเสมอ
-# แล้วค่อยเลือก/จัดรูปแบบคอลัมน์ในฝั่ง Python ตามเทมเพลต (ไม่ประกอบ SQL แบบ
-# dynamic จากค่าที่ผู้ใช้ส่งมา จึงไม่มีช่องให้ SQL injection เลย)
-# nominal/tolerance ใช้กติกาเดียวกับ MEASUREMENTS_SELECT (IPM → package_size,
-# New/Rework → part_number) — รายงานที่ export ออกไปต้องเป็นเกณฑ์ชุดเดียวกับที่
-# ใช้ตัดสิน OK/NG จริง ไม่งั้นคนอ่านรายงานจะคำนวณตามแล้วได้ผลไม่ตรงกับคอลัมน์ Result
 EXPORT_SELECT = """
     SELECT m.measurement_id, m.session_id, m.number_alpl, m.value_x, m.value_y,
            m.`offset` AS `offset`,
@@ -3534,7 +2960,6 @@ def _fmt_timestamp(r, fmt: str = "datetime") -> str:
     return ts.strftime("%d/%m/%Y %H:%M:%S")
 
 
-# รูปแบบที่ให้เลือกได้ของช่องวันเวลา (frontend เอาไปทำ dropdown บนเซลล์)
 _TIME_FORMATS = [
     {"key": "date",     "label": "Date"},
     {"key": "time",     "label": "Time"},
@@ -3589,49 +3014,23 @@ def _tolerance_spec(r) -> str:
     return "  ".join(parts)
 
 
-# catalog ของคอลัมน์ที่เลือกใส่เทมเพลตได้
-#   key    → ชื่อที่เก็บใน export_template.columns_json (เป็น "สัญญา" กับ frontend)
-#   label  → หัวคอลัมน์ในไฟล์ CSV
-#   group  → ใช้จัดกลุ่มในหน้าเลือกคอลัมน์
-#   get    → ฟังก์ชันดึง/จัดรูปแบบค่าจาก row ที่ EXPORT_SELECT คืนมา
-# หมายเหตุ: nominal และ tolerance แยกเป็นคอลัมน์ละค่า (Nominal X, Nominal Y,
-# Upper Tol, Lower Tol) ไม่รวมเป็นช่องเดียวแบบที่แสดงบนหน้าเว็บ ("4.030 / 4.030")
-# เพราะไฟล์ export เอาไปคำนวณต่อใน Excel/Power BI ถ้ารวมเป็นสตริงจะต้องมาแยกเอง
 EXPORT_COLUMNS: Dict[str, Dict[str, Any]] = {
-    # row_number = ไม่ได้มาจาก DB — _render_report นับลำดับแถวให้ตอนคลี่ผัง
-    # scope=report เพราะ CSV ไม่ต้องมีเลขลำดับ (Excel/โปรแกรมอื่นใส่เองได้)
     "item":          {"label": "Item",          "group": "ข้อมูลการวัด", "scope": "report",
                       "row_number": True, "get": lambda r: ""},
     "number_alpl":   {"label": "ALPL",          "group": "ข้อมูลการวัด",
                       "header": "Number ALPL", "get": lambda r: r["number_alpl"]},
-    # Value X/Y เป็น scope=csv เพราะในรายงานมันไม่ยืนเดี่ยว — เป็นส่วนหนึ่งของ
-    # บล็อก Tolerance เสมอ (ดู tolerance_spec ด้านล่าง)
-    # values/state = ใช้ตั้ง "หน้าตาแยกตามค่า" ในรายงาน (เช่น เกินสเปกให้พื้นแดง)
-    # state ของแกนต้องคำนวณเอง ไม่ใช้ Result เพราะ Result เป็นผลรวมของทั้ง X และ Y
     "value_x":       {"label": "Value X",       "group": "ข้อมูลการวัด", "scope": "csv",
                       "values": ["OK", "NG"], "state": lambda r: _axis_state(r, "x"),
                       "get": lambda r: _fmt_num(r["value_x"])},
     "value_y":       {"label": "Value Y",       "group": "ข้อมูลการวัด", "scope": "csv",
                       "values": ["OK", "NG"], "state": lambda r: _axis_state(r, "y"),
                       "get": lambda r: _fmt_num(r["value_y"])},
-    # offset ไม่ได้เทียบกับช่วง nominal ± tol เหมือน X/Y แต่เทียบกับเพดาน
-    # offset_tol ตัวเดียว จึงมี state เป็นของตัวเองไม่ใช้ _axis_state
     "offset":        {"label": "Offset",        "group": "ข้อมูลการวัด", "scope": "csv",
                       "values": ["OK", "NG"],
                       "state": lambda r: (
                           "" if r.get("offset") is None or r.get("offset_tol") is None
                           else ("OK" if _offset_ok(r.get("offset"), r.get("offset_tol")) else "NG")),
                       "get": lambda r: _fmt_num(r.get("offset"))},
-    # ── บล็อก Tolerance (รายงานเท่านั้น) ────────────────────────────────
-    # ลากครั้งเดียวได้ผังกว้าง 2 คอลัมน์ สูง 3 แถว:
-    #   แถว 1  [        Tolerance        ]   ผสาน 2 คอลัมน์ — หัวตาราง
-    #   แถว 2  [   ข้อมูล Tolerance      ]   ผสาน 2 คอลัมน์ — สเปกของกลุ่ม
-    #   แถว 3   ข้อมูล Value X | ข้อมูล Value Y  แถวที่ทำซ้ำต่อ 1 การวัด
-    # แถว 2 พิมพ์ครั้งเดียวต่อกลุ่ม เพราะรายงานถูกแบ่งกลุ่มด้วยสเปกนี้เสมอ
-    #
-    # label  = ชื่อชิปในแผงซ้าย (บอกว่าลากแล้วได้อะไรบ้าง)
-    # header = ข้อความที่พิมพ์เป็นหัวตารางจริงในรายงาน — คนละอันกับ label
-    #          เพราะหัวตารางบนกระดาษต้องสั้นว่า "Tolerance" เฉยๆ
     "tolerance_spec": {
         "label": "Tolerance + Value X/Y", "group": "ข้อมูลการวัด", "scope": "report",
         "get": _tolerance_spec,
@@ -3648,8 +3047,6 @@ EXPORT_COLUMNS: Dict[str, Dict[str, Any]] = {
     "note":          {"label": "Note",          "group": "ข้อมูลการวัด", "get": lambda r: r["note"] or ""},
     "operator":      {"label": "Operator",      "group": "ข้อมูลการวัด", "get": lambda r: r["operator_name"] or ""},
     "measure_type":  {"label": "Measure Type",  "group": "ข้อมูลการวัด", "get": lambda r: r["measure_type"] or ""},
-    # header = ข้อความหัวตารางเริ่มต้นในรายงาน (ต่างจาก label ที่เป็นชื่อชิป/หัว CSV)
-    # formats = รูปแบบที่ติ๊กเลือกได้บนเซลล์ — ค่าเริ่มต้นคือตัวแรกในลิสต์ (date)
     "timestamp":     {"label": "Date",          "csv_label": "Timestamp",
                       "group": "ข้อมูลการวัด",
                       "header": "Date", "formats": _TIME_FORMATS,
@@ -3661,8 +3058,6 @@ EXPORT_COLUMNS: Dict[str, Dict[str, Any]] = {
     "handler":       {"label": "Handler",       "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["handler_name"] or ""},
     "package_size":  {"label": "Package Size",  "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["package_size"] or ""},
     "template_name": {"label": "Template",      "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["template_name"] or ""},
-    # ── สเปกขนาด: CSV ใช้ 4 ช่องแยก / รายงาน PDF-Excel ใช้ช่องรวมช่องเดียว ──
-    # scope บอกว่าคอลัมน์นี้โผล่ในหน้าไหน (ไม่ใส่ = โผล่ทั้งสองหน้า)
     "nominal_x":     {"label": "Nominal X",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["nominal_x"])},
     "nominal_y":     {"label": "Nominal Y",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["nominal_y"])},
     "upper_tol":     {"label": "Upper Tol",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["upper_tol"])},
@@ -3675,9 +3070,6 @@ EXPORT_COLUMNS: Dict[str, Dict[str, Any]] = {
 }
 
 
-# kind ของเทมเพลตมี 3 ค่า: 'csv' | 'pdf' | 'excel' — แยกลิสต์กันคนละหน้า
-# ('report' คือชื่อเก่าสมัยที่ PDF/Excel ใช้ลิสต์ร่วมกัน ยังอ่านของเดิมได้อยู่)
-# ส่วน "ชุดคอลัมน์" มีแค่ 2 แบบ: csv ใช้คอลัมน์แยก / รายงานใช้บล็อก Tolerance
 def _columns_scope(kind: str) -> str:
     return "csv" if kind == "csv" else "report"
 
@@ -3697,27 +3089,23 @@ async def list_export_columns(kind: str = "csv"):
             continue
         item = {"key": k, "label": c["label"], "group": c["group"]}
         if c.get("block"):
-            # แนบ values ของ "ลูก" ในบล็อกไปด้วย (value_x/value_y ก็ตั้งหน้าตา
-            # แยกตามค่าได้เหมือน Result) — ลูกไม่ได้อยู่ใน catalog เป็นตัวของตัวเอง
             blk = dict(c["block"])
             blk["data"] = [
                 {**d, **({"values": EXPORT_COLUMNS[d["key"]]["values"]}
                          if EXPORT_COLUMNS.get(d["key"], {}).get("values") else {})}
                 for d in c["block"]["data"]
             ]
-            item["block"] = blk             # ผังหลายเซลล์ที่ frontend ต้องกางออก
+            item["block"] = blk
         if c.get("header"):
-            item["header"] = c["header"]    # ข้อความหัวตารางเริ่มต้นในรายงาน
+            item["header"] = c["header"]
         if c.get("values"):
-            item["values"] = c["values"]    # ค่าที่เป็นไปได้ → ตั้งหน้าตาแยกตามค่าได้
+            item["values"] = c["values"]
         if c.get("formats"):
-            item["formats"] = c["formats"]  # รูปแบบที่ติ๊กเลือกได้บนเซลล์
+            item["formats"] = c["formats"]
         out.append(item)
     return out
 
 
-# คอลัมน์รวมแบบเก่าที่เคยมีในเทมเพลตที่บันทึกไว้ก่อนหน้า → คอลัมน์ย่อยชุดใหม่
-# (เทมเพลตเก่าที่ผู้ใช้เซฟไว้แล้วจะยังใช้งานได้ ไม่ใช่หายไปเงียบๆ)
 _LEGACY_COLUMN_ALIASES = {
     "nominal_xy": ["nominal_x", "nominal_y"],
     "tolerance":  ["upper_tol", "lower_tol"],
@@ -3803,8 +3191,6 @@ async def list_export_templates(kind: str = "csv"):
 
 class ExportTemplateBody(BaseModel):
     name: str
-    # เทมเพลต CSV ใช้ columns ส่วนเทมเพลตรายงาน (PDF/Excel) ใช้ layout
-    # อย่างใดอย่างหนึ่งต้องมี (ดู _validate_template_body)
     columns: Optional[List[str]] = None
     layout:  Optional[Dict[str, Any]] = None
     kind:    str = "csv"
@@ -3871,7 +3257,6 @@ async def update_export_template(export_template_id: int, body: ExportTemplateBo
     try:
         with db.cursor() as cur:
             row = _get_template(cur, export_template_id)
-            # เทมเพลตตั้งต้นของระบบล็อกไว้ — ให้ Duplicate ไปแก้ตัวใหม่แทน
             if row["is_default"]:
                 raise HTTPException(403, "เทมเพลตค่าเริ่มต้นแก้ไขไม่ได้ — กด Duplicate แล้วแก้ตัวสำเนาแทน")
             try:
@@ -3918,8 +3303,6 @@ async def duplicate_export_template(export_template_id: int):
             name, n = base, 2
             while name in taken:
                 name, n = f"{base} {n}", n + 1
-            # สำเนาต้องเก็บทั้ง 2 ฟิลด์ตามชนิดของต้นฉบับ (csv ใช้ columns_json,
-            # report ใช้ layout_json) — คัดลอกดิบๆ ไปเลยไม่ต้องแปลง
             cur.execute(
                 "INSERT INTO export_template (name, kind, columns_json, layout_json, is_default) "
                 "VALUES (%s, %s, %s, %s, 0)",
@@ -3937,12 +3320,6 @@ async def duplicate_export_template(export_template_id: int):
         db.close()
 
 
-# subquery หา measurement_id ของ "การวัดครั้งล่าสุดของแต่ละ ALPL"
-# คิดจากข้อมูลทั้งตารางก่อนเสมอ (ไม่ขึ้นกับ filter อื่น) แล้วค่อยเอาไป AND กับ
-# filter ที่เหลือ — ให้ความหมายตรงกับ ISLatest ที่ใช้ใน Power BI คือ
-# "แถวนี้เป็นค่าล่าสุดของ ALPL นั้นไหม" เป็นคุณสมบัติของแถว ไม่ใช่ผลของการกรอง
-# (เช่นกรอง Result=NG + ล่าสุด = ALPL ที่ "สถานะปัจจุบันยังไม่ผ่าน" ไม่ใช่
-#  "เคยมี NG ครั้งล่าสุดในบรรดา NG ทั้งหมด" ซึ่งคนละความหมายกันคนละเรื่อง)
 def _latest_only_sql(inner_where: str) -> str:
     """เงื่อนไข "เอาเฉพาะการวัดล่าสุดของแต่ละ ALPL"
 
@@ -3969,7 +3346,6 @@ def _latest_only_sql(inner_where: str) -> str:
 )"""
 
 
-# รูปแบบที่ยอมรับต่อ 1 ท่อน: "400" หรือ "400-407" (เว้นวรรครอบๆ ได้)
 _RANGE_PART_RE = re.compile(r"^\s*(\d+)\s*(?:-\s*(\d+)\s*)?$")
 
 
@@ -3987,7 +3363,7 @@ def _parse_int_ranges(spec: str, field_label: str):
     ranges, singles = [], []
     for part in str(spec).split(","):
         if not part.strip():
-            continue  # เช่น "400,,500" หรือคอมมาท้ายสุด — ข้ามไปเฉยๆ
+            continue
         m = _RANGE_PART_RE.match(part)
         if not m:
             raise HTTPException(
@@ -4001,9 +3377,9 @@ def _parse_int_ranges(spec: str, field_label: str):
             continue
         hi = int(m.group(2))
         if lo > hi:
-            lo, hi = hi, lo          # พิมพ์กลับด้าน (407-400) ก็ยังใช้ได้
+            lo, hi = hi, lo
         if lo == hi:
-            singles.append(lo)       # "400-400" ก็คือตัวเดียว
+            singles.append(lo)
         else:
             ranges.append((lo, hi))
     return sorted(set(ranges)), sorted(set(singles))
@@ -4052,8 +3428,6 @@ def _export_filters(f: Dict[str, Any]):
         else:
             conditions.append(f"{col} = %s"); params.append(v)
 
-    # ALPL รับได้ทั้งตัวเดียว, หลายตัวคั่นคอมมา และช่วง — ประกอบเป็นเงื่อนไข
-    # เดียวที่ OR กันเอง เช่น (BETWEEN 400 AND 407 OR BETWEEN 500 AND 507 OR IN (600))
     alpl_spec = f.get("number_alpl")
     if alpl_spec not in (None, ""):
         alpl_ranges, alpl_singles = _parse_int_ranges(alpl_spec, "ALPL")
@@ -4078,24 +3452,18 @@ def _export_filters(f: Dict[str, Any]):
     eq("ps.package_size",   "package_size")
     eq("p.po_number",       "po_number")
 
-    # ช่วงวันที่ของ "วันที่วัด" (measurements.timestamp)
     if f.get("date_from"):
         conditions.append("m.timestamp >= %s"); params.append(_day_start(f["date_from"]))
     if f.get("date_to"):
         conditions.append("m.timestamp <= %s"); params.append(_day_end(f["date_to"]))
-    # ช่วงวันที่ของ "วันที่รับชิ้นงาน" (parts_specifications.recieve_date)
     if f.get("recv_from"):
         conditions.append("p.recieve_date >= %s"); params.append(_day_start(f["recv_from"]))
     if f.get("recv_to"):
         conditions.append("p.recieve_date <= %s"); params.append(_day_end(f["recv_to"]))
 
-    # Description ค้นแบบมีคำนี้อยู่ข้างใน (ไม่ต้องพิมพ์ตรงเป๊ะ)
     if f.get("description"):
         conditions.append("p.description LIKE %s"); params.append(f"%{f['description']}%")
 
-    # ต้องต่อท้ายสุดเสมอ — เงื่อนไขนี้ห่อ WHERE ของ "ทุกข้อข้างบน" ไว้ข้างใน
-    # ลำดับพารามิเตอร์จึงเป็น [ของข้อข้างบน..., ของข้อข้างบนซ้ำอีกรอบ...]
-    # (ถ้าย้ายไปไว้กลางๆ ลำดับ %s จะเพี้ยนแล้วได้ข้อมูลผิดแบบเงียบๆ)
     if f.get("latest_only"):
         inner_where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
         inner_params = list(params)
@@ -4105,9 +3473,6 @@ def _export_filters(f: Dict[str, Any]):
     return (("WHERE " + " AND ".join(conditions)) if conditions else ""), params
 
 
-# FROM + JOIN ชุดเดียวกับ EXPORT_SELECT — ใช้ตอนนับ COUNT(*) เพราะ WHERE อ้างถึง
-# คอลัมน์ของตาราง join ด้วย (vendor/owner/handler ฯลฯ) จะนับจาก measurements
-# เปล่าๆ ไม่ได้
 _EXPORT_FROM = """
     FROM measurements m
     LEFT JOIN operator op             ON m.operator_id = op.operator_id
@@ -4170,19 +3535,6 @@ def _fetch_export_raw(where: str, params: list, limit: Optional[int] = None):
         db.close()
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# ตัวเรนเดอร์รายงาน — ใช้ร่วมกันทั้ง Preview / Excel / PDF
-# ══════════════════════════════════════════════════════════════════════════
-# รับผังจาก report-template.html (layout_json) + ข้อมูลจริง แล้วคลี่ออกเป็น
-# ตาราง 2 มิติที่พร้อมวาด ไม่ว่าจะวาดด้วย HTML (preview/print) หรือ openpyxl
-#
-# โครงของผัง 1 ชุด:
-#   แถว 0 .. dataRow-1   = ส่วนหัว   — พิมพ์ซ้ำทุกกลุ่ม (มีเซลล์ spec ของกลุ่ม)
-#   แถว dataRow          = แถวข้อมูล — ทำซ้ำ 1 แถวต่อ 1 การวัด
-#   แถว dataRow+1 .. จบ  = ส่วนท้าย  — พิมพ์ครั้งเดียวตอนจบรายงาน (ช่องเซ็นชื่อ)
-#
-# รายงานถูกแบ่งกลุ่มด้วย tolerance_spec เสมอ (ดู GROUP_BY ใน frontend) ชิ้นงาน
-# คนละสเปกจึงไม่ปนกันในตารางเดียว
 REPORT_GROUP_BY = "tolerance_spec"
 
 
@@ -4194,7 +3546,6 @@ def _cell_out(cell: Dict[str, Any], text: str) -> Dict[str, Any]:
         out["span"] = {"r": int(span.get("r", 1)), "c": int(span.get("c", 1))}
     if cell.get("hidden"):
         out["hidden"] = True
-    # ทำเครื่องหมายไว้ว่าเซลล์ไหนมาจากข้อมูลจริง — ตัววาดใช้ตัดสินใจตีเส้นขอบ
     if cell.get("f") or cell.get("spec"):
         out["data"] = True
     if cell.get("hdr"):
@@ -4256,10 +3607,8 @@ def _render_report(layout: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[s
             key = cell.get("f")
             col = EXPORT_COLUMNS.get(key) if key else None
 
-            # ช่องลำดับแถว (Item) — ค่าไม่ได้อยู่ใน DB ต้องนับตอนคลี่ผัง
             if col and col.get("row_number"):
                 text = str(item_no)
-            # รูปแบบที่ผู้ใช้ติ๊กไว้บนเซลล์ (ตอนนี้มีแค่ช่องวันเวลา: date/time/ทั้งคู่)
             elif col and col.get("get_fmt") and cell.get("fmt"):
                 text = col["get_fmt"](row, cell["fmt"])
             elif col:
@@ -4271,10 +3620,6 @@ def _render_report(layout: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[s
             if "span" in c:
                 c["span"]["r"] = 1
 
-            # หน้าตาแยกตามค่า — เช่น Result OK พื้นเขียว / NG พื้นแดง
-            # "สถานะ" ของเซลล์มาจากฟังก์ชัน state ของคอลัมน์ ไม่ใช่ข้อความที่แสดง
-            # เพราะบางคอลัมน์สถานะกับค่าที่แสดงเป็นคนละเรื่อง เช่น Value X แสดง
-            # "4.089" แต่สถานะคือ NG (เกินสเปก) — ถ้าจับคู่ด้วยข้อความจะไม่เจอเลย
             variants = cell.get("variants") or {}
             if variants:
                 state = col["state"](row) if col and col.get("state") else str(text)
@@ -4283,11 +3628,6 @@ def _render_report(layout: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[s
             out.append(c)
         return out
 
-    # จัดกลุ่มตามสเปก โดยรักษาลำดับที่เจอครั้งแรกไว้ (ไม่เรียงใหม่)
-    #
-    # แบ่งกลุ่มเฉพาะเมื่อผังมีช่อง Tolerance อยู่จริงเท่านั้น — ถ้าผู้ใช้ทำ
-    # เทมเพลตที่ไม่ได้ลาก Tolerance ลงไป การแบ่งกลุ่มจะทำให้หัวตารางถูกพิมพ์ซ้ำ
-    # หลายรอบโดยไม่มีอะไรบนกระดาษบอกว่าทำไมถึงแยกก้อน ผู้ใช้จะงงว่าเป็นบั๊ก
     has_spec = any(
         (cell or {}).get("spec") or (cell or {}).get("hdr") == REPORT_GROUP_BY
         for row in grid for cell in row
@@ -4299,13 +3639,6 @@ def _render_report(layout: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[s
     elif rows:
         groups[""] = list(rows)
 
-    # แถวส่วนหัวแบ่งเป็น 2 พวก:
-    #   - แถวที่มีช่องข้อมูลผูกอยู่ (ชื่อคอลัมน์ / สเปกของกลุ่ม) → ซ้ำทุกกลุ่ม
-    #     เพราะแต่ละกลุ่มเป็นตารางของมันเอง ต้องมีหัวตารางกำกับ
-    #   - แถวที่เป็นข้อความที่ผู้ใช้พิมพ์เองล้วนๆ (เช่น "ตรวจสอบการวัดวันที่ ...")
-    #     → พิมพ์ครั้งเดียวตอนกลุ่มแรก เพราะเป็นหัวเรื่องของทั้งรายงาน ไม่ใช่ของ
-    #     ตารางใดตารางหนึ่ง ถ้าซ้ำทุกกลุ่มจะกลายเป็นชื่อเรื่องโผล่กลางหน้า
-    # เช็คที่เซลล์ต้นของการผสาน (ข้าม hidden) เพราะหัวเรื่องมักผสานยาวทั้งแถว
     def _repeats_per_group(r: int) -> bool:
         return any(
             (c.get("hdr") or c.get("spec") or c.get("f"))
@@ -4315,8 +3648,6 @@ def _render_report(layout: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[s
     repeat_head = {r: _repeats_per_group(r) for r in range(0, data_row)}
 
     out_rows: List[List[Dict[str, Any]]] = []
-    # ลำดับแถว (Item) นับต่อเนื่องทั้งรายงาน ไม่รีเซ็ตตอนขึ้นกลุ่มใหม่ —
-    # ตรงกับรายงานกระดาษที่ห้อง PM Kit ใช้ ซึ่งเลขลำดับคือ "ชิ้นที่เท่าไรของใบนี้"
     item_no = 0
     for gi, (spec_text, members) in enumerate(groups.items()):
         for r in range(0, data_row):
@@ -4326,15 +3657,9 @@ def _render_report(layout: Dict[str, Any], rows: List[Dict[str, Any]]) -> Dict[s
         for m in members:
             item_no += 1
             out_rows.append(render_data(m, item_no))
-    # ส่วนท้ายพิมพ์ครั้งเดียวตอนจบ (ปกติเป็นช่องเซ็นชื่อ/ผู้ตรวจ)
     for r in range(data_row + 1, n_rows):
         out_rows.append(clamp(render_static(r, ""), r, n_rows - 1))
 
-    # ── ตัดคอลัมน์/แถวว่างที่ห้อยท้ายทิ้ง ──────────────────────────────
-    # ผังในหน้าแก้ไขมี 10 คอลัมน์ 5 แถวเสมอ แต่ผู้ใช้ใช้จริงไม่กี่ช่อง ถ้าปล่อย
-    # ช่องว่างติดไปด้วย เวลาพิมพ์ PDF ตารางจะถูกจัดกึ่งกลางโดยนับช่องว่างพวกนั้น
-    # เข้าไปด้วย ทำให้ส่วนที่มีเนื้อหาดูเบี้ยวไปทางซ้าย และมีเส้นจางๆ ห้อยอยู่
-    # ทางขวาของกระดาษ
     def filled(cell: Dict[str, Any]) -> bool:
         return bool((cell.get("v") or "").strip() or cell.get("data") or cell.get("head"))
 
@@ -4366,12 +3691,7 @@ def _load_report_layout(cur, export_template_id: int) -> Dict[str, Any]:
     return {"name": tpl["name"], "kind": tpl.get("kind") or "pdf", "layout": layout}
 
 
-# พารามิเตอร์ filter ที่ /api/export/preview กับ /api/export/csv รับเหมือนกันทุกตัว
-# (ประกาศเป็น Pydantic model แล้วใช้ Depends เพื่อไม่ต้องเขียนซ้ำ 2 ที่ และกัน
-#  ลืมเพิ่มข้างใดข้างหนึ่งจนตัวอย่างกับไฟล์จริงไม่ตรงกัน)
 def export_filters_dep(
-    # ALPL เป็น str ไม่ใช่ int — รับได้ทั้ง "400", "400,500,600" และ
-    # "400-407,500-507" (ดู _parse_int_ranges)
     number_alpl:  Optional[str] = None,
     date_from:    Optional[str] = None,
     date_to:      Optional[str] = None,
@@ -4380,10 +3700,6 @@ def export_filters_dep(
     session_id:   Optional[int] = None,
     po_number:    Optional[int] = None,
     description:  Optional[str] = None,
-    # ── ช่องแบบเลือกได้หลายค่า (multi-select) ────────────────────────────
-    # ส่งมาเป็น query param ซ้ำๆ เช่น ?vendor=A&vendor=B → กลายเป็น IN ('A','B')
-    # ต้องประกาศเป็น dependency แบบฟังก์ชัน ไม่ใช่ Pydantic model + Depends()
-    # เพราะ field ชนิด List ใน model ไม่ผูกกับ query param (ทดสอบแล้ว)
     result:       Optional[List[str]] = Query(None),
     operator:     Optional[List[str]] = Query(None),
     measure_type: Optional[List[str]] = Query(None),
@@ -4392,8 +3708,6 @@ def export_filters_dep(
     part_number:  Optional[List[str]] = Query(None),
     handler:      Optional[List[str]] = Query(None),
     package_size: Optional[List[str]] = Query(None),
-    # ค่าเริ่มต้นเป็น True — หน้า Export ต้องการ "สถานะล่าสุดของแต่ละ ALPL"
-    # เป็นหลัก ไม่ใช่ประวัติทุกครั้งที่เคยวัด (ติ๊กออกได้ถ้าอยากได้ทั้งหมด)
     latest_only:  bool = True,
 ) -> Dict[str, Any]:
     """พารามิเตอร์ filter ที่ /api/export/preview กับ /api/export/csv รับเหมือนกัน
@@ -4482,10 +3796,6 @@ async def export_csv(
     df.to_csv(buf, index=False, encoding="utf-8-sig")
     buf.seek(0)
 
-    # ชื่อไฟล์ใส่วันที่ให้ด้วย — ดาวน์โหลดหลายรอบจะได้ไม่ทับกันใน Downloads
-    # ชื่อไฟล์ที่ผู้ใช้กรอกในหน้า Export มาก่อน — ถ้าไม่ส่งมาค่อยตั้งชื่อตามเวลาให้
-    # กรองตัวอักษรที่ใช้ในชื่อไฟล์ Windows ไม่ได้ออกอีกชั้น (ฝั่งหน้าเว็บกรองแล้ว
-    # แต่ endpoint นี้เรียกตรงจาก URL ได้ จึงต้องกันเองด้วย ไม่เชื่อ input จากข้างนอก)
     safe_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "", (filename or "")).strip(". ")
     fname = (f"{safe_name}.csv" if safe_name
              else f"measurements_{datetime.now().strftime('%Y%m%d_%H%M')}.csv")
@@ -4496,16 +3806,9 @@ async def export_csv(
     )
 
 
-# ── รายงาน PDF/Excel — ใช้ผังจาก report-template.html ────────────────────────
-# preview กับไฟล์จริงเรียก _render_report ตัวเดียวกัน สิ่งที่เห็นบนจอจึงตรงกับ
-# ไฟล์ที่ได้เสมอ (ถ้าแยกโค้ดกัน 2 ชุดจะเพี้ยนกันเงียบๆ ตอนแก้ข้างเดียว)
 
-# preview ไม่ดึงทั้งหมด — ผังใหญ่ๆ ที่มีหมื่นแถวจะทำให้หน้าเว็บค้าง
 REPORT_PREVIEW_LIMIT = 300
 
-# เพดานของ "ไฟล์จริง" — ทั้ง Excel และ PDF สร้างตารางทั้งก้อนไว้ในหน่วยความจำ
-# ก่อนส่งออก ถ้าไม่จำกัดแล้วเจอข้อมูลหลักหมื่นแถว จะกินแรมหนักและ request ค้าง
-# จนหมดเวลาแบบเงียบๆ — ปฏิเสธไปเลยพร้อมบอกให้กรองข้อมูลก่อน ดีกว่าปล่อยให้ค้าง
 REPORT_MAX_ROWS = int(os.getenv("REPORT_MAX_ROWS", 20000))
 
 
@@ -4595,9 +3898,6 @@ async def export_xlsx(
         v = v.strip().lstrip("#")
         return v.upper() if re.fullmatch(r"[0-9A-Fa-f]{6}", v) else None
 
-    # ผังเก็บค่าการจัดวางเป็นคำของ CSS แต่ openpyxl ใช้คำคนละชุด ถ้าส่งคำที่มัน
-    # ไม่รู้จักไปจะโยน ValueError ทันที (เคสจริงที่เจอ: valign='middle' ของ CSS
-    # ซึ่ง openpyxl เรียกว่า 'center') — แปลงและกรองให้เหลือเฉพาะค่าที่ยอมรับได้
     _H = {"left": "left", "center": "center", "right": "right", "justify": "justify"}
     _V = {"top": "top", "middle": "center", "center": "center", "bottom": "bottom"}
 
@@ -4638,8 +3938,6 @@ async def export_xlsx(
             if fill:
                 x.fill = PatternFill("solid", fgColor=fill)
             x.alignment = align_of(s)
-            # เส้นขอบหนารอบเซลล์ที่มีเนื้อหา — ตรงกับที่ตกลงไว้ว่าในหน้าแก้ไข
-            # ไม่ต้องโชว์เส้น แต่ตอน export ต้องมี
             if cell.get("v") or cell.get("data") or cell.get("head"):
                 x.border = box
 
@@ -4647,9 +3945,6 @@ async def export_xlsx(
             if span and (span["r"] > 1 or span["c"] > 1):
                 r2 = r + max(1, span["r"]) - 1
                 c2 = min(c + max(1, span["c"]) - 1, rendered["nCols"])
-                # ข้ามถ้าซ้อนกับช่วงที่ผสานไปแล้ว — openpyxl ไม่ห้ามตอนสร้าง แต่
-                # ไฟล์ที่ได้จะเปิดไม่ขึ้นใน Excel (บอกว่าไฟล์เสียหาย) ยอมให้ผสาน
-                # ไม่ครบดีกว่าได้ไฟล์ที่เปิดไม่ได้เลย
                 if not any(
                     m.min_row <= r2 and r <= m.max_row and m.min_col <= c2 and c <= m.max_col
                     for m in ws.merged_cells.ranges
@@ -4675,13 +3970,7 @@ async def export_xlsx(
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ถังขยะ — ดูรายการ / กู้คืน / ลบอัตโนมัติเมื่อเกินอายุ
-# ══════════════════════════════════════════════════════════════════════════════
-# ⚠ ไฟล์ในถังขยะ "ห้าม" mount เป็น static เด็ดขาด — ต่างจาก image_ALPL ที่เปิด
-#   ให้เข้าถึงผ่าน /media/alpl ถังขยะเข้าถึงได้เฉพาะผ่าน endpoint ด้านล่างเท่านั้น
 
-# ป้ายชื่อภาษาไทยของแต่ละ kind — ใช้แสดงในตารางหน้าเว็บ
 _DELETED_KIND_LABEL = {
     "measurement":  "ผลการวัด",
     "part":         "Part (ALPL)",
@@ -4720,7 +4009,6 @@ def _deleted_summary(payload: Dict[str, Any]) -> str:
     if kind == "part":
         n = len(payload.get("related", {}).get("sessions", []))
         return f"ALPL {row.get('number_alpl')}" + (f" (+ {n} sessions)" if n else "")
-    # lookup ทั้งหมดมีคอลัมน์ชื่อลงท้ายด้วย _name
     for k, v in row.items():
         if k.endswith("_name") or k == "package_size":
             return str(v)
@@ -4743,7 +4031,7 @@ def _purge_old_deleted() -> int:
             continue
         try:
             d, m, y = day.split("-")
-            day_date = date(int(y) - 543, int(m), int(d))   # แปลง พ.ศ. → ค.ศ.
+            day_date = date(int(y) - 543, int(m), int(d))
         except (ValueError, TypeError):
             log.warning("ข้ามโฟลเดอร์ในถังขยะที่ชื่อไม่ใช่รูปแบบวันที่: %s", day)
             continue
@@ -4770,7 +4058,7 @@ async def list_deleted():
             continue
         kind = payload.get("kind", "?")
         items.append({
-            "id":         f"{day}/{name}",          # ใช้เป็นตัวอ้างตอนกู้คืน
+            "id":         f"{day}/{name}",
             "deleted_at": payload.get("deleted_at"),
             "kind":       kind,
             "kind_label": _DELETED_KIND_LABEL.get(kind, kind),
@@ -4824,7 +4112,6 @@ async def restore_deleted(body: Dict[str, str] = Body(...)):
 
             try:
                 insert(table, row)
-                # sessions ต้องเข้าหลัง parts_specifications เสมอ (FK ชี้ไปหา)
                 for tbl, rows in related.items():
                     for r in rows:
                         insert(tbl, r)
@@ -4841,7 +4128,6 @@ async def restore_deleted(body: Dict[str, str] = Body(...)):
                     )
                 raise HTTPException(409, f"กู้คืนไม่สำเร็จ: {exc}")
 
-        # ── ย้ายไฟล์รูปกลับที่เดิม (หลัง DB สำเร็จแล้วเท่านั้น) ──────────────
         image_file  = payload.get("image_file")
         image_path  = row.get("image_path")
         if image_file and image_path:
@@ -4851,11 +4137,10 @@ async def restore_deleted(body: Dict[str, str] = Body(...)):
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.move(src, dst)
             except OSError as exc:
-                # DB กู้แล้วแต่รูปย้ายไม่สำเร็จ — ไม่ rollback เพราะข้อมูลสำคัญกว่ารูป
                 log.warning("กู้ข้อมูลสำเร็จแต่ย้ายรูปกลับไม่ได้ (%s): %s", image_file, exc)
 
         db.commit()
-        os.remove(path)   # ออกจากถังขยะแล้ว
+        os.remove(path)
         log.info("กู้คืนจากถังขยะ: %s", item_id)
         return {"ok": True, "kind": payload.get("kind"), "table": table}
     finally:
@@ -4878,8 +4163,6 @@ async def remove_deleted(body: Dict[str, str] = Body(...)):
         image_file = None
 
     if image_file:
-        # ยึด "โฟลเดอร์ของไฟล์ json" เป็นฐานเสมอ + เอาเฉพาะชื่อไฟล์ กัน image_file
-        # ที่มี path ปนมาพาไปลบไฟล์นอกถังขยะ
         img = os.path.join(os.path.dirname(path), os.path.basename(image_file))
         try:
             os.remove(img)
@@ -4897,37 +4180,10 @@ async def purge_deleted_now():
     return {"ok": True, "removed_days": _purge_old_deleted()}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Static image files (รูป ALPL ที่ upload_measurement_image เซฟไว้)
-# ══════════════════════════════════════════════════════════════════════════════
-# ต้อง mount ก่อน static mount ที่ "/" ด้านล่างเสมอ (ตัวนั้นเป็น catch-all จับ
-# ทุก path ที่เหลือ ถ้า mount ทีหลังจะไม่มีทางไปถึง route นี้เลย) — สร้างโฟลเดอร์
-# ไว้ก่อนด้วยเผื่อยังไม่เคยมีรูปมาเลยสักใบ (StaticFiles ต้องการให้ directory
-# มีอยู่จริงตอน mount ไม่งั้น import พังทันที)
 os.makedirs(ALPL_IMAGE_DIR, exist_ok=True)
 app.mount("/media/alpl", StaticFiles(directory=ALPL_IMAGE_DIR), name="alpl-images")
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# Static dashboard files (index.html / edit.html)
-# ══════════════════════════════════════════════════════════════════════════════
-# ต้องอยู่ล่างสุดของไฟล์เสมอ — mount ที่ "/" ทำหน้าที่เป็น catch-all ให้ทุก
-# path ที่ไม่ตรงกับ route ไหนเลยด้านบน ถ้า register ไว้ก่อน (เช่นบนสุดของไฟล์)
-# มันจะดักจับ request ของ /api/... ไปหมดก่อนถึง route จริง ทำให้ API พังทันที
-#
-# โครงสร้างจริงของโปรเจกต์เป็นแบบนี้ (คนละโฟลเดอร์กับ main.py):
-#   TM-X_Project/
-#     Backend-server/main.py   (ไฟล์นี้)
-#     Backend-pc_station/agent_real.py
-#     Frontend/index.html, edit.html, ...
-# ดังนั้นต้องถอยขึ้นไป 1 ชั้นจาก main.py แล้วเข้าโฟลเดอร์ Frontend แทนที่จะใช้
-# โฟลเดอร์เดียวกับไฟล์นี้ตรงๆ (ที่พังก่อนหน้านี้เพราะ index.html ไม่ได้อยู่ใน
-# Backend-server/ ด้วย)
-#
-# html=True ทำให้เข้า "/" แล้วได้ index.html อัตโนมัติ และเข้า "/edit.html"
-# ได้ตรงๆ — เหตุผลที่ทำแบบนี้แทนรัน web server แยก: จะได้มีแค่ process เดียว
-# (uvicorn) ให้ autostart/ผูก host=127.0.0.1 ตัวเดียวจบ ไม่ต้องเปิดอีก process
-# มาเสิร์ฟไฟล์ static ต่างหาก
 _frontend_dir = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Frontend")
 )

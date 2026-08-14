@@ -122,7 +122,30 @@ async def command(req: CommandRequest):
 บรรทัดเดียว เปลี่ยน "โกหกเงียบๆ" เป็น popup ที่บอกความจริง — และกันไม่ให้เกิดเรื่อง
 แบบ Pause ซ้ำอีกในอนาคตเวลามีใครเพิ่ม action ใหม่ฝั่ง backend แล้วลืมทำฝั่ง Pi
 
-## 1.3 กด Start ไม่ติด — เคลียร์ให้สะอาด
+## 1.3 กด Start ไม่ติด — เคลียร์ให้สะอาด  ✅ **ทำแล้ว 13 ส.ค. 2569**
+
+> **สรุปสิ่งที่ทำจริง** (ต่างจากแผนเดิมเล็กน้อย — ดูรายละเอียดใต้หัวข้อ)
+>
+> | เคส | ข้อความ | ส่ง `stop` ตามไป |
+> |---|---|---|
+> | Pi ตอบ 400/500 | `Pi ปฏิเสธคำสั่ง (HTTP 400): …` | ❌ Pi ไม่ได้เริ่ม |
+> | `ConnectError` | `ติดต่อโปรแกรมบนเครื่อง Pi ไม่ได้ …` | ❌ ต่อไม่ติด |
+> | `ConnectTimeout` | `หาเครื่อง Pi ไม่เจอที่ …` | ❌ ต่อไม่ติด |
+> | `ReadTimeout` | `Pi ไม่ตอบภายใน 10 วินาที …` | ✅ **อาจเริ่มไปแล้ว** |
+>
+> `ReadTimeout` เป็นเคสเดียวที่ต่อติดและส่ง payload ออกไปแล้ว — Pi อาจรับไป
+> และกำลังยิง `T1` อยู่ ถ้าปิด session เงียบๆ จะได้สภาพ "DB บอก stopped แต่ Pi
+> ยังวัดต่อ" แล้ววนไปเด้ง modal ถามผู้ใช้ทั้งที่หน้าเว็บบอกว่าไม่มี session แล้ว
+>
+> `_fail_start()` ทำ 4 อย่าง: เคลียร์ `session_queues` · เคลียร์ `measure_timeouts` ·
+> `UPDATE state='stopped'` + `last_event='START_FAILED'` · `raise HTTPException(502)`
+>
+> **ส่วน Stop ทำตรงข้าม** — `_notify_agent_action()` คืนข้อความ error กลับมาแทน
+> การ raise เพราะ DB ปิดไปแล้ว การโยน exception จะทำให้ผู้ใช้เข้าใจว่ากดไม่สำเร็จ
+> แล้วกดซ้ำ · `stop_session` เอาข้อความไปบันทึกเป็น `last_event='STOP_NOT_DELIVERED'`
+> แล้วแนบไปกับ SSE `session_stopped.agent_error` → หน้าเว็บเด้งเตือนว่า
+> **"หยุดในระบบแล้ว แต่สั่งเครื่องไม่สำเร็จ — กรุณาไปกดหยุดที่หน้าเครื่อง"**
+
 
 ตอนที่ `_notify_agent_start()` (`main.py:632`) พัง สถานะที่ค้างอยู่คือ
 DB มี session `running` · `session_queues` มีคิวในหน่วยความจำ · `queue_state` เขียนลง DB แล้ว
@@ -188,8 +211,8 @@ Stop  ไม่ติด → เครื่องยังเดินอยู
 ```
 
 **ไม่ต้อง rollback state กลับเป็น `running`** — ปล่อยเป็น `stopped` ตามเดิม
-แล้วให้ `should_stop` (ข้อ 2.1) เป็นตัวไล่ตามเก็บ ถ้ายังไม่ได้ทำข้อนั้น ผู้ใช้ต้อง
-ไปจัดการที่เครื่องเอง ซึ่งข้อความข้างบนบอกไว้แล้ว
+แล้วให้การ**นับ heartbeat ที่ยิงไม่ออก** (ข้อ 2.1) เป็นตัวไล่ตามเก็บ
+ถ้ายังไม่ได้ทำข้อนั้น ผู้ใช้ต้องไปจัดการที่เครื่องเอง ซึ่งข้อความข้างบนบอกไว้แล้ว
 
 ## 1.5 ล็อก Export ตอนกำลังวัด
 
@@ -232,56 +255,144 @@ _block_if_session_running(cur, "Export")
 
 > ทำเมื่อเจอปัญหาจริง อย่าทำล่วงหน้า
 
-## 2.1 heartbeat สั่งให้ Pi หยุด (`should_stop`)
+## 2.1 Pi หยุดเองเมื่อขาดการติดต่อ Backend  ✅ **ทำแล้ว 13 ส.ค. 2569**
 
-**ปิดได้ 3 เคสพร้อมกันด้วยกลไกเดียว**
+> อัปเดต 7 ส.ค. 2569 — **เปลี่ยนจากแผนเดิมที่จะทำ `should_stop`** ดูเหตุผลท้ายหัวข้อ
+> อัปเดต 13 ส.ค. 2569 — **เปลี่ยนจาก "นับจำนวนครั้ง" เป็น "จับเวลา"** (ของเดิมคำนวณ
+> เวลาผิด ดูหัวข้อย่อยข้างล่าง) และทำลงโค้ดจริงแล้วทั้ง `send_command(Pi).py`
+> กับ `mockup.py`
 
-```
-① กด Stop แล้วคำสั่งไปไม่ถึง Pi        → Pi วัดต่อ
-② Start ได้ ReadTimeout แต่ Pi เริ่มไปแล้ว → Pi วัดต่อโดย DB บอก stopped
-③ heartbeat_checker mark timeout ไปแล้ว   → Pi ไม่รู้เรื่อง วัดต่อ
-```
-
-ข้อมูลมีอยู่แล้ว แค่ตอนนี้ทิ้งไปเฉยๆ — `heartbeat()` ตอบ `{"ok": True}` เสมอ
-
-**ฝั่ง Backend** (`main.py:1121`)
+เดิม Pi โยนข้อมูลนี้ทิ้งทั้งหมด
 
 ```python
-@app.post("/api/heartbeat")
-async def heartbeat(req: HeartbeatRequest):
-    if req.session_id is None:
-        return {"ok": True}
-    db = get_db()
-    try:
-        with db.cursor() as cur:
-            cur.execute("SELECT state FROM sessions WHERE session_id=%s", (req.session_id,))
-            row = cur.fetchone()
-            if row is None or row["state"] != "running":
-                return {"ok": True, "should_stop": True}        # ← ของใหม่
-            cur.execute("UPDATE sessions SET last_seen=NOW() WHERE session_id=%s",
-                        (req.session_id,))
-    finally:
-        db.close()
-    return {"ok": True}
+except Exception:
+    pass          # ← รู้ว่ายิงไม่ออก แล้วก็ลืมทันที ไม่นับ ไม่ log
 ```
 
-**ฝั่ง Pi** — `heartbeat_loop()` อ่าน response ที่เมื่อก่อนโยนทิ้ง
+### ดีไซน์ที่ใช้ — สมมาตร ไม่มีใครสั่งใคร
+
+สองฝั่งใช้กติกาเดียวกันคือ **"เวลาตั้งแต่ heartbeat สำเร็จครั้งล่าสุด > `HEARTBEAT_TIMEOUT`"**
+แล้วต่างคนต่างหยุดเอง
+
+| ฝั่ง | ตรวจจาก | ทำอะไร |
+|---|---|---|
+| Backend (`heartbeat_checker`) | `sessions.last_seen` | `state='timeout'` + ทิ้งคิว + แจ้ง SSE |
+| Pi (`heartbeat_loop`) | `_hb_last_ok` | `is_running = False` |
+
+**จงใจไม่ให้ Backend ส่งคำสั่ง stop กลับมา** — ตอนที่ heartbeat ขาด Backend ก็ยิง
+`/command` มาหา Pi ไม่ถึงอยู่แล้วด้วยเหตุผลเดียวกัน สั่งไปก็เปล่าประโยชน์
+
+### โค้ดที่ลงจริง (`send_command(Pi).py` — แก้ไฟล์เดียว ไม่แตะ Backend)
 
 ```python
-r = httpx.post(f"{BACKEND_URL}/api/heartbeat",
-               json={"session_id": current_session_id}, timeout=5)
-if r.json().get("should_stop") and is_running:
-    print("⏹ backend แจ้งว่า session นี้ปิดไปแล้ว — หยุดวัด")
-    is_running = False        # ลูปหลุดเอง → finally ส่ง S0 + ปิด socket
+_hb_last_ok = time.time()
+
+def heartbeat_loop():
+    global is_running, _hb_last_ok
+    while True:
+        try:
+            httpx.post(f"{BACKEND_URL}/api/heartbeat",
+                       json={"session_id": current_session_id}, timeout=5)
+            _hb_last_ok = time.time()
+        except Exception:
+            pass                  # ไม่ต้องนับ แค่ "ไม่อัปเดตเวลา" ก็พอ
+
+        # เช็คนอก try เสมอ — ต้องทำงานทุกรอบไม่ว่ารอบนี้จะยิงออกหรือไม่
+        if is_running and time.time() - _hb_last_ok > HB_TIMEOUT_HINT:
+            print(f"⏹ ติดต่อ Backend ไม่ได้เกิน {HB_TIMEOUT_HINT:g} วิ — หยุดวัด")
+            is_running = False    # + บอก MCU ให้หยุดด้วย
+        time.sleep(HB_INTERVAL)
 ```
 
-ตั้ง `is_running = False` จาก thread อื่นเป็น pattern เดียวกับที่ handler ของ `stop`
-ทำอยู่แล้ว ไม่มีอะไรใหม่ และปิดช่องได้ภายใน 5 วิโดยไม่ต้องเพิ่มช่องทางสื่อสารใหม่เลย
+### ทำไมจับเวลา ไม่นับจำนวนครั้ง
 
-> ⚠️ **ห้ามใช้ `cur.rowcount` ของ `UPDATE` เดิมมาตัดสินแทน `SELECT`**
-> pymysql คืนจำนวนแถวที่ **เปลี่ยนจริง** ไม่ใช่แถวที่ match — ถ้า heartbeat 2 ครั้ง
-> มาในวินาทีเดียวกัน `NOW()` ได้ค่าเท่าเดิม MySQL คืน `0` แล้ว Pi จะโดนสั่งหยุด
-> ทั้งที่ session ปกติดี
+แผนเดิมเขียนไว้ว่า `_hb_fail × HB_INTERVAL > HB_TIMEOUT_HINT` (4 × 5 = 20 วิ > 15 วิ)
+**ซึ่งคำนวณเวลาจริงผิด** เพราะรอบที่ยิงไม่ออกแบบ `ConnectTimeout` จะกินเวลา
+`timeout=5` ไปก่อน แล้วค่อย `sleep(HB_INTERVAL)` อีก
+
+```
+รอบที่ยิงออก    :  0 วิ (แทบทันที) + sleep 5      =  5 วิ/รอบ
+รอบที่ยิงไม่ออก  :  5 วิ (รอ timeout) + sleep 5    = 10 วิ/รอบ   ← ตัวปัญหา
+
+_hb_fail ครบ 4 จึงไปเกิดที่ ~40 วิ ไม่ใช่ 20 วิอย่างที่ตั้งใจ
+```
+
+จับเวลาตรงๆ ไม่มีปัญหานี้ และเป็น**สูตรเดียวกับที่ Backend ใช้เป๊ะ**
+(`last_seen < NOW() - INTERVAL HEARTBEAT_TIMEOUT SECOND`) — อ่านโค้ดสองฝั่งแล้วเทียบกันได้ตรงๆ
+
+### ⚠ กับดักที่ต้องกัน — รีเซ็ต `_hb_last_ok` ตอน Start
+
+`command_flow()` ต้องตั้ง `_hb_last_ok = time.time()` **ก่อน** `is_running = True` เสมอ
+
+```
+Pi นั่งว่างอยู่ตอน backend ดับไป 5 นาที → _hb_last_ok ค้างเก่า 5 นาที
+backend ฟื้น → กด Start → is_running=True ทันที แต่ heartbeat รอบใหม่ยังไม่ทันยิง
+heartbeat_loop ตื่นมาเห็น "ขาดการติดต่อ 5 นาที" → หยุด session ทิ้งทันที
+```
+
+ทั้งที่ทุกอย่างปกติดี — บั๊กนี้เจอยากมากเพราะต้องให้ backend ดับนานพอก่อนกด Start
+
+### เวลาจริงที่ทั้งสองฝั่งตัดสิน (จำลองแล้ว 13 ส.ค. 2569)
+
+```
+Backend : 15-20 วิ    last_seen เกิน 15 วิ + checker ตื่นทุก 5 วิ
+
+Pi      : 15-20 วิ    ถ้า POST เด้ง error ทันที
+                      (สายหลุดที่ Pi เอง → "network unreachable" ไม่ต้องรอ)
+        : 20-25 วิ    ถ้า POST ค้างจนครบ timeout=5 วิ
+                      (switch ดับ / PC ดับ → SYN ไม่มีคนตอบ ต้องรอเต็มเวลา)
+```
+
+**Backend ตัดสินก่อน Pi เสมอ ซึ่งเป็นลำดับที่ถูกต้อง** — Backend ปิด session
+แล้วแจ้งหน้าเว็บก่อน จากนั้น Pi ค่อยหยุดตาม ไม่มีจังหวะที่ Pi หยุดไปแล้วแต่หน้าเว็บ
+ยังขึ้น RUNNING อยู่
+
+ช่วง 20-25 วิเกิดจากรอบที่ยิงไม่ออกกินเวลา `timeout=5` ไปก่อนแล้วค่อย `sleep(5)`
+= 10 วิ/รอบ (ตัวเดียวกับที่ทำให้วิธี "นับจำนวนครั้ง" เพี้ยน แต่แบบจับเวลาเพี้ยนน้อยกว่ามาก
+เพราะเทียบกับนาฬิกาจริง ไม่ใช่สมมติว่าทุกรอบยาว 5 วิ)
+
+### สิ่งที่ดีไซน์นี้ยังไม่ครอบคลุม
+
+เคสที่ **Backend ตอบได้ปกติแต่ session ตายไปแล้ว** เช่นเน็ตกระตุก ~17 วิแล้วกลับมา —
+Backend mark `timeout` ไปแล้ว ส่วน Pi ยิงผ่านบ้างไม่ผ่านบ้างจนนาฬิกาไม่ถึงเกณฑ์ →
+Pi วัดต่อ ค่าที่ POST เข้ามาโดน `create_measurement` ตอบ `409` ทิ้งเงียบๆ
+(ข้อมูลไม่เพี้ยน แต่เสียชิ้นงานกับเวลาฟรี)
+
+อันนี้คือช่องที่ `should_stop` จะปิดให้ — **ตัดสินใจยังไม่ทำ** รอดูว่าเกิดจริงไหม
+
+`HB_TIMEOUT_HINT` มีอยู่ในโค้ดแล้ว (`send_command(Pi).py:67`) แต่ตอนนี้ใช้แค่พิมพ์ข้อความเตือน
+ยังไม่ได้เอามาบังคับใช้จริง
+
+### ❌ ทำไมถึงไม่ทำ `should_stop`
+
+แผนเดิมคือให้ `POST /api/heartbeat` ตอบ `{"ok": true, "should_stop": true}` เมื่อ session
+ไม่ได้อยู่ในสถานะ `running` แล้ว — **แต่บนสาย LAN นิ่งๆ มันเหลืองานแค่เคสเดียว**
+
+| เคส | เกิดได้บน LAN ไหม |
+|---|---|
+| กด Stop แล้วคำสั่งไม่ถึง Pi | สาย LAN ดี = `/command` ถึงแน่นอน → แทบไม่เกิด |
+| Start ได้ `ReadTimeout` แต่ Pi เริ่มไปแล้ว | ต้องให้ Pi ค้างเอง ไม่ใช่เรื่องเน็ต → หายาก |
+| **สายหลุดแล้วเสียบกลับ** | เคสเดียวที่เหลือ — **นาฬิกาของ Pi ครอบคลุมอยู่แล้ว** |
+
+```
+สายหลุด   → Pi ยิงไม่ออก → _hb_last_ok เก่าเกิน 15 วิ → Pi หยุดเอง
+เสียบกลับ → Pi หยุดไปแล้ว ไม่มีอะไรให้สั่งหยุดอีก
+```
+
+แลกกับการต้องแก้ 2 ไฟล์แทนที่จะเป็น 1 จึง **ไม่คุ้ม** สำหรับสภาพหน้างานนี้
+
+> **ข้อมูลเพิ่ม 13 ส.ค. 2569** — ต้นทุนฝั่ง Backend ถูกกว่าที่ประเมินไว้ตอนแรก
+> เพราะ `heartbeat()` มี `WHERE ... AND state = 'running'` อยู่แล้ว (`main.py:1662`)
+> แค่ `SELECT state` ต่ออีกตัวก็ได้คำตอบ ไม่ต้อง query ใหม่ทั้งชุด
+>
+> แต่**ยังคงตัดสินใจไม่ทำ** เพราะช่องที่เหลือ (เน็ตกระตุก 15-20 วิ) แคบ และ
+> ความเสียหายคือ "เสียชิ้นงานฟรี" ไม่ใช่ข้อมูลเพี้ยน — `409` ใน `create_measurement`
+> กันไว้ให้แล้ว · ถ้าหน้างานเจอเคสนี้จริงค่อยกลับมาเปิดข้อนี้
+>
+> ⚠ ถ้าจะทำจริง **ห้ามใช้ `cur.rowcount` แทน `SELECT`** — MySQL นับ affected rows
+> จาก "แถวที่ค่าเปลี่ยนจริง" ถ้า `last_seen` บังเอิญเท่ากับ `NOW()` อยู่แล้ว
+> (เช่นเผลอรัน `mockup.py` ค้างไว้พร้อมกับ Pi จริง ยิงมาในวินาทีเดียวกัน)
+> จะได้ `rowcount = 0` ทั้งที่ session ยัง running → Pi หยุดกลางคันโดยไม่มีสาเหตุ
 
 ## 2.2 แยกข้อความ error เป็น 3 แบบ
 

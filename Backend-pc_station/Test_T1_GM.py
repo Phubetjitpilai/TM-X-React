@@ -91,6 +91,21 @@ MODE_POLL_INTERVAL = 0.3
 GM_POLL_INTERVAL = 0.02    # 20ms — ความละเอียดของการวัดเวลา
 GM_MAX_WAIT      = 8.0     # รอค่าสูงสุดต่อชิ้น
 
+# ── เทียบ GM กับไฟล์ .txt ที่ TM-X ส่งมาทาง FTP ────────────────────────────
+# ต้องรัน Recieve_tm-x.py (โหมด FORWARD_TO_BACKEND=0) คู่กันถึงจะมีไฟล์ให้อ่าน
+# ถ้าไม่ได้รัน ส่วนนี้จะข้ามไปเงียบๆ ไม่กระทบการวัดเวลา
+#
+# ทำไมต้องเทียบ: GM คืนมา 8 เครื่องมือ แต่ .txt มีแค่ 3 ช่อง (x, y, offset)
+# ยังไม่รู้ว่า index ไหนของ GM ตรงกับช่องไหนของ .txt — และ offset อาจไม่ได้อยู่ใน
+# GM เลยด้วยซ้ำ (อาจเป็นค่าที่ TM-X คำนวณตอนเขียนไฟล์) ซึ่งถ้าจริงจะกระทบแผน
+# ที่จะให้ Pi ตัดสิน OK/NG เองครบ 3 ข้อ
+TEMP_IMAGE_DIR = os.getenv("TEMP_IMAGE_DIR", "./Store_image_temporary")
+if not os.path.isabs(TEMP_IMAGE_DIR):
+    TEMP_IMAGE_DIR = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", TEMP_IMAGE_DIR.lstrip("./"))
+    )
+TXT_WAIT = 8.0             # รอไฟล์ .txt หลังได้ค่าจาก GM (รูปมาก่อน .txt เสมอ)
+
 # ค่าที่ TM-X ใช้บอกว่า "ไม่มีค่า / วัดไม่ติด" (เจอจริงหน้างาน 31/07 — 7 ใน 8 ครั้ง)
 NO_VALUE_ABS = 9999.0
 

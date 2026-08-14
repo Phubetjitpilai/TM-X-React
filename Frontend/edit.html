@@ -429,9 +429,6 @@
             <th class="th-derived">Handler</th>
             <th>Package Size</th>
             <th class="th-derived">Template</th>
-            <th class="th-derived">Nominal X / Y</th>
-            <th class="th-derived">Upper/Lower Tol (+/-)</th>
-            <th class="th-derived">Offset_Tol</th>
             <th>Vendor</th>
             <th>Owner</th>
             <th>PO Number</th>
@@ -536,7 +533,7 @@
        เผลอลบแล้วเลื่อนลงมากู้ได้ทันที ไม่ต้องจำว่าต้องไปหน้าไหน -->
   <section class="card" id="trash-section">
     <div class="card-header">
-      <div class="card-title">🗑 ถังขยะ <span class="count" id="trash-count"></span></div>
+      <div class="card-title">🗑 TRASH <span class="count" id="trash-count"></span></div>
     </div>
     <div class="filter-result-note" id="trash-note">
       ข้อมูลที่ลบจะถูกเก็บไว้ที่นี่ชั่วคราว กดกู้คืนได้ตลอด
@@ -815,9 +812,15 @@
     template:     { label: 'Template',     listUrl: '/api/templates',        idField: 'template_id',
                     fields: [{ key: 'template_name', label: 'Name', width: '260px' }] },
     package_size: { label: 'Package Size', listUrl: '/api/package-sizes',    idField: 'package_size_id',
+                    minWidth: '1320px',
                     fields: [
-                      { key: 'package_size',  label: 'Package Size', width: '180px' },
-                      { key: 'template_name', label: 'Template', type: 'select-template', width: '180px' },
+                      { key: 'package_size',  label: 'Package Size', width: '170px' },
+                      { key: 'nominal_x',     label: 'Nominal X',    type: 'number', width: '140px' },
+                      { key: 'nominal_y',     label: 'Nominal Y',    type: 'number', width: '140px' },
+                      { key: 'upper_tol',     label: 'Upper Tol',    type: 'number', width: '140px' },
+                      { key: 'lower_tol',     label: 'Lower Tol',    type: 'number', width: '140px' },
+                      { key: 'offset_tol',    label: 'Offset Tol',   type: 'number', width: '140px' },
+                      { key: 'template_name', label: 'Template', type: 'select-template', width: '150px' },
                     ] },
     // minWidth: ความกว้างขั้นต่ำของทั้งตาราง — ตั้งเฉพาะ config ที่มีคอลัมน์เยอะ
     // (part_number) เพื่อให้ .table-wrap เลื่อนซ้าย-ขวาแทนการบีบคอลัมน์จนช่อง
@@ -982,14 +985,13 @@
   // ของแต่ละตารางต้องการ (ดู LookupCreate/PackageSizeCreate/PartNumberCreate
   // ใน main.py) — ตารางแบบ "ชื่อเดียว" ทั้งหมดส่งเป็น {name: ...} เหมือนกันหมด
   function lookupToApiBody(kind, values) {
-    if (kind === 'package_size') return values;
-    if (kind === 'part_number') {
+    // ⚠ อย่า hardcode รายชื่อคอลัมน์ตรงนี้ — เดิมเขียนตายไว้ 4 ตัว พอเพิ่ม
+    //   offset_tol เข้า LOOKUP_CONFIG แล้วลืมมาเติม ค่าเลยถูกส่งเป็น string
+    //   แทน number โดยไม่มี error อะไรให้เห็น
+    //   อ่านจาก config เป็นแหล่งเดียวแทน — เพิ่ม field ใหม่ทีหลังไม่ต้องแก้ที่นี่อีก
+    if (kind === 'package_size' || kind === 'part_number') {
       const body = { ...values };
-      // ⚠ อย่า hardcode รายชื่อคอลัมน์ตรงนี้ — เดิมเขียนตายไว้ 4 ตัว พอเพิ่ม
-      //   offset_tol เข้า LOOKUP_CONFIG แล้วลืมมาเติม ค่าเลยถูกส่งเป็น string
-      //   แทน number โดยไม่มี error อะไรให้เห็น
-      //   อ่านจาก config เป็นแหล่งเดียวแทน — เพิ่ม field ใหม่ทีหลังไม่ต้องแก้ที่นี่อีก
-      LOOKUP_CONFIG.part_number.fields
+      LOOKUP_CONFIG[kind].fields
         .filter(f => f.type === 'number')
         .forEach(f => { body[f.key] = Number(body[f.key]); });
       return body;
@@ -1192,7 +1194,7 @@
 
     if (!rows.length) {
       const msg = partsSearch ? 'ไม่พบ Part ที่ตรงกับคำค้นหา' : 'ยังไม่มีข้อมูล Parts';
-      tbody.innerHTML = `<tr class="empty-row"><td colspan="15">${msg}</td></tr>`;
+      tbody.innerHTML = `<tr class="empty-row"><td colspan="12">${msg}</td></tr>`;
       return;
     }
 
@@ -1201,14 +1203,12 @@
       // recieve_date เก็บเป็น DATETIME — แสดงแค่ส่วนวันที่ (ตัดเวลาออก) ให้ตาราง
       // อ่านง่าย ส่วนตอนแก้ในฟอร์มใช้ <input type="date"> ที่รับรูปแบบ YYYY-MM-DD
       const recv = p.recieve_date ? String(p.recieve_date).slice(0, 10) : '';
-      // ค่า derive (read-only) — ถ้า part ยังไม่ได้ตั้ง Part Number จะเป็น null
-      // ทั้งชุด แสดงเป็น '—' ให้รู้ว่ายังไม่มีข้อมูล ไม่ใช่ error
-      const nominal = (p.nominal_x != null && p.nominal_y != null)
-        ? `${p.nominal_x} / ${p.nominal_y}` : '';
-      const tol = (p.upper_tol != null && p.lower_tol != null)
-        ? `+${p.upper_tol} / -${p.lower_tol}` : '';
-      // มาจาก part_number.offset_tol — เกณฑ์ที่ใช้ตัดสินว่า offset ของการวัดผ่านไหม
-      const offsetTol = p.offset_tol != null ? String(p.offset_tol) : '';
+      // หมายเหตุ: คอลัมน์ Nominal X/Y · Upper/Lower Tol · Offset_Tol ถูกย้ายไป
+      // อยู่ในตาราง Measurements ของหน้า Index แล้ว (วางไว้ก่อนคอลัมน์ Value X)
+      // เหตุผล: เกณฑ์ที่ใช้ตัดสินจริง "ขึ้นกับโหมดของการวัดครั้งนั้น"
+      // (IPM → package_size · New/Rework → part_number) ตาราง Parts ไม่มีโหมด
+      // ให้อ้างอิง จึงโชว์ได้แค่ชุดของ part_number ชุดเดียว ซึ่งไม่ตรงกับที่ใช้
+      // ตัดสินแถว IPM — เอามาวางข้างค่าที่วัดได้จริงตรงกว่าและเทียบได้ทันที
       return `<tr class="${hl}" data-alpl="${p.number_alpl}">
         <td><strong>${p.part_id ?? ''}</strong></td>
         <td><strong>${p.number_alpl}</strong></td>
@@ -1216,9 +1216,6 @@
         <td class="td-derived">${p.handler ?? ''}</td>
         <td>${p.package_size ?? ''}</td>
         <td class="td-derived">${p.template_name ?? ''}</td>
-        <td class="td-derived">${nominal}</td>
-        <td class="td-derived">${tol}</td>
-        <td class="td-derived">${offsetTol}</td>
         <td>${p.vendor ?? ''}</td>
         <td>${p.owner ?? ''}</td>
         <td>${p.po_number ?? ''}</td>
@@ -1735,8 +1732,8 @@
         <td>${escapeHtml(it.kind_label)}</td>
         <td>${escapeHtml(it.summary)}${img}</td>
         <td class="trash-actions">
-          <button class="btn-restore" data-id="${escapeHtml(it.id)}">↩ กู้คืน</button>
-          <button class="btn-purge" data-id="${escapeHtml(it.id)}" title="ลบถาวร กู้คืนไม่ได้อีก">🗑 ลบถาวร</button>
+          <button class="btn-restore" data-id="${escapeHtml(it.id)}">↩ Restore</button>
+          <button class="btn-purge" data-id="${escapeHtml(it.id)}" title="ลบถาวร กู้คืนไม่ได้อีก">🗑 Del</button>
         </td>
       </tr>`;
     }).join('');

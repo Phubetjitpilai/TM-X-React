@@ -293,6 +293,35 @@ def post_to_backend(session_id, value_x, value_y, offset):
     )
 
 
+# ╔═══ รายงานสาเหตุให้ Backend — เพิ่ม 7 ส.ค. 2569 ═══════════════════════════╗
+#
+# ปัญหาเดิม: สคริปต์นี้รู้สาเหตุตั้งแต่วินาทีแรกเกือบทุกกรณี แต่ `print` ลง console
+# บน PC ที่ไม่มีใครดู ส่วน Pi ที่ต้องตัดสินใจกลับต้องนั่งเดาจากความเงียบ
+#
+#   Pi      รู้ว่า "ค่าไม่มา"      ← จาก measured_count ไม่ขยับ (ช้ากว่า ~10 วิ)
+#   Recieve รู้ว่า "เพราะอะไร"    ← ตั้งแต่ตอนทิ้งค่า
+#   Backend เป็นคนรวม 2 ก้อนนี้ตอน Pi รายงาน timeout แล้วส่งให้หน้าเว็บ
+#
+# ⚠ persist=False สำหรับเรื่องที่ "ค่าลง DB ไปแล้ว" (เช่นรูปอัปโหลดไม่สำเร็จ)
+#   เพราะ last_event มีช่องเดียว ถ้าเขียนทับจะไปกลบสาเหตุที่ Pi กำลังรออยู่
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+def report(event: str, detail: str, *, persist: bool = True):
+    """แจ้ง Backend ว่าเกิดอะไรขึ้น — ลง log ไฟล์ก่อนเสมอ แล้วค่อยส่ง
+
+    ลำดับสำคัญ: ถ้าส่งไม่สำเร็จ ไฟล์ log คือหลักฐานเดียวที่เหลือ
+    timeout สั้นและกลืน exception — การรายงานล้มเหลวต้องไม่ทำให้งานหลักพัง
+    """
+    print(f"   📣 {event}: {detail}")
+    try:
+        httpx.post(
+            f"{BACKEND_URL}/api/session/event",
+            json={"event": event, "detail": detail, "persist": persist},
+            timeout=2,
+        )
+    except Exception as exc:
+        print(f"   ⚠️ แจ้ง Backend ไม่สำเร็จ: {exc}")
+
+
 def upload_image_to_backend(measurement_id, image_path):
     """ส่งไฟล์รูป (multipart) ให้ backend เก็บลง ALPL_IMAGE_DIR/<วันที่ พ.ศ.>/
     (backend เป็นคนแปลงเป็น .jpg เองด้วย Pillow — ดู POST
@@ -309,9 +338,14 @@ def upload_image_to_backend(measurement_id, image_path):
         if resp.status_code == 200:
             print(f"   🖼 อัปโหลดรูปสำเร็จ (measurement_id={measurement_id})")
         else:
-            print(f"   ⚠️ อัปโหลดรูปไม่สำเร็จ (HTTP {resp.status_code}): {resp.text[:200]}")
+            report("IMAGE_UPLOAD_FAILED",
+                   f"รูปของ measurement {measurement_id} อัปโหลดไม่สำเร็จ "
+                   f"(HTTP {resp.status_code}): {resp.text[:120]}",
+                   persist=False)
     except Exception as exc:
-        print(f"   ⚠️ อัปโหลดรูปไม่สำเร็จ: {exc}")
+        report("IMAGE_UPLOAD_FAILED",
+               f"รูปของ measurement {measurement_id} อัปโหลดไม่สำเร็จ: {exc}",
+               persist=False)
     finally:
         _remove_quietly(image_path)
 
@@ -426,14 +460,16 @@ def _handle_capture_inner(image_path, t_recv):
     if ts_key:
         pair = _find_measurement_for_image(ts_key)
         if pair is None:
-            print(f"⚠️ {name}: หาบรรทัดใน .txt ที่เวลาตรงกับรูปนี้ไม่เจอ (รอ {TXT_WAIT_TIMEOUT:.0f} วิแล้ว) — ทิ้งรูป")
+            report("TXT_NOT_FOUND",
+                   f"หาบรรทัดใน .txt ที่เวลาตรงกับรูป {ts_key} ไม่เจอ "
+                   f"(รอ {TXT_WAIT_TIMEOUT:.0f} วิแล้ว) — ทิ้งรูป")
             _remove_quietly(image_path)
             return
     else:
         print(f"⚠️ {name}: ชื่อไฟล์ไม่มีเวลาให้จับคู่ — ใช้บรรทัดล่าสุดของ .txt แทน")
         pair = _fallback_last_line()
         if pair is None:
-            print(f"⚠️ {name}: ยังไม่มีไฟล์ .txt ให้อ่านเลย — ทิ้งรูป")
+            report("TXT_NOT_FOUND", f"{name}: ยังไม่มีไฟล์ .txt ให้อ่านเลย — ทิ้งรูป")
             _remove_quietly(image_path)
             return
 
@@ -442,14 +478,16 @@ def _handle_capture_inner(image_path, t_recv):
 
     # ── ด่าน 2: ค่าที่วัดไม่ติด ──────────────────────────────────────────
     if _is_error_value(value_x) or _is_error_value(value_y) or _is_error_value(offset):
-        print(f"⏭ {name}: TM-X วัดไม่ติด ({value_x}, {value_y}) — ข้าม ไม่บันทึกลง DB")
+        report("MEASURE_FAILED",
+               f"TM-X วัดไม่ติด ({value_x}, {value_y}, {offset}) — ข้าม ไม่บันทึกลง DB")
         _remove_quietly(image_path)
         return
 
     # ── ด่าน 3: ต้องมี session ที่ running อยู่ ─────────────────────────
     session_id = get_current_session()
     if session_id is None:
-        print(f"⚠️ {name}: ไม่มี session ที่ running อยู่ตอนนี้ — ทิ้งค่า/รูปนี้ไป")
+        report("NO_SESSION",
+               f"ได้ค่า/รูป {name} มาแต่ไม่มี session ที่ running อยู่ — ทิ้งไป")
         _remove_quietly(image_path)
         return
     t_session = time.time()
@@ -459,7 +497,8 @@ def _handle_capture_inner(image_path, t_recv):
     try:
         resp = post_to_backend(session_id, value_x, value_y, offset)
     except Exception as exc:
-        print(f"   ⚠️ POST /api/measurements ไม่สำเร็จ: {exc} — เก็บรูปไว้ไม่ลบ")
+        report("BACKEND_REJECT",
+               f"POST /api/measurements ไม่สำเร็จ: {exc} — เก็บรูปไว้ไม่ลบ")
         return
     t_post = time.time()
 
@@ -473,7 +512,8 @@ def _handle_capture_inner(image_path, t_recv):
             detail = resp.json().get("detail", "")
         except Exception:
             detail = resp.text[:200]
-        print(f"   ⚠️ Backend ปฏิเสธค่านี้ (HTTP {resp.status_code}): {detail}")
+        report("BACKEND_REJECT",
+               f"Backend ปฏิเสธค่านี้ (HTTP {resp.status_code}): {detail}")
         _remove_quietly(image_path)
         return
 

@@ -114,15 +114,62 @@ CREATE TABLE parts_specifications (
 -- queue_state: สำเนา JSON ของคิว ALPL (session_queues ใน memory ของ backend)
 -- เขียนทับทุกครั้งที่มีการเปลี่ยนแปลง ใช้กู้คืนคิวกลับเข้า memory ถ้า backend
 -- restart กลาง session ที่ยัง running อยู่
+-- state มีได้ 4 ค่าเท่านั้น: idle | running | stopped | timeout
+-- (เคยมี 'paused' แต่ถอด Pause/Resume ออกทั้งระบบแล้ว 7 ส.ค. 2569 เพราะฝั่ง Pi
+--  ไม่เคยรองรับ กดแล้วหน้าเว็บขึ้น paused แต่เครื่องจริงยังวัดต่อ)
+--
+-- last_event / last_event_detail / last_event_at:
+--   ช่องรายงาน "สาเหตุที่ค่าไม่ถูกบันทึกลง DB" ให้ Backend หยิบไปตอบ Pi
+--   เขียนโดย Recieve_tm-x.py (POST /api/session/event) หรือ Pi (ตอน stop พร้อม reason)
+--   ⚠ มีช่องเดียว ค่าใหม่ทับค่าเก่า — จึงเก็บเฉพาะเรื่องที่ "มีคนรอคำตอบอยู่"
+--     เรื่องที่ค่าลง DB ไปแล้ว (เช่นรูปอัปโหลดไม่สำเร็จ) ห้ามเขียนลงช่องนี้
+--     ไม่งั้นจะไปทับสาเหตุที่ Pi กำลังรอ (ดู IMPROVEMENT_PLAN.md ข้อ 7)
 CREATE TABLE sessions (
-  session_id     INT          AUTO_INCREMENT PRIMARY KEY,
-  state          VARCHAR(20)  NOT NULL DEFAULT 'idle',
-  target_count   INT          NOT NULL DEFAULT 1,
-  measured_count INT          NOT NULL DEFAULT 0,
-  queue_state    JSON         NULL,
-  last_seen      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  started_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  ended_at       DATETIME     NULL
+  session_id        INT          AUTO_INCREMENT PRIMARY KEY,
+  state             VARCHAR(20)  NOT NULL DEFAULT 'idle',
+  target_count      INT          NOT NULL DEFAULT 1,
+  measured_count    INT          NOT NULL DEFAULT 0,
+  queue_state       JSON         NULL,
+  last_event        VARCHAR(32)  NULL,
+  last_event_detail TEXT         NULL,
+  last_event_at     DATETIME     NULL,
+  last_seen         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  ended_at          DATETIME     NULL
+);
+
+
+-- pi_status: "เห็นสคริปต์ฝั่งหน้างานตัวนี้ครั้งล่าสุดเมื่อไหร่" — 1 แถวต่อ 1 ตัว
+-- ใช้วาดป้าย Pi Online / Receive Online บน topbar ของหน้าเว็บ
+--
+-- ทำไมต้องมีตารางนี้ ทั้งที่ sessions.last_seen ก็เก็บ heartbeat อยู่แล้ว:
+--   sessions.last_seen อัปเดตเฉพาะตอนมี session ที่ state='running' เท่านั้น
+--   (ดู `POST /api/heartbeat` — session_id เป็น NULL จะ return ทันทีไม่แตะ DB)
+--   แปลว่าช่วงที่ Pi "ว่างแต่ยังมีชีวิต" ไม่มีที่ไหนบันทึกไว้เลย ซึ่งเป็นช่วงที่
+--   ป้ายต้องทำงานมากที่สุด — คนเปิดเว็บมาดูก่อนกด Start ว่าเครื่องพร้อมไหม
+--
+-- ⚠ **ห้ามเพิ่มคอลัมน์ is_online เด็ดขาด** — สถานะออนไลน์ต้อง "คำนวณสด" จาก
+--   last_seen เสมอ:
+--       last_seen >= NOW() - INTERVAL <HEARTBEAT_TIMEOUT> SECOND
+--   เพราะการ "ออฟไลน์" คือการ *ไม่มีเหตุการณ์เกิดขึ้น* ตอนสายหลุด/สคริปต์ตาย
+--   ไม่มีใครเหลืออยู่มาเขียน is_online=0 ให้ ค่าจะค้างเป็น 1 ตลอดกาล = ป้ายโกหก
+--   (หลักเดียวกับ sessions.last_seen ที่ heartbeat_checker คำนวณเอาเอง)
+--
+-- ⚠ ใช้เกณฑ์เวลาตัวเดียวกับ HEARTBEAT_TIMEOUT ใน .env ที่ Pi ใช้ตัดสินใจหยุด
+--   ตัวเอง — ป้ายบนเว็บกับพฤติกรรมเครื่องจริงจะได้ตรงกันเสมอ
+--
+-- source เป็น PK: 1 แถวต่อ 1 สคริปต์ เขียนด้วย INSERT ... ON DUPLICATE KEY
+-- UPDATE ตารางจึงไม่โตตามเวลา (ไม่ใช่ log) และเพิ่มตัวที่ 3 ทีหลังได้โดยไม่ต้อง
+-- แก้ schema แค่ยิง source ใหม่เข้ามา
+--
+-- ไม่ต้อง seed ใน insert.sql — แถวจะเกิดเองตอนสคริปต์นั้นยิง heartbeat ครั้งแรก
+-- (ถ้า seed ไว้จะดูเหมือน "เคยเห็นแล้ว" ตั้งแต่ตอน import ซึ่งไม่จริง)
+--
+-- 📌 ชื่อตารางยังเป็น pi_status ตามที่ตั้งไว้ แต่มันเก็บ receive ด้วย —
+--    ถ้าจะเปลี่ยนเป็น agent_status ให้เปลี่ยนตอนนี้เลยจะง่ายกว่าเปลี่ยนทีหลัง
+CREATE TABLE pi_status (
+  last_seen  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  session_id INT         NULL,
 );
 
 -- client_uuid: UUID ที่ Agent สร้างต่อการวัด 1 ครั้ง ใช้กัน insert ซ้ำตอน retry

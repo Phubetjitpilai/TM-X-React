@@ -47,7 +47,11 @@ Pi ไม่ยุ่งกับรูป/ค่าที่วัดได้�
 
 - **Frontend → Backend**: HTTP request ปกติ (POST /api/session/start, /api/session/stop ฯลฯ)
 - **Backend → Frontend**: Server-Sent Events (SSE) ทางเดียว ผ่าน `/api/stream`
-- **Backend → Pi**: `POST /command` ไปที่ `AGENT_HOST:AGENT_PORT` (action: `start`/`stop` พร้อม `session_id`, `template_name`, `target_count`, `number_alpl`)
+- **Backend → Pi**: `POST /command` ไปที่ `AGENT_HOST:AGENT_PORT` — 3 action: `start` / `stop` / `continue`
+  - `stop`/`continue` ส่งแค่ `{action, session_id}`
+  - `start` ส่ง `{action, session_id, target_count, groups[]}` โดย 1 กลุ่ม = `{template_name, alpl[], limits{x_lo,x_hi,y_lo,y_hi,offset_max}}` — **`groups` เป็นแหล่งความจริงเดียว** ไม่มี `template_name`/`number_alpl` ระดับบนสุดแล้ว (ทั้งคู่เป็นของกลุ่มแรกซึ่งอยู่ใน `groups[0]` อยู่แล้ว)
+  - `limits` เป็น **ขอบเขตสำเร็จรูป** (บวก/ลบ `_TOL_EPS` มาให้แล้ว) ไม่ใช่ nominal/tol ดิบ — Pi เทียบตรงๆ ได้เลยโดยไม่ต้องลอกค่าเผื่อทศนิยมมาไว้ที่ตัวเอง · `offset_max: null` = ไม่ต้องตรวจ offset (โหมด IPM) — **ไม่ส่ง `measure_type` ไปด้วยโดยตั้งใจ** กันไม่ให้กฎเรื่องโหมดไปงอกที่ฝั่ง Pi
+  - สร้างโดย `_build_groups()` ใน `main.py` และ log payload เต็มก่อนยิงทุกครั้ง (`📤 ส่งไป Agent`)
 - **Pi → Backend**: heartbeat ผ่าน `POST /api/heartbeat` ทุก 5 วิ (แนบ `session_id` ปัจจุบัน กัน `heartbeat_checker` mark session เป็น timeout)
 - **Pi → TM-X**: TCP `192.168.10.11:8600` — `R0` (reset) → `PW,1,<template>` (โหลดโปรแกรมวัด) → `T1` ต่อชิ้น (ผ่าน connection ใหม่แยกทุกครั้ง) → `S0` ตอนจบ
 - **TM-X → PC**: FTP — TM-X เขียนไฟล์ `.txt` ต่อท้ายเรื่อยๆ (บรรทัดละ 1 ค่า รูปแบบ `+0005.017,+0005.029`) แล้วส่งรูปตามมาในคอนเนกชันเดียวกัน `Recieve_tm-x.py` จับคู่ "รูปที่เพิ่งได้" กับ "บรรทัดล่าสุดของ .txt"
@@ -66,12 +70,12 @@ TM-X_Project/
 ├── Backend-pc_station/          # สคริปต์ฝั่งหน้างาน — 2 ตัวแรกคือของจริงที่ใช้งาน ที่เหลือเป็น legacy
 │   ├── send_command.py          # ✅ ของจริง รันบน Pi — รับ start/stop จาก Backend แล้วสั่ง TM-X ผ่าน TCP
 │   ├── Recieve_tm-x.py          # ✅ ของจริง รันบน PC — FTP server รับค่า+รูปจาก TM-X แล้ว POST เข้า Backend
-│   ├── mockup.py                # โหมด mock (สุ่มค่า) สำหรับเทสต์ไม่มีฮาร์ดแวร์ — รองรับ pause/resume ด้วย
+│   ├── mockup.py                # โหมด mock (สุ่มค่า) สำหรับเทสต์ไม่มีฮาร์ดแวร์
 │   ├── requirements.txt         # dependency ของทั้ง 3 ตัวข้างบน (รวม pyftpdlib)
 │   ├── agent.py                 # ⚠ legacy — สถาปัตยกรรมเก่าที่ Pi เปิด FTP รับรูปเองแล้วส่งต่อ PC (ไม่ใช้แล้ว)
 │   └── tcp.py, ftp.py           # ⚠ legacy — สคริปต์ทดสอบเดี่ยวๆ เหลือไว้อ้างอิง
 ├── Frontend/                    # Web Dashboard สำหรับ Operator (ของเดิม ยังใช้งานจริงอยู่ — ดูหัวข้อ Frontend)
-│   ├── index.html               # หน้าหลัก: Live Telemetry, Part Entry, Session Control (Start/Pause/Stop)
+│   ├── index.html               # หน้าหลัก: Live Telemetry, Part Entry, Session Control (Start/Stop)
 │   ├── edit.html                # Database Editor (Parts/Measurements/Lookup Tables CRUD)
 │   ├── export.html              # Wizard 3 ขั้นของทุกรูปแบบ — ?format=csv|pdf|excel
 │   ├── report-template.html     # ตัวแก้ผังรายงานแบบสเปรดชีต (ใช้กับ PDF/Excel)
@@ -132,8 +136,15 @@ TM-X_Project/
 
 3 ตาราง ความสัมพันธ์: `parts (1) → (N) sessions (1) → (N) measurements`
 
-- **`parts`**: PK = `number_alpl` (1 ALPL = 1 vendor/handler/package เสมอ) **ไม่ได้เก็บ nominal/tolerance เอง** — ผูกกับ `package_size` ผ่าน `package_size_id` แทน
-- **`package_size`**: เก็บ `nominal_x`, `nominal_y` และ tolerance **ตัวเดียวใช้ร่วมกันทั้งแกน X/Y** (`upper_tol`, `lower_tol` — ไม่ได้แยกราย axis) พร้อม `template_name` (โปรแกรมวัดของ TM-X ที่ผูกกับขนาด package นี้)
+- **`parts`** (`parts_specifications`): PK = `number_alpl` **ไม่ได้เก็บ nominal/tolerance เอง** — ผูกกับ `package_size` ผ่าน `package_size_id` (ของตัวเอง) และผูกกับ `part_number` ผ่าน `part_number_id` ซึ่งอาจยังเป็น `NULL` ได้ (ALPL ที่ลงทะเบียนจากโหมด IPM มีแค่ ALPL + Package Size)
+- **`package_size`**: เก็บ `nominal_x`, `nominal_y`, tolerance **ตัวเดียวใช้ร่วมกันทั้งแกน X/Y** (`upper_tol`, `lower_tol` — ไม่ได้แยกราย axis), `offset_tol` และ `template_id` (โปรแกรมวัดของ TM-X ที่ผูกกับขนาด package นี้) — ทั้ง 5 คอลัมน์ตัวเลขเป็น `NOT NULL`
+- **`part_number`**: catalog ของ part จริง เก็บ nominal/tolerance/`offset_tol` **ของตัวเอง** แยกจาก `package_size` (part คนละตัวที่ package เท่ากันมี tolerance ต่างกันได้)
+
+> **เกณฑ์ตัดสิน OK/NG มาจากคนละตารางตามโหมด** — IPM ใช้ `package_size` (และ **ไม่เอา
+> `offset` มาตัดสิน**) · New/Rework ใช้ `part_number` (เอา `offset` มาตัดสิน)
+> ดู `_load_criteria` / `_offset_limit` / `_judge` ใน `main.py` — ทั้ง 3 ตัวเป็นทางเดียว
+> ที่ควรใช้ ห้ามเรียก `_offset_ok(offset, row["offset_tol"])` ตรงๆ อีก เพราะจะหลุด
+> เงื่อนไขเรื่องโหมดไป แล้ว DB กับ Pi จะตัดสินไม่ตรงกัน
 - **`sessions`**: 1 รอบการวัด state = `idle | running | stopped | timeout`, มี `target_count`/`measured_count` ใช้เช็คว่าวัดครบหรือยัง
 - **`measurements`**: ผลวัดแต่ละชิ้น มี `value_x`, `value_y`, `result` (OK/NG), `measure_type` (IPM/New/Rework/Manual), `image_path` (relative path ใต้ `ALPL_IMAGE_DIR` บนเครื่อง PC เช่น `"22-07-2569/203_22-07-2569.jpg"` — แยกโฟลเดอร์ตามวันที่วัด (พ.ศ.) ไม่ใช่ตาม package_size แล้ว เสิร์ฟผ่าน static mount `/media/alpl` — หมายเหตุ: ชื่อไฟล์ใช้แค่ `number_alpl` + วันที่ ไม่มี `measurement_id` ปน จึงเขียนทับกันได้ถ้ามีมากกว่า 1 การวัดของ ALPL เดียวกันในวันเดียวกัน (ตั้งใจ — เก็บแค่รูปล่าสุดของวันนั้น))
   - หมายเหตุ (อัปเดต): คอลัมน์ operator **ไม่ใช่ `Oparetor` (VARCHAR สะกดผิด) แบบเดิมแล้ว** — ตอนนี้เป็น `operator_id` (FK ไปตาราง `operator` ที่เก็บ `operator_name`) เอกสารเดิมพูดถึง `Oparetor` เพราะเป็นข้อมูลเก่าก่อน migrate ตอนนี้ล้าสมัยแล้ว
@@ -156,17 +167,23 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
    - **ความเสี่ยงที่รู้อยู่แล้ว**: ถ้า server restart กลางที่ session กำลัง running คิวนี้จะหาย ยังไม่มีการ persist ลง DB
 3. **Stop flow ไม่สมมาตร (asymmetry)** — กด Stop จากเว็บ จะอัปเดต DB (`state='stopped'`) + แจ้ง Agent แต่ปุ่ม Stop ทางกายภาพที่ MCU ตอนนี้แค่ flip flag ใน memory ฝั่ง Agent เท่านั้น **ไม่ได้อัปเดต DB** — เป็น gap สถาปัตยกรรมที่ต้อง flag ไว้เวลา present งาน
 4. **SSE เป็นทางเดียว** server → client เท่านั้น (`/api/stream`) ฝั่ง frontend ยังคงใช้ HTTP POST ปกติในการส่งคำสั่งไป backend (ไม่ใช่ bidirectional)
-5. **MeasurementType: IPM vs New**
-   - `IPM`: ALPL ลงทะเบียนไว้แล้วใน `parts` → query หา `template_name` อย่างเดียว ไม่ insert part ใหม่
-   - `New`: ลงทะเบียน part ใหม่ + วัดในรอบเดียว → ต้อง insert `parts` ก่อน insert `sessions` เสมอ (เพราะมี FOREIGN KEY)
-6. **Agent ไม่รู้ว่ากำลังวัด ALPL ตัวไหนในคิว** — แค่ส่ง `value_x`/`value_y` มาเรื่อยๆ Backend เป็นคนจับคู่ ALPL จากตำแหน่งใน `session_queues` เอง (ยกเว้น manual session แบบเก่าที่ไม่มี entry ใน `session_queues` จะใช้ `req.number_alpl` ที่ Agent ส่งมาตรงๆ)
-7. **Heartbeat checker** (background task) — ตรวจทุก `HEARTBEAT_INTERVAL` วินาที ถ้า session ไหน `state='running'` แต่ `last_seen` เก่ากว่า `HEARTBEAT_TIMEOUT` → เปลี่ยนเป็น `timeout` และ broadcast ผ่าน SSE
+5. **ฟอร์ม Part Entry ส่งมาเป็น "กลุ่ม" (`groups[]`)** — 1 กลุ่ม = ALPL หลายตัวที่ใช้ config ชุดเดียวกัน กด +Add เพิ่มกลุ่มได้ ทั้ง 3 โหมดใช้โครงเดียวกัน ต่างกันแค่ลิสต์ field (`GROUP_FIELDS` ใน `index.html`) และเงื่อนไข ALPL:
+   - `IPM`: ALPL ที่ยังไม่มีใน DB → **ถามยืนยัน** แล้วลงทะเบียนให้ตอนวัดจริง
+   - `Rework`: ALPL ต้องมีใน DB → ไม่มี = **บล็อก** (รองรับหลาย ALPL ต่อกลุ่มแล้ว ไม่ได้จำกัดทีละ 1 อีก)
+   - `New`: ALPL ต้อง**ไม่มี**ใน DB → มีอยู่แล้ว = **บล็อก** (กันเขียนทับ config เดิม)
+   - ตรวจด้วย `POST /api/parts/check` ครั้งเดียวได้ทุกตัว (เลิกโหลด Part ทั้งตารางมาเทียบเองแล้ว)
+6. **ไม่มีการเขียน Part ลง DB ตอน Start เลยทุกโหมด** — `start_session` แค่ validate (`_validate_group`) แล้วเก็บ config ไว้ใน `queue_state` ให้ `create_measurement` สร้าง/อัปเดต Part **พร้อมกับ measurement ของชิ้นนั้น** ผลคือกด Start แล้ว Stop ทันที หรือวัดชิ้นแรกไม่ติด → ไม่มี Part ผีค้างใน DB
+   - `queue_state` เก็บ `groups` (config รายกลุ่ม) + `group_of` (ชิ้นที่ i อยู่กลุ่มไหน) + `group_templates` — `_group_config_for()` เป็นทางเดียวที่ควรใช้หา config ของชิ้นที่กำลังวัด
+   - ⚠ **ตอนนี้ทุกกลุ่มต้องได้ Template ตัวเดียวกัน** ไม่งั้น `start_session` ปฏิเสธ เพราะ Pi ยังส่ง `PW` ครั้งเดียวตอน start (การสลับ `PW` กลางคิวคือแผน E ที่ยังไม่ได้ทำ)
+7. **Agent ไม่รู้ว่ากำลังวัด ALPL ตัวไหนในคิว** — แค่ส่ง `value_x`/`value_y` มาเรื่อยๆ Backend เป็นคนจับคู่ ALPL จากตำแหน่งใน `session_queues` เอง (ยกเว้น manual session แบบเก่าที่ไม่มี entry ใน `session_queues` จะใช้ `req.number_alpl` ที่ Agent ส่งมาตรงๆ)
+8. **Heartbeat checker** (background task) — ตรวจทุก `HEARTBEAT_INTERVAL` วินาที ถ้า session ไหน `state='running'` แต่ `last_seen` เก่ากว่า `HEARTBEAT_TIMEOUT` → เปลี่ยนเป็น `timeout` และ broadcast ผ่าน SSE
 
 ### Endpoint หลัก
 - `GET /api/stream` — SSE stream
 - `GET /api/session/state`, `POST /api/session/start`, `POST /api/session/stop`
 - `POST /api/heartbeat`
 - `GET/POST/PATCH/DELETE /api/parts`, `/api/parts/{id}`
+- `POST /api/parts/check` — ถามทีเดียวว่า ALPL ชุดนี้ตัวไหนมี/ไม่มีในระบบ คืน `{exists, missing, detail}` (ใช้ตอนกด Save ในฟอร์ม Part Entry ทั้ง 3 โหมด) — **ห้ามใส่ `_block_if_session_running()`** เพราะเป็นการอ่านอย่างเดียวและต้องใช้ได้ก่อนเริ่มวัด
 - `GET/POST/PATCH/DELETE /api/measurements`, `/api/measurements/{id}`, `PATCH /api/measurements/{id}/image`
 - `POST /api/measurements/{id}/image-upload` — รับไฟล์รูป (multipart, `UploadFile`) จาก Agent แปลงเป็น `.jpg` ด้วย Pillow แล้วเซฟลง `ALPL_IMAGE_DIR/<DD-MM-YYYY พ.ศ.>/<number_alpl>_<DD-MM-YYYY พ.ศ.>.jpg` แล้วอัปเดต `measurements.image_path` เป็น relative path + broadcast SSE event `image_updated`
 - `GET /api/image-url/{measurement_id}` — คืน `{"url": "/media/alpl/<image_path>"}` จริงแล้ว (ไม่ใช่ stub อีกต่อไป) หรือ 404 ถ้ายังไม่มีรูป ส่วน `POST /api/upload-url` เดิม (MinIO presigned URL) ถูกลบออกจากโค้ดไปแล้ว ไม่มีอยู่อีกต่อไป
@@ -237,8 +254,6 @@ python Recieve_tm-x.py          # เปิด FTP server ที่ AGENT_FTP_PO
   แบบ `arm_and_capture()` ของ `agent.py` เดิม ถ้า TM-X พลาดรอบไหน (ไม่ส่งค่า/รูป
   มาที่ PC) `measured_count` จะไม่ครบ `target_count` แล้ว session ค้างที่
   `running` — ต้องกด Stop เองจากเว็บ
-- **`send_command.py` ไม่รองรับ `pause`/`resume`** — backend ยิง action นี้ไป
-  แต่ `/command` รู้จักแค่ `start`/`stop` คำสั่งจึงถูกกลืนเงียบๆ (ดู Known Issues)
 - **`input()` บล็อก thread** — กด Stop จากเว็บแล้ว `S0` ถูกยิงไป TM-X ทันที แต่
   loop จะยังไม่หลุดจนกว่าจะเคาะ Enter ที่เทอร์มินัลอีกครั้ง (จะหายไปเองตอนต่อ
   MCU จริงเพราะไม่ต้องใช้ `input()` แล้ว)
@@ -248,7 +263,11 @@ python Recieve_tm-x.py          # เปิด FTP server ที่ AGENT_FTP_PO
 ### `mockup.py` — เทสต์โดยไม่มีฮาร์ดแวร์
 
 สุ่มค่า `value_x`/`value_y` ตาม nominal/tolerance จริงของ ALPL นั้น (จึงได้ OK/NG
-ที่สมจริง) และ **รองรับ `pause`/`resume` ครบ** ต่างจาก `send_command.py`
+ที่สมจริง)
+
+> ⚠ **ต้องมีพฤติกรรมตรงกับ `send_command(Pi).py` เสมอ** — เคยพลาดมาแล้วตอน `pause`:
+> `mockup.py` รองรับครบ แต่ Pi ไม่รองรับ จึงเทสต์ผ่านหมดแต่เครื่องจริงพัง
+> ตอนนี้ทั้งคู่ตอบ `400` กับ action ที่ไม่รู้จักเหมือนกันแล้ว
 
 
 ---
@@ -327,7 +346,7 @@ python send_command.py
 #    3b. บน PC เครื่องเดียวกับ Backend (terminal ที่ 3) — รับค่า+รูปจาก TM-X
 python Recieve_tm-x.py
 
-#    หรือถ้ายังไม่มีฮาร์ดแวร์ ใช้ตัวเดียวจบ (สุ่มค่าแทน + รองรับ pause/resume)
+#    หรือถ้ายังไม่มีฮาร์ดแวร์ ใช้ตัวเดียวจบ (สุ่มค่าแทน)
 python mockup.py
 
 # 4. รัน Frontend
@@ -351,8 +370,8 @@ python mockup.py
 - [ ] `Frontend/test.html` เป็น mockup เก่าที่ไม่ได้ใช้แล้ว ยังไม่ได้ลบ
 - [x] ~~Pi ไม่รู้ว่าชิ้นไหนพลาด~~ — `send_command.py` รอยืนยันว่า `measured_count` ขยับจริงหลังยิง `T1` (poll `/api/session/state`) ถ้าครบ `MEASURE_TIMEOUT` แล้วไม่ขยับ จะแจ้ง `POST /api/measure-timeout` → backend broadcast SSE `measure_timeout` → หน้าเว็บเด้ง modal ถามว่า "วัดชิ้นถัดไป / หยุดการวัด" → Pi poll `GET /api/measure-timeout/{session_id}` รอคำตอบ (เลือกหยุด = เดินเส้นทางเดียวกับปุ่ม Stop ทุกประการ)
 - [ ] Trigger วัดแต่ละชิ้นใน `send_command.py` ยังจำลองด้วยการกด Enter ที่ terminal แทนสัญญาณ trigger จริงจาก MCU — รอต่อ MCU ผ่าน Serial จริง
-- [ ] **`send_command.py` ไม่รองรับ `pause`/`resume`** — backend ยิง action นี้ไปแต่ `/command` รู้จักแค่ `start`/`stop` คำสั่งถูกกลืนเงียบๆ แล้วตอบ `{"status":"ok"}` กลับมา → **กด Pause บนเว็บแต่เครื่องจริงยังวัดต่อ** (`mockup.py` รองรับครบ จึงไม่เจอตอนเทสต์)
-- [ ] `POST /api/measurements` ไม่เช็คสถานะ session — ค่าที่ TM-X ส่งมาช้าหลังกด Pause/Stop ยังถูกบันทึกลง DB (`Recieve_tm-x.py` เช็คแค่ว่ามี session `running` อยู่ไหมตอนที่ได้รูป ไม่ใช่ตอนที่ backend รับ)
+- [x] ~~**`send_command.py` ไม่รองรับ `pause`/`resume`**~~ — **ถอด Pause/Resume ออกทั้งระบบแล้ว (7 ส.ค. 2569)** เพราะฝั่ง Pi ไม่เคยรองรับ กดแล้วหน้าเว็บขึ้น `paused` แต่เครื่องจริงยังวัดต่อ · `state` เหลือ 4 ค่า `idle`/`running`/`stopped`/`timeout` · และ `/command` ของทั้ง Pi กับ `mockup.py` ตอบ `400` กับ action ที่ไม่รู้จักแล้ว (ดู `Handle_Pi_Error.md` 1.1-1.2)
+- [ ] `POST /api/measurements` ไม่เช็คสถานะ session — ค่าที่ TM-X ส่งมาช้าหลังกด Stop ยังถูกบันทึกลง DB (`Recieve_tm-x.py` เช็คแค่ว่ามี session `running` อยู่ไหมตอนที่ได้รูป ไม่ใช่ตอนที่ backend รับ)
 - [ ] `send_command.py` ไม่เช็ค response ของ `R0`/`PW` — TM-X ตอบ error ก็เดินหน้าวัดต่อทั้ง session
 - [ ] Power BI dashboard (`combined_3_fixed`) พัฒนาแยกขนานไปกับ Web Frontend
 - [ ] Frontend ย้ายจาก Vanilla JS ไปเป็น React + Vite + TanStack Query ที่ `Frontend-react/` ครบทั้ง 3 หน้าแล้ว (Export, Edit, Dashboard) — ยังไม่ได้ตัดสลับ static mount ใน `main.py` ให้ชี้มาที่นี่ (ยังเสิร์ฟจาก `Frontend/` เดิมอยู่) รอทดสอบผ่านหน้าจอจริงให้ครบทุก flow ก่อน (โดยเฉพาะ Dashboard ที่ซับซ้อนสุด — Part Entry 3 โหมด, SSE) โค้ด Dashboard/Edit เขียนโดยยังไม่เคยผ่าน `npm run build` จริงเช่นกัน (ดูหัวข้อ Frontend Framework Migration)
