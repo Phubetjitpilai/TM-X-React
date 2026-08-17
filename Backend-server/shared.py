@@ -441,61 +441,35 @@ async def lifespan(app: FastAPI):
     _reload_session_queues() ต้อง await ให้เสร็จก่อน yield เพราะต้องกู้คืนคิว
     ให้ครบก่อนรับ request
     """
-    _ensure_pi_status_row()                      # ต้องมีแถวก่อน heartbeat ตัวแรกมาถึง
-    _load_pi_last_seen_from_db()                 # กันชิปกระพริบ "ไม่ทราบ" ทุกครั้งที่ restart
     asyncio.create_task(heartbeat_checker())     # fire-and-forget, never blocks
     asyncio.create_task(_deleted_purge_loop())   # ล้างถังขยะที่เกินอายุ
     await _reload_session_queues()               # ต้องเสร็จก่อนรับ request
     yield
 
 
-def _ensure_pi_status_row():
-    """สร้างแถวเดียวใน pi_status ถ้ายังไม่มี — เรียกตอนบูตทุกครั้ง
-
-    ตาราง pi_status มีแถวเดียวตลอดชีวิต heartbeat จึงเป็น `UPDATE ... ` เปล่าๆ
-    ไม่มี WHERE ซึ่งจะทำงานก็ต่อเมื่อ **มีแถวอยู่จริง**
-
-    ⚠ ถ้าไม่มีแถว: UPDATE กระทบ 0 แถวโดยไม่มี error ใดๆ → last_seen ไม่เคยขยับ
-      → ชิป PI ขึ้นแดงตลอดกาลทั้งที่ Pi ปกติดี · ไล่หาสาเหตุยากมากเพราะทุกอย่าง
-      ดู "ทำงานอยู่" หมด (Pi ยิง heartbeat · Backend ตอบ ok · ไม่มี error สักบรรทัด)
-      การ ensure ตรงนี้ทำให้ DB ที่ยังไม่มีแถวกู้ตัวเองได้เสมอ
-
-    ไม่โยน exception ออกไป — DB ยังไม่พร้อมตอนบูตไม่ควรทำให้ Backend ไม่ขึ้น
-    (ตารางยังไม่ได้ migrate ก็เข้าเคสนี้ ดู sql-tools/migrate_pi_status.sql)
-    """
-    try:
-        db = get_db()
-    except Exception as exc:
-        log.warning("ensure pi_status: ต่อ DB ไม่ได้ตอนบูต (%s) — ข้ามไปก่อน", exc)
-        return
-    try:
-        with db.cursor() as cur:
-            cur.execute(
-                "INSERT INTO pi_status (last_seen) "
-                "SELECT NOW() FROM DUAL "
-                "WHERE NOT EXISTS (SELECT 1 FROM pi_status)"
-            )
-    except Exception as exc:
-        log.warning("ensure pi_status ไม่สำเร็จ: %s — ชิป PI จะขึ้นว่า 'ไม่ทราบ' "
-                    "(รัน sql-tools/migrate_pi_status.sql หรือยัง?)", exc)
-    finally:
-        db.close()
 
 
 def mark_pi_seen():
     """บันทึกว่า "เพิ่งเห็น Pi เดี๋ยวนี้" — เรียกจาก POST /api/heartbeat ทุกครั้ง
 
-    เขียนลง memory (ตัวแปรนี้) เป็นแหล่งความจริงของชิป PI ส่วนตาราง pi_status
-    ยังเขียนต่อไว้ให้ไล่ดูย้อนหลังได้ตอน debug — แต่ **ฝั่งอ่านไม่แตะ DB แล้ว**
+    เก็บใน memory ล้วน **ไม่แตะ DB เลย** ทั้งฝั่งเขียน (ตรงนี้) และฝั่งอ่าน
+    (read_pi_status)
 
-    ทำไมย้ายฝั่งอ่านมาไว้ memory:
-      ฝั่งอ่านถูกเรียกหนักกว่าฝั่งเขียนหลายเท่า — ระหว่างที่ Pi รอค่า มันโพล
-      /api/session/state ทุก 0.4 วิ (2.5 req/s) บวกหน้าเว็บอีก ทำให้ต้องเปิด
-      MySQL connection ใหม่ (get_db ไม่มี pool) วินาทีละหลายตัว ทั้งที่ค่าที่อ่าน
-      เปลี่ยนแค่ทุก HEARTBEAT_INTERVAL · อ่านจาก memory จึงฟรีและตรงกว่า
+    ── ทำไมไม่เก็บลง DB ─────────────────────────────────────────────────────
+    ค่านี้ตอบคำถาม "Pi ยังอยู่ไหม ณ วินาทีนี้" ซึ่ง **หมดอายุใน PI_ONLINE_TIMEOUT
+    วินาที** โดยธรรมชาติ — last_seen ของเมื่อ 5 นาทีที่แล้วบอกอะไรไม่ได้เลย
+    ต่างจากผลการวัด/ทะเบียน ALPL ที่หายไม่ได้ ของที่ตายเองอยู่แล้วไม่ต้องจดใส่
+    กระดาษถาวร
 
-    ผลพลอยได้: หมดปัญหานาฬิกา MySQL vs Python ไปเลย เพราะทั้งเขียนและอ่าน
-    อยู่ฝั่ง Python ทั้งคู่ (เดิมต้องระวังว่า MySQL ใน Docker คนละโซนกับ host)
+    เคยมีตาราง `pi_status` เก็บสำเนาไว้ (แถวเดียว UPDATE ทับไปเรื่อยๆ) ประโยชน์
+    มีอย่างเดียวคือกู้ค่ากลับตอน Backend restart เพื่อไม่ให้ชิปกระพริบ 🟡 ราว 2 วิ
+    ต้นทุนคือ UPDATE 1 แถวทุก HEARTBEAT_INTERVAL = 43,200 ครั้ง/วัน ซึ่งลง binary
+    log ทั้งหมด (~200-300 MB/เดือน) แลกกับความสบายตาตอน `--reload` เท่านั้น —
+    หน้างานจริง Backend รันยาว แทบไม่รีสตาร์ทเลย จึงถอดออก
+    (ลบตารางทิ้งด้วย sql-tools/drop_pi_status.sql ถ้า DB เก่ายังมีอยู่)
+
+    ผลพลอยได้: หมดปัญหานาฬิกา MySQL vs Python เพราะทั้งเขียนและอ่านอยู่ฝั่ง
+    Python ทั้งคู่ (เดิมต้องระวังว่า MySQL ใน Docker คนละโซนกับ host)
     """
     global _pi_last_seen
     _pi_last_seen = datetime.now()
@@ -513,42 +487,16 @@ def read_pi_status():
     None ต่างจาก False ตรงที่ "เราไม่มีข้อมูล" ไม่ใช่ "รู้แน่ว่าตาย" — หน้าเว็บ
     ต้องแสดงคนละแบบ และปุ่ม Start ล็อกทั้งคู่
 
-    หลัง Backend restart จะเป็น None อยู่ไม่เกิน HEARTBEAT_INTERVAL วิ (heartbeat
-    ตัวถัดไปมาถึงก็หาย) — และ _ensure_pi_status_row() ยังกู้ค่าจากตารางให้ตอนบูต
-    ด้วย จึงแทบไม่มีช่วงว่างเลย
+    หลัง Backend restart จะเป็น None อยู่ไม่เกิน HEARTBEAT_INTERVAL วิ แล้วหายเอง
+    ตอน heartbeat ตัวถัดไปมาถึง — ระหว่างนั้นชิปขึ้น 🟡 และปุ่ม Start ล็อก ซึ่ง
+    **ถูกต้องตามความหมาย** เพราะในวินาทีนั้นเราไม่รู้จริงๆ ว่า Pi เป็นยังไง
+    (เดิมมีการกู้ค่าจากตาราง pi_status เพื่อข้ามช่วงนี้ ถอดออกแล้ว — ดู mark_pi_seen)
     """
     if _pi_last_seen is None:
         return None
     return (datetime.now() - _pi_last_seen).total_seconds() <= PI_ONLINE_TIMEOUT
 
 
-def _load_pi_last_seen_from_db():
-    """กู้ `_pi_last_seen` จากตาราง pi_status ตอนบูต — เรียกครั้งเดียวใน lifespan
-
-    ทำไมต้องกู้ ทั้งที่ heartbeat ตัวถัดไปมาใน ~2 วิอยู่แล้ว: กันไม่ให้ชิปกระพริบ
-    เป็น "ไม่ทราบ" ทุกครั้งที่ Backend restart — ซึ่งตอน dev ที่ใช้ `--reload`
-    เกิดทุกครั้งที่เซฟไฟล์ และแต่ละครั้งจะไปล็อกปุ่ม Start ให้ด้วย
-
-    ครอบ try/except ทั้งก้อน — ตารางยังไม่ได้ migrate ก็ไม่ควรทำให้ Backend ไม่ขึ้น
-    (แค่กลับไปเป็น "ไม่ทราบ" จนกว่า heartbeat ตัวแรกจะมาถึง ซึ่งยอมรับได้)
-    """
-    global _pi_last_seen
-    try:
-        db = get_db()
-    except Exception:
-        return
-    try:
-        with db.cursor() as cur:
-            cur.execute("SELECT last_seen FROM pi_status LIMIT 1")
-            row = cur.fetchone()
-        if row and row.get("last_seen"):
-            _pi_last_seen = row["last_seen"]
-            log.info("กู้ pi_status จาก DB: เห็น Pi ล่าสุด %s", _pi_last_seen)
-    except Exception as exc:
-        log.warning("กู้ pi_status ตอนบูตไม่ได้: %s — ชิปจะขึ้น 'ไม่ทราบ' "
-                    "จนกว่า heartbeat ตัวแรกจะมาถึง", exc)
-    finally:
-        db.close()
 
 async def _deleted_purge_loop():
     """ล้างถังขยะที่เกินอายุ — ทำทันทีตอนเริ่ม แล้ววนซ้ำวันละครั้ง
@@ -1358,8 +1306,6 @@ __all__ = [
     "read_pi_status",
     "mark_pi_seen",
     "PI_ONLINE_TIMEOUT",
-    "_ensure_pi_status_row",
-    "_load_pi_last_seen_from_db",
     "pymysql",
     "re",
     "secrets",

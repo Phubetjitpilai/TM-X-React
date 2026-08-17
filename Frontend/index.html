@@ -1868,13 +1868,40 @@
    *  ตอนนี้ยิงแค่ session/state ตัวเดียว แล้วเทียบลายเซ็น — เหมือนเดิมทุกอย่าง
    *  ก็จบแค่นั้น ต่อเมื่อมีอะไรขยับจริงถึงค่อยไปดึงสถิติ/คิวตามมา
    *  (เส้นทาง SSE ไม่ได้ถูกแตะ — measurement ที่เข้ามาสดยังอัปเดตทันทีเหมือนเดิม) */
+  /** ตั้งป้าย Server จากผลของ poll — ใช้แยก "DB ล่ม" ออกจาก "Backend ล่ม"
+   *
+   *  SSE บอกได้แค่ว่าคุยกับ Backend รู้เรื่องไหม มันไม่เคยแตะ DB เลยจึงไม่มีทาง
+   *  รู้ว่า MySQL ตายอยู่ — ป้ายจะค้างเขียวทั้งที่ไม่มีอะไรโหลดขึ้นสักช่อง
+   *  ส่วน poll เส้นนี้ยิง query จริงทุกครั้ง status code ของมันจึงเป็นตัวเดียว
+   *  ที่บอกความจริงเรื่อง DB ได้
+   *
+   *  ⚠ SSE หลุด (offline) ถือว่าหนักกว่าเสมอ — ห้ามให้ poll มาลดระดับเป็น
+   *    db-offline เพราะตอน Backend ตายสนิท poll ก็ล้มเหลวเหมือนกัน แล้วจะกลาย
+   *    เป็นบอกว่า "แค่ DB ล่ม" ทั้งที่ทั้งเครื่องไม่ตอบ
+   */
+  function setServerBadgeFromPoll(ok) {
+    if (stationStatus === 'offline') return;
+    const want = ok ? 'online' : 'db-offline';
+    if (stationStatus !== want) setStationBadge(want);
+  }
+
   async function pollSessionState() {
     let d;
     try {
       const r = await fetch(`${API}/api/session/state`);
-      if (!r.ok) return setPiUnknown();
+      if (!r.ok) {
+        // 503 = Backend ยังอยู่แต่ต่อ MySQL ไม่ได้ · รหัสอื่นถือว่ามีปัญหาเหมือนกัน
+        setServerBadgeFromPoll(false);
+        return setPiUnknown();
+      }
+      setServerBadgeFromPoll(true);
       d = await r.json();
-    } catch (e) { console.warn('pollSessionState:', e); return setPiUnknown(); }
+    } catch (e) {
+      // ยิงไม่ออกเลย = เครือข่าย/Backend ล่มทั้งตัว ไม่ใช่เรื่อง DB โดยเฉพาะ
+      // ปล่อยให้ SSE เป็นคนตัดสิน (onerror → offline) จะได้ไม่ชี้ผิดจุด
+      console.warn('pollSessionState:', e);
+      return setPiUnknown();
+    }
 
     const sig = _sigOf(d);
     const changed = sig !== _sessionSig;
@@ -1964,7 +1991,7 @@
         : '▶ Start (Waiting for Pi)';   // ปุ่มบอก "ทำไมกดไม่ได้" จึงใช้คำต่างจากชิปนิดหน่อย
       btnStart.title = sessionControl.pi_status === false
         ? 'ไม่ได้รับสัญญาณจาก Pi เกินเวลาที่กำหนด — ตรวจว่า Pi.py รันอยู่ไหม · สาย LAN'
-        : 'อ่านสถานะ Pi ไม่ได้ — ตรวจว่า Backend ต่อ DB ได้ไหม · รัน migrate_pi_status.sql แล้วหรือยัง';
+        : 'ยังไม่เคยได้รับ heartbeat จาก Pi ตั้งแต่ Backend เริ่มทำงาน — รอสักครู่ ถ้าไม่หายให้ตรวจว่า Pi.py รันอยู่ไหม';
     } else {
       btnStart.textContent = entryQueue
         ? `▶ Start (${entryQueue.mode} ×${entryQueue.list.length})`

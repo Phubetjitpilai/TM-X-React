@@ -297,10 +297,26 @@ function setStationBadge(status) {
     // หมายเหตุ: ชื่อภายในยังเป็น station (stationStatus / .station-badge /
     //   event 'station-status') เพราะใช้ร่วมกัน 4 หน้าและอ้างถึงหลายจุด —
     //   เปลี่ยนแค่ข้อความที่ผู้ใช้เห็น ไม่แตะชื่อตัวแปร เพื่อไม่ให้เสี่ยงโดยเปล่าประโยชน์
+    // ป้ายนี้รวม 2 เรื่องไว้ด้วยกัน: SSE (เบราว์เซอร์ ↔ Backend) และ DB
+    // (Backend ↔ MySQL) เพราะในมุมผู้ใช้ "Backend ตอบได้แต่ทำงานไม่ได้" ก็คือ
+    // ใช้งานไม่ได้อยู่ดี — แยกเป็น 2 ป้ายจะต้องมองหลายที่และมีโอกาสขัดกันเอง
+    //
+    //   online       SSE ต่อได้ + DB ต่อได้        ← ใช้งานได้เต็มที่
+    //   db-offline   SSE ต่อได้ แต่ query ตอบ 503  ← เปิดเว็บได้ แต่โหลดข้อมูลไม่ขึ้น
+    //   offline      SSE หลุด                      ← หนักสุด
+    //
+    // ใครเป็นคนตั้งค่าไหน:
+    //   online / offline / connecting → onopen/onerror ของ EventSource (ไฟล์นี้)
+    //   db-offline                    → status code ของ /api/session/state
+    //                                   (setServerBadgeFromPoll ใน index.html)
+    //
+    // ถ้าไม่มี db-offline จะเกิดสภาพที่ป้ายขึ้น "Server Online" เขียวสวยงาม
+    // ทั้งที่ไม่มีอะไรโหลดขึ้นสักช่อง เพราะ SSE ไม่ได้แตะ DB เลยจึงไม่มีทางรู้
     const map = {
-      online:     '🟢 Server Online',
-      offline:    '🔴 Server Offline',
-      connecting: '🟡 Server Connecting',
+      online:       '🟢 Server Online',
+      offline:      '🔴 Server Offline',
+      connecting:   '🟡 Server Connecting',
+      'db-offline': '🟡 DB Offline',
     };
     el.textContent = map[status] || status;
     el.className = `station-badge ${status}`;

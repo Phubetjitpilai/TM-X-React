@@ -177,6 +177,9 @@ select:focus, input:focus, textarea:focus {
 .station-badge.online     { background: var(--ok-bg);   border-color: var(--ok);   color: var(--ok); }
 .station-badge.offline    { background: var(--ng-bg);   border-color: var(--ng);   color: var(--ng); }
 .station-badge.connecting { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+/* db-offline ใช้โทนเดียวกับ connecting โดยตั้งใจ — ทั้งคู่คือ "ใช้งานไม่ได้เต็มที่
+   แต่ยังไม่ถึงขั้นขาดการติดต่อ" ตัวหนังสือเป็นตัวแยกว่าเป็นเรื่องไหน */
+.station-badge.db-offline { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
 
 /* ── Toast — ข้อความแจ้งผลลอยขึ้นมาด้านล่างจอ ─────────────────────────── */
 .toast {

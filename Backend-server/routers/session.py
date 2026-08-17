@@ -923,51 +923,53 @@ def heartbeat(req: HeartbeatRequest):
     """รับ heartbeat จาก Agent (ดู agent.py heartbeat_loop — ยิงมาทุก
     HEARTBEAT_INTERVAL วิ ไม่ว่าจะมี session running อยู่หรือไม่)
 
-    อัปเดต 2 ที่ คนละหน้าที่กัน:
+    อัปเดต 2 ที่ **คนละที่เก็บกันคนละแบบ** ตามอายุของข้อมูล:
 
-    ① pi_status.last_seen — **ทุกครั้ง ไม่ว่า session_id จะเป็น NULL หรือไม่**
-       ใช้ตอบคำถาม "ตอนนี้ Pi ยังมีชีวิตอยู่ไหม" ซึ่งสำคัญที่สุดตอน Pi ว่าง
+    ① `_pi_last_seen` ใน memory — **ทุกครั้ง ไม่ว่า session_id จะเป็น NULL หรือไม่**
+       ตอบคำถาม "ตอนนี้ Pi ยังมีชีวิตอยู่ไหม" ซึ่งสำคัญที่สุดตอน Pi ว่าง
        (คนเปิดเว็บมาดูก่อนกด Start ว่าเครื่องพร้อมไหม) → ชิป PI ในแถบ Session Control
 
-       ⚠ ต้องทำ **ก่อน** บรรทัด `if req.session_id is None: return` เสมอ
-         ของเดิม return ทิ้งทันทีตอน Pi ว่าง ทำให้ไม่มีที่ไหนบันทึกเลยว่า Pi ยังอยู่
+       เก็บใน memory ไม่ลง DB เพราะค่านี้ **หมดอายุใน PI_ONLINE_TIMEOUT วินาที**
+       โดยธรรมชาติ — last_seen ของเมื่อ 5 นาทีที่แล้วบอกอะไรไม่ได้เลย ต่างจาก
+       ผลการวัด/ทะเบียน ALPL ที่หายไม่ได้ (เคยมีตาราง `pi_status` เก็บสำเนาไว้
+       ถอดออกแล้ว ดูเหตุผลที่ mark_pi_seen ใน shared.py)
 
-    ② sessions.last_seen — เฉพาะตอนกำลังวัด ให้ heartbeat_checker() เอาไปเทียบว่า
-       session นี้ยังมี Agent ส่งสัญญาณชีพอยู่ไหม · เงื่อนไข `state = 'running'`
+       ⚠ ต้องทำ **ก่อน** แตะ DB เสมอ · ของเดิม return ทิ้งทันทีตอน Pi ว่าง
+         ทำให้ไม่มีที่ไหนบันทึกเลยว่า Pi ยังอยู่
+
+    ② `sessions.last_seen` ใน DB — เฉพาะตอนกำลังวัด ให้ heartbeat_checker() เอาไป
+       เทียบว่า session นี้ยังมี Agent ส่งสัญญาณชีพอยู่ไหม · เงื่อนไข `state='running'`
        กันไม่ให้ heartbeat ที่มาช้า/ค้างจาก session เก่าไปอัปเดต session ผิดตัว
+
+       อันนี้ต้องลง DB จริง เพราะ heartbeat_checker ตัดสินจากมันแล้วไปแก้สถานะ
+       session ที่เป็นข้อมูลถาวร
     """
     # ── ① memory: ทำก่อนเสมอ และไม่มีทางพลาด ──────────────────────────────
     # เป็นแหล่งความจริงของชิป PI · เขียนฟรี ไม่แตะ DB จึงไม่มีทาง raise
     # ต้องอยู่บรรทัดแรกสุด: ต่อให้ DB ล่มทั้งก้อน ชิปก็ยังบอกได้ถูกว่า Pi ยังอยู่
     mark_pi_seen()
 
-    # ── ② DB: เปิด connection "ตัวเดียว" ทำทั้ง 2 UPDATE ──────────────────
-    # ⚠ เดิมแยกเป็น 2 connection (pi_status ตัวหนึ่ง · sessions อีกตัว) ซึ่งทำให้
-    #   endpoint ที่มีหน้าที่ "ต่ออายุ session" กลับแพงขึ้นเท่าตัว — get_db() ไม่มี
-    #   pool เปิดใหม่ทุกครั้ง (โดยตั้งใจ ดู docstring ของมัน) การเปิด connection
-    #   จึงแพงกว่าการยิง query เพิ่มบนสายเดิมมาก
+    # ── ② DB: เฉพาะตอนมี session ที่กำลังวัดอยู่ ───────────────────────────
+    # Pi ว่าง (session_id เป็น None) → ไม่ต้องแตะ DB เลยสักครั้ง ซึ่งเป็นสถานะ
+    # ปกติของเครื่องเกือบทั้งวัน — heartbeat ส่วนใหญ่จึงจบที่ memory ไม่เปิด
+    # connection ไป MySQL เลย (get_db ไม่มี pool เปิดใหม่ทุกครั้ง จึงคุ้มมาก)
     #
-    # กลืน exception ทิ้งทั้งก้อน: heartbeat ต้องไม่พังเพราะ DB มีปัญหา ไม่งั้น
-    # Pi จะนับว่า "ติดต่อ Backend ไม่ได้" แล้วหยุดวัดเอง ทั้งที่คุยกันได้ปกติ
+    # กลืน exception ทิ้ง: heartbeat ต้องไม่พังเพราะ DB มีปัญหา ไม่งั้น Pi จะนับว่า
+    # "ติดต่อ Backend ไม่ได้" แล้วหยุดวัดเอง ทั้งที่คุยกันได้ปกติ
+    if req.session_id is None:
+        return {"ok": True}
+
     try:
         db = get_db()
         try:
             with db.cursor() as cur:
-                # pi_status: เขียนไว้ให้ไล่ดูย้อนหลังตอน debug + กู้ตอน Backend
-                # restart (ดู _load_pi_last_seen_from_db) — ฝั่งอ่านไม่ใช้ตารางนี้แล้ว
-                cur.execute("UPDATE pi_status SET last_seen = NOW()")
-
-                # sessions.last_seen: เฉพาะตอนกำลังวัด ให้ heartbeat_checker เอาไป
-                # เทียบ · เงื่อนไข state='running' กัน heartbeat ที่ค้างจาก session
-                # เก่าไปอัปเดต session ผิดตัว
-                if req.session_id is not None:
-                    cur.execute(
-                        "UPDATE sessions SET last_seen = NOW() "
-                        "WHERE session_id = %s AND state = 'running'",
-                        (req.session_id,),
-                    )
+                cur.execute(
+                    "UPDATE sessions SET last_seen = NOW() "
+                    "WHERE session_id = %s AND state = 'running'",
+                    (req.session_id,),
+                )
         finally:
             db.close()
     except Exception as exc:
-        log.warning("heartbeat: อัปเดต DB ไม่สำเร็จ: %s", exc)
+        log.warning("heartbeat: อัปเดต sessions.last_seen ไม่สำเร็จ: %s", exc)
     return {"ok": True}
