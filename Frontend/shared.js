@@ -286,7 +286,22 @@ function setStationBadge(status) {
   stationStatus = status;
   const el = document.getElementById('station-badge');
   if (el) {
-    const map = { online: '🟢 Online', offline: '🔴 Offline', connecting: '🟡 Connecting' };
+    // เติมคำว่า "Server" เข้าไปเพราะหน้า Home มีป้ายออนไลน์ 2 อันแล้ว —
+    // ป้ายนี้ (เบราว์เซอร์ ↔ Backend) กับชิป PI ในแถบ Session Control
+    // (Backend ↔ Raspberry Pi) ถ้าไม่กำกับจะแยกไม่ออกว่าอันไหนหมายถึงอะไร
+    //
+    // ⚠ ป้ายนี้สะท้อน "สถานะ SSE" ล้วน ๆ — ถูกเรียกจาก onopen/onerror ของ
+    //   EventSource เท่านั้น ไม่เกี่ยวกับเครื่องวัดหรือ Pi เลย คำว่า Server
+    //   จึงตรงความหมายที่สุด
+    //
+    // หมายเหตุ: ชื่อภายในยังเป็น station (stationStatus / .station-badge /
+    //   event 'station-status') เพราะใช้ร่วมกัน 4 หน้าและอ้างถึงหลายจุด —
+    //   เปลี่ยนแค่ข้อความที่ผู้ใช้เห็น ไม่แตะชื่อตัวแปร เพื่อไม่ให้เสี่ยงโดยเปล่าประโยชน์
+    const map = {
+      online:     '🟢 Server Online',
+      offline:    '🔴 Server Offline',
+      connecting: '🟡 Server Connecting',
+    };
     el.textContent = map[status] || status;
     el.className = `station-badge ${status}`;
   }

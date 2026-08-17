@@ -33,7 +33,12 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 # ── Config ──────────────────────────────────────────────────────────────────
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 AGENT_PORT  = int(os.getenv("AGENT_PORT", 9998))
-HB_INTERVAL = 5  # วินาที — ต้องน้อยกว่า HEARTBEAT_TIMEOUT ของ backend (15s)
+# ⚠ เดิม hardcode เป็น 5 ไว้เฉยๆ ทั้งที่ .env มี HEARTBEAT_INTERVAL อยู่แล้ว —
+#   พอมีคนไปลด HEARTBEAT_TIMEOUT ใน .env เป็น 5 ตัวนี้ไม่ตามให้ กลายเป็น
+#   interval(5) = timeout(5) พอดีเป๊ะ ไม่มีระยะเผื่อเลย → backend ฆ่า session
+#   ทิ้งเองแทบทุกครั้งที่บีตมาช้ากว่ากำหนดแม้แต่เสี้ยววินาที
+#   (send_command(Pi).py อ่านจาก .env มาตั้งแต่แรก ตัวนี้จึงเป็นตัวเดียวที่หลุด)
+HB_INTERVAL = float(os.getenv("HEARTBEAT_INTERVAL", 5))
 # ขาดการติดต่อ backend นานเกินเท่านี้ = หยุดวัดเอง (ดู heartbeat_loop)
 # ต้องเป็นค่าเดียวกับที่ backend ใช้ และตรงกับ send_command(Pi).py
 HB_TIMEOUT_HINT = float(os.getenv("HEARTBEAT_TIMEOUT", 15))
@@ -317,5 +322,13 @@ if __name__ == "__main__":
     print(f"🤖 mockup.py — Mock Agent (สุ่มค่าแทนฮาร์ดแวร์จริง)")
     print(f"   Backend  : {BACKEND_URL}")
     print(f"   หน่วงเวลา/ชิ้น: {MEASURE_INTERVAL}s   |   NG rate: {NG_RATE:.0%}")
+    print(f"   heartbeat ทุก {HB_INTERVAL:g}s · หยุดเองถ้าขาดติดต่อเกิน {HB_TIMEOUT_HINT:g}s")
     print(f"   กำลังรอคำสั่ง Start จาก Backend ที่ port {AGENT_PORT}...\n")
+
+    # เตือนแบบเดียวกับ send_command(Pi).py / Pi.py — ต้องมีทุกตัวที่ยิง heartbeat
+    # ไม่งั้นเทสต์ด้วย mockup แล้วผ่าน พอไปเครื่องจริงถึงเจอ (กติกาใน CLAUDE.md)
+    if HB_INTERVAL * 2 > HB_TIMEOUT_HINT:
+        print(f"⚠️  HEARTBEAT_INTERVAL ({HB_INTERVAL:g}s) ถี่ไม่พอเมื่อเทียบกับ "
+              f"HEARTBEAT_TIMEOUT ({HB_TIMEOUT_HINT:g}s)")
+        print(f"    แนะนำให้ HEARTBEAT_INTERVAL ไม่เกิน {HB_TIMEOUT_HINT/2:g}s — แก้ที่ .env\n")
     uvicorn.run(http_app, host="0.0.0.0", port=AGENT_PORT)

@@ -138,6 +138,21 @@
       padding: 0.2rem 0.75rem;
     }
 
+    /* ── ชิป PI — สถานะของ Raspberry Pi ที่คุมเครื่องวัด ────────────────────
+       ต่างจากชิปอื่น 2 อย่างโดยตั้งใจ:
+         ① **ไม่ซ่อนตอน idle** — ประโยชน์หลักคือดูก่อนกด Start ว่าเครื่องพร้อมไหม
+            ถ้าซ่อนตอนไม่มี session ก็หมดความหมาย
+         ② **มีสี** ซึ่งขัดกับกติกา "สี = สถานะ เท่านั้น" ของแถบนี้ — แต่ชิปนี้
+            *เป็น* สถานะจริงๆ ไม่ใช่ข้อเท็จจริงคงที่แบบ Operator/Measure Type
+       3 สถานะ ไม่ใช่ 2 — "ไม่ทราบ" ต้องแยกจาก "ออฟไลน์" ให้ชัด */
+    .sc-pi { display: inline-flex; align-items: center; gap: 0.35rem; }
+    .sc-pi.online  { color: #15803d; background: #dcfce7; }
+    .sc-pi.offline { color: #b91c1c; background: #fee2e2; }
+    /* เหลืองให้ตรงกับ 🟡 Connecting และตรงกับป้าย station บน topbar
+       (shared.js ใช้ 🟢 Online / 🔴 Offline / 🟡 Connecting ชุดเดียวกัน —
+        ผู้ใช้จะได้เรียนรู้คำชุดเดียวสำหรับทั้ง 2 ป้าย ไม่ต้องแปลในหัว) */
+    .sc-pi.unknown { color: #a16207; background: #fef9c3; }
+
     .session-info { flex: 1; min-width: 180px; }
     .session-state-label {
       font-size: 0.75rem;
@@ -493,6 +508,17 @@
     .stat-value.total  { color: var(--text); }
     .stat-value.ok     { color: var(--ok); }
     .stat-value.ng     { color: var(--ng); }
+
+    /* ปุ่ม Clear บนหัวการ์ด Live Telemetry / Part Entry — เงียบโดยตั้งใจ
+       (โทนเทา ไม่ใช่แดง) เพราะมันล้างแค่สิ่งที่แสดงบนจอ ไม่ได้ลบข้อมูลจริง
+       ถ้าทำเป็นสีแดงจะดูอันตรายเกินกว่าที่มันทำจริง แล้วคนจะไม่กล้ากด */
+    .btn-clear {
+      background: transparent; border: 1px solid var(--border);
+      color: var(--muted); padding: 0.2rem 0.6rem; border-radius: var(--radius);
+      font-size: 0.78rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    .btn-clear:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
+    .btn-clear:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* ── Section 4 — Part Entry ──────────────────────────────────────────── */
     .pe-card-header {
@@ -1084,6 +1110,13 @@
             <span class="sc-label">Session</span>
             <span class="sc-value" id="sc-session">—</span>
           </div>
+          <!-- ชิป PI — โชว์ตลอด ไม่ซ่อนตอน idle (ดูเหตุผลที่ .sc-pi ใน <style>)
+               ค่ามาจาก pi_status ที่ backend แนบมากับ GET /api/session/state
+               ซึ่งหน้านี้ poll อยู่แล้วทุก 5 วิ — ไม่ได้เพิ่ม request ใหม่ -->
+          <div class="session-chip" id="sc-pi-wrap">
+            <span class="sc-label">Raspberry Pi</span>
+            <span class="sc-value sc-pi unknown" id="sc-pi">🟡 Connecting</span>
+          </div>
 
           <div class="session-btns">
             <!-- 2 ปุ่ม เห็นทีละตัวตามสถานะ (ดู renderSessionUI):
@@ -1104,7 +1137,15 @@
         <div class="card">
           <div class="telemetry-header">
             <div class="card-title" style="margin-bottom:0">Live Telemetry</div>
-            <span class="telemetry-alpl-badge" id="telemetry-alpl-badge">ALPL —</span>
+            <div style="display:flex; align-items:center; gap:0.5rem">
+              <span class="telemetry-alpl-badge" id="telemetry-alpl-badge">ALPL —</span>
+              <!-- ล้างเฉพาะสิ่งที่แสดงบนจอ ไม่แตะฐานข้อมูล — ผลวัดที่บันทึกไปแล้ว
+                   ยังอยู่ครบในตาราง Measurements ด้านล่าง
+                   ล็อกตอน running เพราะล้างกลางคันแล้ว SSE ตัวถัดไปจะเติมกลับมา
+                   ครึ่งๆ กลางๆ ดูสับสนกว่าเดิม (ดู renderSessionUI) -->
+              <button class="btn-clear" id="btn-clear-telemetry"
+                      title="ล้างค่าที่แสดงอยู่ ไม่กระทบข้อมูลที่บันทึกแล้ว">🧹 Clear</button>
+            </div>
           </div>
           <div class="telemetry-grid">
             <div class="telemetry-xy-col">
@@ -1188,7 +1229,13 @@
       <div class="card">
         <div class="pe-card-header">
           <div class="card-title" style="margin-bottom:0">Part Entry</div>
-          <span class="pe-mode-badge-lg" id="pe-mode-badge-lg" style="display:none"></span>
+          <div style="display:flex; align-items:center; gap:0.5rem">
+            <span class="pe-mode-badge-lg" id="pe-mode-badge-lg" style="display:none"></span>
+            <!-- ล้างคิวที่กรอกไว้ (entryQueue + localStorage) — ปุ่ม Start จะกลับ
+                 เป็น "กด Save ก่อน" · เก็บ Operator ไว้เพราะปกติคนเดิมวัดทั้งกะ -->
+            <button class="btn-clear" id="btn-clear-entry"
+                    title="ล้างคิวที่กรอกไว้ ต้องกรอกใหม่ก่อนกด Start">🧹 Clear</button>
+          </div>
         </div>
         <div id="part-entry-summary"></div>
       </div>
@@ -1399,6 +1446,12 @@
   // stationStatus ประกาศไว้ที่ shared.js (setStationBadge เป็นคนอัปเดต) —
   // หน้านี้แค่ดักฟัง event เพื่อวาดปุ่ม Start ใหม่ทุกครั้งที่สถานะเปลี่ยน
   document.addEventListener('station-status', renderSessionUI);
+
+  // SSE หลุด = ขาดการติดต่อ Backend → ชิป PI ต้องกลายเป็น "ไม่ทราบ" ทันที
+  // ไม่ใช่ค้างเขียวไว้ · เป็นทางที่ 3 ที่ต้องดัก นอกจาก poll ล้มเหลว 2 ทาง
+  document.addEventListener('station-status', (e) => {
+    if (e.detail !== 'online') setPiUnknown();
+  });
   let measurements  = [];   // "หน้าปัจจุบัน" ของตาราง Measurements เท่านั้น (server-side pagination — ดู loadMeasurementsPage)
   let parts         = [];
   // คิว Part Entry ที่กด Save แล้ว — ตัวเดียวจบทุกโหมด (เดิมแยก 3 ตัวแปร
@@ -1420,7 +1473,10 @@
   //
   // กติกาการล้าง: ล้าง measure_type/operator **เมื่อ session_id เปลี่ยนเท่านั้น**
   //   ส่วน `state` เปลี่ยนได้อิสระ (running → stopped → timeout) โดยไม่ล้างใคร
-  let sessionControl = { session_id: null, state: 'idle', measure_type: null, operator: null };
+  // pi_status: true=ออนไลน์ · false=เงียบเกินเกณฑ์ · null=ไม่ทราบ (อ่านไม่ได้/backend เงียบ)
+  // ⚠ ไม่ใช่ของ session — ต้องรอดตอน session_id เปลี่ยน (ดู applySessionControl)
+  let sessionControl = { session_id: null, state: 'idle', measure_type: null, operator: null,
+                         pi_status: null };
 
   /** อัปเดต session_control จากข้อมูลที่เพิ่งได้มา (จากที่ไหนก็ได้)
    *
@@ -1443,10 +1499,18 @@
         state: sessionControl.state,   // state คงไว้ก่อน เดี๋ยวทับด้วยค่าใหม่ข้างล่างถ้ามี
         measure_type: null,
         operator: null,
+        // ⚠ pi_status ต้องคงไว้ด้วย — มันเป็นสถานะของ "เครื่อง" ไม่ใช่ของ session
+        //   ถ้าล้างเป็น null ตามตัวอื่น ชิปจะกระพริบเป็น "ไม่ทราบ" ทุกครั้งที่
+        //   กด Start รอบใหม่ ทั้งที่ Pi ไม่ได้หายไปไหน
+        pi_status: sessionControl.pi_status,
       };
     }
 
     if (data.state != null) sessionControl.state = data.state;
+
+    // เทียบกับ undefined ไม่ใช่ null — เพราะ null เป็นค่าที่มีความหมาย ("ไม่ทราบ")
+    // ส่วนก้อนย่อยจาก SSE เช่น {state:'stopped'} ไม่มีคีย์นี้เลย = ไม่ต้องแตะ
+    if (data.pi_status !== undefined) sessionControl.pi_status = data.pi_status;
 
     // operator / measure_type: รับได้ทั้งแบบส่งตรง (ตอนกด Start เติมจากฟอร์ม
     // กันจอกระพริบ) และแบบแกะจาก queue_state ที่ backend แนบมากับ session/state
@@ -1477,8 +1541,25 @@
 
   function savePartEntryState() {
     try {
+      // ⚠ ตัด pi_status ออกก่อนเซฟ — **ห้ามเก็บสถานะสดของฮาร์ดแวร์ลง localStorage**
+      //
+      // ค่าอื่นใน sessionControl (operator/measure_type/session_id) เป็นข้อเท็จจริง
+      // ของ session ที่เกิดไปแล้ว เอากลับมาโชว์ระหว่างรอ network ได้ แต่ pi_status
+      // เป็นสถานะ ณ วินาทีนี้ ค่าที่เก็บตอนปิดแท็บไม่ได้บอกอะไรเลยเกี่ยวกับตอนนี้
+      //
+      // ถ้าเก็บไว้: ปิดแท็บตอน Pi เขียว → ถอดปลั๊ก Pi → เปิดแท็บใหม่ → ชิปขึ้น
+      // 🟢 Online และ **ปุ่ม Start ปลดล็อก** ตั้งแต่ยังไม่ได้คุยกับ backend เลย
+      //
+      // เดิมเซฟลงไปแล้วค่อยล้างเป็น null ตอนโหลด — ได้ผลเหมือนกันแต่สับสน
+      // ตัดตั้งแต่ต้นทางชัดเจนกว่า
+      const { pi_status: _drop, ...sessionControlToSave } = sessionControl;
       localStorage.setItem(PART_ENTRY_STORAGE_KEY,
-        JSON.stringify({ entryQueue, sessionControl, lastTelemetry, lastImageMeasurementId }));
+        JSON.stringify({ entryQueue, sessionControl: sessionControlToSave,
+                         lastTelemetry, lastImageMeasurementId,
+                         // เก็บด้วยเพื่อให้ "ล้างจอ" รอดการ refresh — เก็บเป็น
+                         // session_id ไม่ใช่ boolean จะได้ปลดตัวเองเมื่อขึ้น
+                         // session ใหม่ (ดู isTelemetryCleared)
+                         telemetryClearedSid }));
     } catch (e) { /* localStorage อาจใช้ไม่ได้ (private mode ฯลฯ) — ไม่ critical ปล่อยผ่าน */ }
   }
 
@@ -1491,8 +1572,16 @@
       // เก็บในคีย์เดียวกับก้อนอื่น — มีทางเขียน/อ่าน localStorage ทางเดียวจะได้
       // ไม่ต้องไล่ sync หลายคีย์ให้ตรงกันเอง
       sessionControl        = d.sessionControl ?? sessionControl;
+
+      // pi_status ไม่ถูกเซฟลง localStorage ตั้งแต่ต้นทางแล้ว (ดู savePartEntryState)
+      // แต่ยังตั้ง null ไว้ตรงนี้ด้วย เผื่อ localStorage ก้อนเก่าที่เซฟไว้ก่อน
+      // เวอร์ชันนี้ยังมีคีย์นั้นค้างอยู่ในเครื่องผู้ใช้
+      sessionControl.pi_status = null;
       lastTelemetry         = d.lastTelemetry ?? null;
       lastImageMeasurementId = d.lastImageMeasurementId ?? null;
+      // "ล้างจอ" ต้องรอดการ refresh — ไม่งั้น poll รอบแรกหลังโหลดหน้าจะดึงคิว
+      // กับตัวเลขของ session เดิมกลับมาทันที เหมือนไม่เคยกดล้าง
+      telemetryClearedSid   = d.telemetryClearedSid ?? null;
     } catch (e) { console.warn('loadPartEntryState:', e); }
   }
 
@@ -1566,7 +1655,31 @@
     // ซึ่งวิ่งผ่าน updateSession() ที่มีเช็ค session_id ของคิว (queueIsStale)
     // อยู่แล้ว ไม่ต้องเขียน logic เคลียร์คิวซ้ำอีกชุด
     // (pollSessionState ยิงแค่ 1 request ถ้าสถานะไม่ขยับ — ดูคอมเมนต์ที่ตัวมัน)
-    setInterval(pollSessionState, 5000);
+    //
+    // รอบ poll มาจาก .env (UI_POLL_INTERVAL) ผ่าน GET /api/config — เบราว์เซอร์
+    // อ่านไฟล์ .env เองไม่ได้ จึงต้องให้ backend ส่งมาให้
+    //
+    // ⚠ ตัวนี้เป็น "เพดาน" ของความไวที่ตาเห็น:
+    //       เวลาที่ชิป PI เปลี่ยน = HEARTBEAT_TIMEOUT + รอบ poll (สูงสุด)
+    //   ลด HEARTBEAT_TIMEOUT อย่างเดียวไม่ช่วยถ้าตัวนี้ยังใหญ่
+    //
+    // เริ่มด้วยค่า default ทันทีโดยไม่รอ /api/config ตอบ — หน้าเว็บต้อง poll ได้
+    // เสมอแม้ endpoint นั้นล่ม · พอค่าจริงมาถึงค่อยตั้ง timer ใหม่ถ้าไม่เท่าเดิม
+    let _pollMs    = 5000;
+    let _pollTimer = setInterval(pollSessionState, _pollMs);
+
+    fetch(`${API}/api/config`)
+      .then(r => r.ok ? r.json() : null)
+      .then(cfg => {
+        const ms = Number(cfg?.poll_interval_ms);
+        // กันค่าเพี้ยนจาก .env (เช่นพิมพ์ 0 หรือติดลบ) ที่จะทำให้ยิงรัวจนเว็บค้าง
+        if (!Number.isFinite(ms) || ms < 250 || ms === _pollMs) return;
+        clearInterval(_pollTimer);
+        _pollMs    = ms;
+        _pollTimer = setInterval(pollSessionState, _pollMs);
+        console.info(`poll /api/session/state ทุก ${_pollMs} ms (จาก .env UI_POLL_INTERVAL)`);
+      })
+      .catch(e => console.warn('/api/config:', e));   // ใช้ค่า default ต่อไป
   });
 
   // ── Measurements filter/pagination bindings — เหมือน edit.html ─────────────
@@ -1720,12 +1833,25 @@
 
   /** โหลดสถานะ session ใหม่ทั้งชุด — ใช้ตอนเปิดหน้า / SSE reconnect
    *  ตรงนี้ยอมจ่ายครบทุก request เสมอ เพราะเป็นจังหวะที่ "ไม่รู้ว่าพลาดอะไรไปบ้าง" */
+  /** ตั้งชิป PI เป็น "ไม่ทราบ" — ใช้ตอนที่เรา **ไม่มีข้อมูล** ไม่ใช่ตอนที่รู้ว่า Pi ตาย
+   *
+   *  จำเป็นเพราะข้อมูล pi_status เดินทางผ่าน Backend ถ้า Backend ล่มหรือ poll
+   *  ไม่สำเร็จ จะไม่มีใครมาบอกว่า Pi เป็นยังไง — ถ้าไม่แตะชิปเลยมันจะค้างเขียว
+   *  ค้างไว้ กลายเป็นบอกว่า "Pi ยังอยู่" ทั้งที่เราไม่รู้อะไรแล้ว
+   */
+  function setPiUnknown() {
+    if (sessionControl.pi_status === null) return;   // เป็นอยู่แล้ว ไม่ต้องวาดซ้ำ
+    sessionControl.pi_status = null;
+    renderSessionChips();
+  }
+
   async function loadSessionState() {
     let d = null;
     try {
       const r = await fetch(`${API}/api/session/state`);
       if (r.ok) { d = await r.json(); updateSession(d); }
-    } catch (e) { console.warn('loadSessionState:', e); }
+      else setPiUnknown();
+    } catch (e) { console.warn('loadSessionState:', e); setPiUnknown(); }
     // วาดแถบคิว ALPL ใหม่ทุกครั้งที่ sync สถานะ session — ครอบคลุมทั้งตอนเปิดหน้า
     // ครั้งแรกและตอน SSE reconnect (ดู sse.onopen) ทำให้แถบไม่หายถ้า refresh
     // หน้าเว็บกลาง session · ส่ง d ต่อไปเลย ไม่ให้ยิงขอซ้ำ
@@ -1746,9 +1872,9 @@
     let d;
     try {
       const r = await fetch(`${API}/api/session/state`);
-      if (!r.ok) return;
+      if (!r.ok) return setPiUnknown();
       d = await r.json();
-    } catch (e) { console.warn('pollSessionState:', e); return; }
+    } catch (e) { console.warn('pollSessionState:', e); return setPiUnknown(); }
 
     const sig = _sigOf(d);
     const changed = sig !== _sessionSig;
@@ -1805,23 +1931,61 @@
 
     const telemetrySessionText = document.getElementById('telemetry-session-text');
     if (telemetrySessionText) {
+      // isTelemetryCleared(): ผู้ใช้กด 🧹 Clear ไว้ — ต้องค้างที่ขีด ไม่งั้น
+      // รอบ poll ถัดไป (ทุก UI_POLL_INTERVAL) จะเขียน "1 / 1 measured" กลับมาเอง
       telemetrySessionText.textContent =
-        (state === 'idle' || !session.session_id)
+        (isTelemetryCleared() || state === 'idle' || !session.session_id)
           ? '— / — measured'
           : `${mc} / ${tc} measured`;
     }
 
     // ── สถานะปุ่ม Start / Stop ───────────────────────────────────────────
     //   running → Start กดไม่ได้, โชว์ Stop
-    //   อื่นๆ    → Start กดได้ถ้ามีคิว, ไม่โชว์ Stop
+    //   อื่นๆ    → Start กดได้ถ้ามีคิว + Backend ออนไลน์ + Pi ออนไลน์
+    //
+    // ⚠ Pi ต้องเป็น `true` เท่านั้น — `false` (เงียบเกินเกณฑ์) และ `null`
+    //   (ไม่ทราบ/ยังไม่ได้ migrate/backend เงียบ) ล็อกปุ่มทั้งคู่
+    //   เพราะกด Start ตอน Pi ไม่อยู่จะได้สภาพที่แย่กว่าการกดไม่ได้:
+    //     backend สร้าง session + เขียนคิวลง DB → ยิง /command ไปหา Pi ไม่ถึง
+    //     → _fail_start ต้องมาตามล้าง session ทีหลัง (หรือค้างเป็น timeout
+    //       ใน 15 วิซึ่งชี้สาเหตุผิด) · กันตั้งแต่ต้นทางง่ายกว่ามาก
     const isRunning = state === 'running';
-    const canStart  = !isRunning && stationStatus === 'online' && !!entryQueue;
+    const piOnline  = sessionControl.pi_status === true;
+    const canStart  = !isRunning && stationStatus === 'online' && piOnline && !!entryQueue;
 
     const btnStart = document.getElementById('btn-start');
     btnStart.disabled = !canStart;
-    btnStart.textContent = entryQueue
-      ? `▶ Start (${entryQueue.mode} ×${entryQueue.list.length})`
-      : '▶ Start (กด Save ก่อน)';
+
+    // ข้อความบนปุ่มต้องบอก "ติดอะไรอยู่" ไม่ใช่แค่กดไม่ได้เฉยๆ — ไม่งั้นผู้ใช้
+    // จะนึกว่าระบบพัง แล้วไปไล่หาที่ฟอร์ม Part Entry ทั้งที่ปัญหาอยู่ที่เครื่อง
+    if (!isRunning && !piOnline) {
+      btnStart.textContent = sessionControl.pi_status === false
+        ? '▶ Start (Pi ออฟไลน์)'
+        : '▶ Start (รอสถานะ Pi)';   // ปุ่มบอก "ทำไมกดไม่ได้" จึงใช้คำต่างจากชิปนิดหน่อย
+      btnStart.title = sessionControl.pi_status === false
+        ? 'ไม่ได้รับสัญญาณจาก Pi เกินเวลาที่กำหนด — ตรวจว่า Pi.py รันอยู่ไหม · สาย LAN'
+        : 'อ่านสถานะ Pi ไม่ได้ — ตรวจว่า Backend ต่อ DB ได้ไหม · รัน migrate_pi_status.sql แล้วหรือยัง';
+    } else {
+      btnStart.textContent = entryQueue
+        ? `▶ Start (${entryQueue.mode} ×${entryQueue.list.length})`
+        : '▶ Start (กด Save ก่อน)';
+      btnStart.title = '';
+    }
+
+    // ── ปุ่ม 🧹 Clear ทั้ง 2 ตัว — กดได้เฉพาะตอนไม่ได้วัดอยู่ ────────────────
+    // ล้างกลางคันแล้ว SSE/poll ตัวถัดไปจะเติมกลับมาครึ่งๆ กลางๆ ดูสับสนกว่าเดิม
+    // และคิว Part Entry ระหว่าง running คือของที่ backend ถืออยู่จริง ล้างฝั่ง
+    // หน้าเว็บอย่างเดียวจะทำให้สองฝั่งไม่ตรงกัน
+    ['btn-clear-telemetry', 'btn-clear-entry'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) {
+        b.disabled = isRunning;
+        b.title = isRunning ? 'กดไม่ได้ระหว่างกำลังวัด — กด Stop ก่อน'
+                            : (id === 'btn-clear-telemetry'
+                               ? 'ล้างค่าที่แสดงอยู่ ไม่กระทบข้อมูลที่บันทึกแล้ว'
+                               : 'ล้างคิวที่กรอกไว้ ต้องกรอกใหม่ก่อนกด Start');
+      }
+    });
 
     // Stop โผล่ตอน running — เดิมโผล่เฉพาะตอน paused เพราะบังคับให้กด Pause ก่อน
     // พอตัด Pause ออกแล้วต้องกดหยุดได้ตรงๆ (มี uiConfirm ถามยืนยันอยู่แล้ว)
@@ -1847,6 +2011,22 @@
 
     show('sc-operator-wrap', 'sc-operator', sessionControl.operator);
     show('sc-mode-wrap',     'sc-mode',     sessionControl.measure_type);
+
+    // ชิป PI — ไม่ผ่าน show() เพราะตัวนั้นซ่อนชิปเมื่อไม่มีค่า แต่ตัวนี้ต้องโชว์
+    // ตลอด และ "ไม่มีค่า" (null) ก็เป็นสถานะที่ต้องสื่อสารด้วยตัวมันเอง
+    const pi = document.getElementById('sc-pi');
+    if (pi) {
+      const s = sessionControl.pi_status;
+      const map = {
+        true:  ['online',  '🟢 Online'],
+        false: ['offline', '🔴 Offline'],
+      };
+      // ค่าที่ไม่ใช่ true/false (คือ null = ยังไม่มีข้อมูล) ตกมาที่ 'Connecting'
+      // ใช้คำเดียวกับป้าย station บน topbar — ดู shared.js setStationBadge()
+      const [cls, text] = map[s] || ['unknown', '🟡 Connecting'];
+      pi.className   = `sc-value sc-pi ${cls}`;
+      pi.textContent = text;
+    }
     show('sc-session-wrap',  'sc-session',  sessionControl.session_id != null
                                               ? String(sessionControl.session_id) : null);
   }
@@ -1858,6 +2038,10 @@
   }
 
   async function onNewMeasurement(d) {
+    // มีของใหม่จริงแล้ว → ปลดธง "ล้างจอไว้" ให้จอกลับมาแสดงตามปกติเอง
+    // ผู้ใช้ไม่ต้องกดอะไรเพิ่ม (ดู telemetryClearedSid)
+    telemetryClearedSid = null;
+
     // อัปเดตแถบคิวแบบ incremental — ใช้ d.measured (นับจาก backend) เป็น index
     // ตรงๆ แทนการนับเองฝั่ง client กันคลาดเคลื่อนถ้ามี event หล่นหาย
     //
@@ -1995,6 +2179,27 @@
   // ใช้ index แทนการ map ด้วยเลข ALPL เพราะคิวมี ALPL ซ้ำกันได้ (วัดตัวเดิม 2 รอบ)
   let telemetryQueue = [], telemetryResults = [], telemetryMeasIds = [];
 
+  // ── 🧹 Clear ของ Live Telemetry — เก็บเป็น "session_id ที่ถูกสั่งล้าง" ──────
+  //
+  // ทำไมต้องมี: ล้างตัวแปรอย่างเดียวไม่พอ เพราะหน้าเว็บ poll /api/session/state
+  // ทุก UI_POLL_INTERVAL แล้ว syncQueueStrip()/updateStats()/renderSessionUI()
+  // จะวาดใหม่จากข้อมูล session ที่ยังอยู่ใน DB — คิวกับตัวเลขกลับมาเองใน 2 วิ
+  //
+  // ทำไมเก็บเป็น session_id ไม่ใช่ true/false:
+  //   ① ต้องรอดการ refresh (เก็บลง localStorage ก้อนเดียวกับ entryQueue)
+  //      ถ้าเป็น boolean แล้วเก็บลงไป จะกลายเป็น "ล้างค้างตลอดกาล" แม้ session
+  //      ใหม่เริ่มไปแล้ว ต้องมีคนมากดปลดเอง
+  //   ② พอผูกกับ session_id มันปลดตัวเองอัตโนมัติเมื่อขึ้น session ใหม่ —
+  //      id ไม่ตรงกันก็แสดงตามปกติทันที ไม่ต้องจำว่าเคยกดล้างไว้
+  //
+  // null = ไม่ได้ล้างอะไรไว้ · ตัวเลข = session นั้นถูกสั่งล้างจอไว้
+  let telemetryClearedSid = null;
+
+  /** จอ Live Telemetry ถูกสั่งล้างไว้สำหรับ session ที่กำลังแสดงอยู่หรือเปล่า */
+  function isTelemetryCleared() {
+    return telemetryClearedSid != null && telemetryClearedSid === session.session_id;
+  }
+
   function clearQueueStrip() {
     telemetryQueue = []; telemetryResults = []; telemetryMeasIds = [];
     renderQueueStrip();
@@ -2069,6 +2274,14 @@
   //   (เดิมถาม backend แยก จึงไม่พลอยผิดไปด้วย) — ตอนนี้จะเขียนทับต่อเมื่อ
   //   ดึงข้อมูลมาได้จริงเท่านั้น
   async function syncQueueStrip(stateData = null) {
+    // ── ผู้ใช้กด 🧹 Clear ไว้ → ห้ามดึงของกลับมาใส่ ──────────────────────────
+    // ตัวนี้คือตัวหลักที่ทำให้ "ล้างแล้วกลับมาเอง": มันอ่าน queue_state จาก
+    // /api/session/state แล้วเขียนลง telemetryQueue ใหม่ และยิง
+    // /api/measurements ไปดึงผล OK/NG ของ session นั้นกลับมาทั้งชุด
+    // ถูกเรียกทุกครั้งที่สถานะขยับ (pollSessionState → updateSession) จึงพาคิว
+    // กลับมาภายในไม่กี่วินาทีทุกที ต่อให้ล้างตัวแปรไปแล้ว
+    if (isTelemetryCleared()) { renderQueueStrip(); return; }
+
     const sid = session.session_id;
     // ⚠ ไม่มี session_id = "ยังไม่รู้ว่า session ไหน" ไม่ใช่ "ไม่มีคิว" — ห้ามล้างทิ้ง
     //   เคสที่เจอจริง: เพิ่ง refresh กลับมาตอน backend ตอบช้า/ล่ม คิวถูกเติมจาก
@@ -2129,6 +2342,12 @@
         }
       }
     } catch (e) { console.warn('syncQueueStrip:', e); }
+
+    // เช็คธงอีกรอบหลัง await — ผู้ใช้อาจกด Clear ระหว่างที่ fetch ข้างบนยังค้างอยู่
+    // ถ้าไม่เช็ค response ที่มาถึงทีหลังจะเขียนคิวกลับลงไปทับของที่เพิ่งล้าง
+    if (isTelemetryCleared()) {
+      telemetryQueue = []; telemetryResults = []; telemetryMeasIds = [];
+    }
     renderQueueStrip();
   }
 
@@ -2153,6 +2372,22 @@
     lastTelemetry = null;
     resetCameraPreview();
     savePartEntryState();
+  }
+
+  /** ปุ่ม 🧹 Clear บนหัวการ์ด Part Entry — ล้างคิวที่กรอกไว้ ให้เริ่มใหม่
+   *
+   *  ต่างจาก clearAllQueuesAndForms() ตรงที่ **เก็บ Operator ไว้** เพราะปกติ
+   *  คนเดิมวัดทั้งกะ ถ้าล้างด้วยจะต้องเลือกใหม่ทุกครั้งที่กดล้าง ซึ่งน่ารำคาญ
+   *  โดยไม่ได้อะไรกลับมา (ตัวนั้นเรียกตอน session จบ จึงล้างหมดถูกแล้ว)
+   *
+   *  ล้างแค่ฝั่งหน้าเว็บ — ไม่แตะฐานข้อมูลเลย ผลวัดที่บันทึกไปแล้วยังอยู่ครบ
+   */
+  function clearPartEntry() {
+    const opEl = document.getElementById('entry-operator');
+    const keepOperator = opEl ? opEl.value : '';
+    clearAllQueuesAndForms();
+    if (opEl && keepOperator) opEl.value = keepOperator;
+    showToast('ล้างข้อมูล Part Entry แล้ว');
   }
 
   // ── [แก้ไข] เคลียร์คิวและฟอร์มทั้งหมด เรียกตอน session จบ ─────────────────
@@ -2211,6 +2446,7 @@
   }
 
   function onSessionStarted(d) {
+    telemetryClearedSid = null;   // เริ่ม session ใหม่ = มีของใหม่ให้แสดงแล้ว
     resetTelemetry();
     clearQueueStrip();  // ล้างคิวของ session ก่อนหน้าทิ้งก่อนโหลดชุดใหม่
     updateSession({ state: 'running', session_id: d.session_id, measured_count: 0, target_count: d.target_count });
@@ -2441,6 +2677,34 @@
     if (!await uiConfirm('หยุด session ที่กำลังวัดอยู่ตอนนี้',
                          { title: 'หยุดการวัด', okLabel: '■ หยุด', danger: true })) return;
     await stopSession();
+  };
+
+  // ── ปุ่ม 🧹 Clear ─────────────────────────────────────────────────────────
+  // Telemetry ไม่ถามยืนยัน — ล้างแล้วกดดูย้อนหลังได้ทันทีจากตาราง Measurements
+  // ด้านล่าง ไม่มีอะไรหายจริง จึงไม่ต้องขวางทาง
+  document.getElementById('btn-clear-telemetry').onclick = () => {
+    // ต้องตั้งธงก่อนวาด — renderSessionUI()/updateStats() อ่านค่านี้เพื่อค้าง
+    // ตัวเลขไว้ที่ขีด ไม่งั้นรอบ poll ถัดไปจะดึงยอดจริงของ session กลับมาแสดง
+    telemetryClearedSid = session.session_id ?? null;
+
+    resetTelemetry();
+    // แถบคิว ALPL + แถบสัดส่วน + ตัวนับ ไม่ได้อยู่ใน resetTelemetry() ต้องล้างเอง
+    // ไม่งั้นจะเหลือของรอบก่อนค้างอยู่ทั้งที่ค่าอื่นหายหมดแล้ว ดูขัดกันเอง
+    telemetryQueue = []; telemetryResults = []; telemetryMeasIds = [];
+    renderQueueStrip();
+    renderTelemetryStats(0, 0);   // 0 OK · 0 NG + แถบสัดส่วนกลับเป็นเทาทั้งเส้น
+    renderSessionUI();            // "— / — measured"
+    savePartEntryState();
+    showToast('ล้างหน้าจอ Live Telemetry แล้ว');
+  };
+
+  // Part Entry ถามยืนยัน — กรอกใหม่เสียเวลากว่ามาก โดยเฉพาะตอนมีหลายกลุ่ม
+  document.getElementById('btn-clear-entry').onclick = async () => {
+    if (!await uiConfirm(
+          'คิวที่กรอกไว้จะถูกล้างทิ้ง ต้องกรอกใหม่ก่อนกด Start<br>' +
+          '<span style="color:var(--muted)">ไม่กระทบข้อมูลที่บันทึกลงฐานข้อมูลแล้ว</span>',
+          { title: 'ล้างข้อมูล Part Entry', okLabel: '🧹 ล้างข้อมูล', danger: true })) return;
+    clearPartEntry();
   };
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -2999,20 +3263,38 @@
     const lockable = LOCKED_FIELDS[entryMode] || [];
     const auto = g._autofilled || new Set();
 
+    // ช่องที่ถูก "เขียนทับค่าที่ผู้ใช้พิมพ์เอง" ในรอบนี้ — เก็บไว้แจ้งทีเดียวท้ายฟังก์ชัน
+    const overwritten = [];
+
     const put = (f, v) => {
       if (!fields.includes(f)) return;          // โหมดนี้ไม่มีช่องนั้น (IPM มีแค่ 2 ช่อง)
       const node = document.getElementById(`g${gi}-${f}`);
       if (!node) return;
       const wasAuto = auto.has(f);
-      // เขียนทับได้เฉพาะช่องที่ว่าง หรือช่องที่ "ระบบเป็นคนเติมเอง" เท่านั้น
-      // — ของที่ผู้ใช้พิมพ์เองห้ามแตะ (กฎเดิมของแผน D5)
-      if (!wasAuto && node.value) return;
 
       if (v == null || v === '') {
-        // เติมไม่ได้แล้ว (ค่าไม่ตรงกัน/หายไป) → ถ้าเคยเติมไว้ต้องล้าง+ปลดล็อก
-        // ปล่อยค้างไว้อันตรายกว่า เพราะช่องล็อกจะถือค่าของ ALPL ชุดเก่า
+        // ไม่มีค่าที่ลงทะเบียนให้เติม (ALPL ยังไม่ลงทะเบียน / ในกลุ่มไม่ตรงกัน)
+        //
+        // ⚠ ล้างเฉพาะของที่ "ระบบเคยเติมเอง" เท่านั้น — ของที่ผู้ใช้พิมพ์เองห้ามแตะ
+        //   เพราะโหมด IPM อนุญาตให้กรอก ALPL ที่ยังไม่มีในระบบ แล้วผู้ใช้ต้องพิมพ์
+        //   Package Size เองเสมอ ถ้าล้างทิ้งด้วยจะพิมพ์เท่าไรก็หายทุกครั้ง
         if (wasAuto) { node.value = ''; g[f] = ''; auto.delete(f); }
         return;
+      }
+
+      // ── มีค่าที่ลงทะเบียนไว้ → เขียนทับเสมอ แล้วล็อกช่อง ────────────────
+      // เดิมมีกฎว่า "ของที่ผู้ใช้พิมพ์เองห้ามแตะ" (แผน D5) ซึ่งทำให้ผลลัพธ์
+      // ต่างกันตามลำดับที่กรอก:
+      //     กรอก ALPL ก่อน  → ช่องว่าง → เติมให้ + ล็อก
+      //     กรอก Package Size ก่อน → ไม่ว่าง → ข้าม ค่าที่พิมพ์ค้างอยู่
+      // แล้วไปโผล่เป็น error ตอนกด Start แทน (_build_groups ฝั่ง backend
+      // ปฏิเสธเมื่อเกณฑ์ของ ALPL ที่ลงทะเบียนไม่ตรงกับที่กรอก) — รู้ช้าและ
+      // ต้องย้อนกลับมาแก้ทีหลัง
+      //
+      // ตอนนี้ยึด "ข้อมูลที่ลงทะเบียนไว้เป็นความจริงเสมอ" ไม่ว่ากรอกลำดับไหน
+      // ผลลัพธ์เหมือนกันหมด · ถ้าอยากได้ค่าอื่นต้องไปแก้ที่ Edit › Parts
+      if (!wasAuto && node.value && String(node.value) !== String(v)) {
+        overwritten.push({ f, from: node.value, to: v });
       }
       node.value = v;
       g[f] = String(v);
@@ -3032,6 +3314,21 @@
     }
     g._autofilled = auto;
     applyPrefillLock(gi);
+
+    // บอกเสมอเมื่อ "ทับของที่ผู้ใช้พิมพ์เอง" — การเปลี่ยนค่าเงียบๆ คือสิ่งที่
+    // อันตรายที่สุดของการเขียนทับ ผู้ใช้พิมพ์ 5x5 ไว้แล้วอยู่ๆ กลายเป็น 4x4
+    // โดยไม่มีอะไรบอก จะไม่มีทางรู้เลยว่าค่าที่กด Start ไปคืออะไร
+    //
+    // ไม่แจ้งตอนเติมช่องว่าง (ไม่มีอะไรถูกทับ) — จะรกเปล่าๆ
+    if (overwritten.length) {
+      const label = { package_size: 'Package Size', part_number: 'Part Number',
+                      vendor: 'Vendor', owner: 'Owner', po_number: 'PO Number',
+                      description: 'Description' };
+      const detail = overwritten
+        .map(o => `${label[o.f] || o.f} ${o.from} → ${o.to}`)
+        .join(' · ');
+      showToast(`เปลี่ยนตามข้อมูลที่ลงทะเบียนไว้ของ ALPL — ${detail}`);
+    }
 
     // อัปเดตบรรทัดสรุปหัวกลุ่มให้ตรงกับค่าที่เพิ่งเติม (เผื่อกลุ่มถูกย่อทีหลัง)
     const sum = document.querySelector(`#group-${gi} .entry-group-sum`);
@@ -3560,6 +3857,10 @@
    *  เหลือเส้นทางถาม backend ไว้เฉพาะกรณีไม่มีคิวให้นับ (session เก่าที่ไม่มี
    *  `queue_state` ใน DB) ซึ่งนับเองไม่ได้จริงๆ */
   async function updateStats() {
+    // ถูกล้างจอไว้ → ค้างที่ 0/0 จนกว่าจะมีของใหม่ ไม่ต้องไปถาม backend
+    // (ถ้าปล่อยผ่าน มันจะดึงยอดจริงของ session ที่ยังอยู่ใน DB กลับมาแสดง)
+    if (isTelemetryCleared()) { renderTelemetryStats(0, 0); return; }
+
     // ── นับเองก่อนเสมอถ้ามีคิวอยู่ในมือ ────────────────────────────────────
     // เช็คก่อน `session_id` โดยตั้งใจ — ตอนเพิ่ง refresh กลับมา คิวถูกเติมจาก
     // localStorage ไปแล้วแต่ `session.session_id` ยังเป็น null อยู่ (รอ

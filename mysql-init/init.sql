@@ -139,8 +139,8 @@ CREATE TABLE sessions (
 );
 
 
--- pi_status: "เห็นสคริปต์ฝั่งหน้างานตัวนี้ครั้งล่าสุดเมื่อไหร่" — 1 แถวต่อ 1 ตัว
--- ใช้วาดป้าย Pi Online / Receive Online บน topbar ของหน้าเว็บ
+-- pi_status: "Backend เห็น Pi ครั้งล่าสุดเมื่อไหร่" — มีแถวเดียว คอลัมน์เดียว
+-- ใช้วาดชิป PI ในแถบ Session Control ของหน้า index
 --
 -- ทำไมต้องมีตารางนี้ ทั้งที่ sessions.last_seen ก็เก็บ heartbeat อยู่แล้ว:
 --   sessions.last_seen อัปเดตเฉพาะตอนมี session ที่ state='running' เท่านั้น
@@ -158,18 +158,32 @@ CREATE TABLE sessions (
 -- ⚠ ใช้เกณฑ์เวลาตัวเดียวกับ HEARTBEAT_TIMEOUT ใน .env ที่ Pi ใช้ตัดสินใจหยุด
 --   ตัวเอง — ป้ายบนเว็บกับพฤติกรรมเครื่องจริงจะได้ตรงกันเสมอ
 --
--- source เป็น PK: 1 แถวต่อ 1 สคริปต์ เขียนด้วย INSERT ... ON DUPLICATE KEY
--- UPDATE ตารางจึงไม่โตตามเวลา (ไม่ใช่ log) และเพิ่มตัวที่ 3 ทีหลังได้โดยไม่ต้อง
--- แก้ schema แค่ยิง source ใหม่เข้ามา
+-- ── ดีไซน์: ตารางนี้มี "แถวเดียวตลอดชีวิต" ────────────────────────────────
+--   Backend สร้างแถวให้เองตอนบูต (ดู lifespan):
+--       INSERT INTO pi_status (last_seen)
+--       SELECT NOW() FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM pi_status);
+--   heartbeat จึงเป็น UPDATE เปล่าๆ ไม่ต้องมี WHERE:
+--       UPDATE pi_status SET last_seen = NOW();
 --
--- ไม่ต้อง seed ใน insert.sql — แถวจะเกิดเองตอนสคริปต์นั้นยิง heartbeat ครั้งแรก
--- (ถ้า seed ไว้จะดูเหมือน "เคยเห็นแล้ว" ตั้งแต่ตอน import ซึ่งไม่จริง)
+--   ⚠ ที่ต้องให้ Backend สร้างแถวเองตอนบูต แทนการ seed ไว้ใน insert.sql:
+--     UPDATE ที่ไม่มีแถวให้อัปเดตจะกระทบ 0 แถว **โดยไม่มี error ใดๆ** →
+--     last_seen ไม่เคยขยับ → ป้ายขึ้นแดงตลอดกาลทั้งที่ Pi ปกติดี และไล่หา
+--     สาเหตุยากมาก เพราะทุกอย่างดู "ทำงานอยู่" หมด (Pi ยิง · Backend ตอบ ok ·
+--     ไม่มี error สักบรรทัด) · การ ensure ตอนบูตทำให้ DB ที่ยังไม่มีแถว
+--     กู้ตัวเองได้เสมอ ไม่ว่าจะมาจาก init.sql หรือ import มือ
 --
--- 📌 ชื่อตารางยังเป็น pi_status ตามที่ตั้งไว้ แต่มันเก็บ receive ด้วย —
---    ถ้าจะเปลี่ยนเป็น agent_status ให้เปลี่ยนตอนนี้เลยจะง่ายกว่าเปลี่ยนทีหลัง
+--   ⚠ ทั้งขาเขียนและขาอ่านต้องใช้ NOW() ของ MySQL — ห้ามเขียนด้วย
+--     datetime.now() ของ Python เพราะตอน dev MySQL อยู่ใน Docker คนละนาฬิกา
+--     กับ host เหลื่อมกันไม่กี่วินาที ป้ายจะแดงๆ เขียวๆ สลับโดยไม่มีสาเหตุ
+--
+-- ── ข้อจำกัดที่ยอมรับแล้ว ────────────────────────────────────────────────
+--   • รองรับได้ตัวเดียว (Pi) — ถ้าจะเพิ่ม Recieve_tm-x.py ทีหลังต้อง ALTER TABLE
+--     เติมคอลัมน์ source ตั้งเป็น PK แล้วแก้ query ทั้งขาเขียนและขาอ่าน
+--     (Recieve ตายอันตรายกว่า Pi ตายด้วยซ้ำ — เครื่องวัดปกติทุกอย่างแต่ค่า
+--      ไม่เข้า DB สักชิ้น แล้ว modal ไปบอกสาเหตุผิดว่า "TM-X วัดไม่ติด")
+--   • แยกไม่ออกว่าใครยิงมา — เปิด mockup.py ค้างไว้ ป้ายจะเขียวแม้ Pi จริงดับ
 CREATE TABLE pi_status (
-  last_seen  DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  session_id INT         NULL,
+  last_seen DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- client_uuid: UUID ที่ Agent สร้างต่อการวัด 1 ครั้ง ใช้กัน insert ซ้ำตอน retry

@@ -315,6 +315,10 @@
     }
     .btn-purge:hover { background: var(--ng-bg); }
 
+    /* ใกล้ครบกำหนดแล้ว — เน้นให้สะดุดตาว่าเหลือเวลาไม่มาก ถ้าจะกู้ต้องรีบ
+       (ของหายเองตาม DELETED_RETENTION_DAYS แม้ไม่มีใครกด Del) */
+    .trash-soon { color: var(--ng); font-weight: 700; }
+
     /* ปุ่มยืนยันแบบ "ไม่อันตราย" ใน popup — ใช้กับ action ที่ไม่ได้ทำลายอะไร
        เช่นกู้คืน ให้สีเดียวกับปุ่มกู้คืนในตารางเพื่อให้คนโยงถูกว่ากำลังทำอะไรอยู่ */
     .btn-confirm-safe {
@@ -543,9 +547,15 @@
       <table id="trash-table">
         <thead>
           <tr>
-            <th style="width:170px">ลบเมื่อ</th>
-            <th style="width:130px">ประเภท</th>
-            <th>รายละเอียด</th>
+            <!-- หัวตารางเป็นอังกฤษให้ตรงกับตารางอื่นในหน้านี้ (Parts /
+                 Measurements / Lookup Tables ใช้ Operator · Vendor · Owner ฯลฯ) -->
+            <th style="width:170px">Deleted At</th>
+            <th style="width:130px">Type</th>
+            <th>Details</th>
+            <!-- บอกว่าเหลืออีกกี่วันก่อนถูกลบถาวรอัตโนมัติ — ถึงจะมีปุ่ม Del ให้กด
+                 เองได้ แต่ของที่ไม่มีใครแตะก็หายเองตาม DELETED_RETENTION_DAYS
+                 อยู่ดี ผู้ใช้ควรเห็นว่าเหลือเวลาเท่าไรถ้าคิดจะกู้ -->
+            <th style="width:110px">Days Left</th>
             <th style="width:220px"></th>
           </tr>
         </thead>
@@ -1727,13 +1737,25 @@
       // deleted_at เป็น "YYYY-MM-DD HH:MM:SS" อยู่แล้ว ตัดวินาทีออกให้อ่านง่าย
       const when = (it.deleted_at || '').slice(0, 16).replace('T', ' ');
       const img  = it.has_image ? ' <span title="มีไฟล์รูปเก็บไว้ด้วย">🖼</span>' : '';
+      // เหลืออีกกี่วันก่อนโดนลบถาวรอัตโนมัติ — คำนวณมาจาก backend (_days_left)
+      // ไม่คำนวณเองที่นี่ เพราะต้องใช้ตรรกะเดียวกับตัวลบจริงเป๊ะ (อ่านวันจากชื่อ
+      // โฟลเดอร์ · แปลง พ.ศ. → ค.ศ.) ถ้าคำนวณสองที่แล้วเพี้ยนกัน ตัวเลขบนจอ
+      // จะโกหกโดยไม่มีใครรู้
+      //
+      // 0 = วันสุดท้าย (รอบตรวจถัดไปลบ) · null = ชื่อโฟลเดอร์ไม่ใช่รูปแบบวันที่
+      const dl = it.days_left;
+      const left = dl == null ? '—'
+                 : dl === 0   ? '<span class="trash-soon">Last day</span>'
+                 : dl <= 3    ? `<span class="trash-soon">${dl} days</span>`
+                 :              `${dl} days`;
       return `<tr>
         <td style="white-space:nowrap">${escapeHtml(when)}</td>
         <td>${escapeHtml(it.kind_label)}</td>
         <td>${escapeHtml(it.summary)}${img}</td>
+        <td style="white-space:nowrap">${left}</td>
         <td class="trash-actions">
           <button class="btn-restore" data-id="${escapeHtml(it.id)}">↩ Restore</button>
-          <button class="btn-purge" data-id="${escapeHtml(it.id)}" title="ลบถาวร กู้คืนไม่ได้อีก">🗑 Del</button>
+          <button class="btn-purge" data-id="${escapeHtml(it.id)}" title="ลบถาวร กู้คืนไม่ได้อีก">🗑 Delete</button>
         </td>
       </tr>`;
     }).join('');
@@ -1776,7 +1798,12 @@
     }
   }
 
-  /** ลบรายการในถังขยะทิ้งถาวร — ไม่แตะตารางหลัก แค่ทิ้งตัวสำรอง */
+  /** ลบรายการในถังขยะทิ้งถาวร — ไม่แตะตารางหลัก แค่ทิ้งตัวสำรอง
+   *
+   *  เป็นทางลัดให้ผู้ใช้ล้างเองได้เลยโดยไม่ต้องรอครบ DELETED_RETENTION_DAYS
+   *  (ของที่ไม่มีใครแตะจะถูก _deleted_purge_loop() ลบให้เองอยู่แล้ว — คอลัมน์
+   *   Days Left ในตารางบอกว่าเหลืออีกกี่วัน)
+   */
   async function purgeTrashItem(id) {
     try {
       const r = await fetch(`${API}/api/deleted/remove`, {
