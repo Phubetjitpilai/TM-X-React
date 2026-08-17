@@ -42,7 +42,7 @@ def _deleted_summary(payload: Dict[str, Any]) -> str:
     return ", ".join(f"{k}={v}" for k, v in list(row.items())[:3])
 
 @router.get("/api/deleted")
-async def list_deleted():
+def list_deleted():
     """รายการทุกอย่างที่อยู่ในถังขยะ เรียงจากลบล่าสุดก่อน"""
     items = []
     for day, name, path in _deleted_files():
@@ -104,7 +104,7 @@ def _deleted_path(item_id: str) -> str:
     return target
 
 @router.post("/api/deleted/restore")
-async def restore_deleted(body: Dict[str, str] = Body(...)):
+def restore_deleted(body: Dict[str, str] = Body(...)):
     """กู้คืน 1 รายการจากถังขยะ — insert แถวกลับ + ย้ายไฟล์รูปกลับที่เดิม
 
     ทำเป็น transaction เดียว ถ้าขั้นไหนพังจะ rollback ทั้งหมด แล้วไฟล์ JSON
@@ -175,7 +175,7 @@ async def restore_deleted(body: Dict[str, str] = Body(...)):
         db.close()
 
 @router.post("/api/deleted/remove")
-async def remove_deleted(body: Dict[str, str] = Body(...)):
+def remove_deleted(body: Dict[str, str] = Body(...)):
     """ลบ 1 รายการออกจากถังขยะ **ถาวร** — กู้คืนไม่ได้อีก
 
     ลบทั้งไฟล์ .json และไฟล์รูปที่เก็บคู่กัน ไม่แตะฐานข้อมูลเลย (แถวนั้นถูกลบ
@@ -202,6 +202,6 @@ async def remove_deleted(body: Dict[str, str] = Body(...)):
     return {"ok": True}
 
 @router.delete("/api/deleted")
-async def purge_deleted_now():
+def purge_deleted_now():
     """สั่งลบของในถังขยะที่เกินอายุทันที (ปกติทำอัตโนมัติตอน backend เริ่ม)"""
     return {"ok": True, "removed_days": _purge_old_deleted()}

@@ -29,7 +29,7 @@ def _columns_scope(kind: str) -> str:
     return "csv" if kind == "csv" else "report"
 
 @router.get("/api/export/columns")
-async def list_export_columns(kind: str = "csv"):
+def list_export_columns(kind: str = "csv"):
     """คืน catalog คอลัมน์ที่ใส่ในเทมเพลตได้ (key/label/group)
     ใช้สร้างหน้าเลือกคอลัมน์ — frontend ไม่ต้อง hardcode รายชื่อเอง
 
@@ -104,7 +104,7 @@ def _parse_layout(raw):
     return raw if isinstance(raw, dict) else None
 
 @router.get("/api/export/templates")
-async def list_export_templates(kind: str = "csv"):
+def list_export_templates(kind: str = "csv"):
     """คืนเทมเพลตของชนิดที่ระบุ — csv / pdf / excel แยกลิสต์กันคนละชนิด
 
     PDF กับ Excel เคยใช้ kind='report' ร่วมกัน ทำให้เทมเพลตปนกันข้ามรูปแบบ
@@ -168,7 +168,7 @@ def _template_payload(body: ExportTemplateBody):
     return "csv", json.dumps(cols, ensure_ascii=False), None
 
 @router.post("/api/export/templates", status_code=201)
-async def create_export_template(body: ExportTemplateBody):
+def create_export_template(body: ExportTemplateBody):
     kind, cols_json, layout_json = _template_payload(body)
     db = get_db()
     try:
@@ -186,7 +186,7 @@ async def create_export_template(body: ExportTemplateBody):
         db.close()
 
 @router.patch("/api/export/templates/{export_template_id}")
-async def update_export_template(export_template_id: int, body: ExportTemplateBody):
+def update_export_template(export_template_id: int, body: ExportTemplateBody):
     kind, cols_json, layout_json = _template_payload(body)
     db = get_db()
     try:
@@ -208,7 +208,7 @@ async def update_export_template(export_template_id: int, body: ExportTemplateBo
         db.close()
 
 @router.delete("/api/export/templates/{export_template_id}")
-async def delete_export_template(export_template_id: int):
+def delete_export_template(export_template_id: int):
     db = get_db()
     try:
         with db.cursor() as cur:
@@ -223,7 +223,7 @@ async def delete_export_template(export_template_id: int):
         db.close()
 
 @router.post("/api/export/templates/{export_template_id}/duplicate", status_code=201)
-async def duplicate_export_template(export_template_id: int):
+def duplicate_export_template(export_template_id: int):
     """ทำสำเนาเทมเพลต (ใช้ได้กับทุกตัวรวมทั้งตัวค่าเริ่มต้น) — ตั้งชื่อใหม่ให้
     อัตโนมัติแบบ "<ชื่อเดิม> (สำเนา)" และเติมเลขต่อท้ายถ้าชื่อนั้นถูกใช้ไปแล้ว
     """
@@ -622,7 +622,7 @@ def _load_report_layout(cur, export_template_id: int) -> Dict[str, Any]:
     return {"name": tpl["name"], "kind": tpl.get("kind") or "pdf", "layout": layout}
 
 @router.get("/api/export/preview")
-async def export_preview(
+def export_preview(
     export_template_id: int,
     filters: Dict[str, Any] = Depends(export_filters_dep),
     limit:   int = Query(5, ge=1, le=50),
@@ -649,7 +649,7 @@ async def export_preview(
     }
 
 @router.get("/api/export/csv")
-async def export_csv(
+def export_csv(
     export_template_id: Optional[int] = None,
     filename: Optional[str] = None,
     filters: Dict[str, Any] = Depends(export_filters_dep),
@@ -714,7 +714,7 @@ def _guard_report_size(total: int) -> None:
         )
 
 @router.get("/api/export/report-preview")
-async def export_report_preview(
+def export_report_preview(
     export_template_id: int,
     filters: Dict[str, Any] = Depends(export_filters_dep),
     full: int = 0,
@@ -746,7 +746,7 @@ async def export_report_preview(
     return out
 
 @router.get("/api/export/xlsx")
-async def export_xlsx(
+def export_xlsx(
     export_template_id: int,
     filters: Dict[str, Any] = Depends(export_filters_dep),
 ):

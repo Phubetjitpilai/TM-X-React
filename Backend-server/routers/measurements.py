@@ -131,7 +131,7 @@ def _update_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
     )
 
 @router.get("/api/measurements")
-async def list_measurements(
+def list_measurements(
     number_alpl: Optional[int] = None,
     result:      Optional[str] = None,
     date_from:   Optional[str] = None,
@@ -455,7 +455,7 @@ async def create_measurement(req: MeasurementCreate):
         db.close()
 
 @router.patch("/api/measurements/{measurement_id}")
-async def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(...)):
+def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(...)):
     """แก้ไข measurement แบบ partial (เฉพาะ field ที่ส่งมาใน body) — ใช้โดยหน้า
     Database Editor (edit.html) ตอนกด Edit แล้ว Save
 
@@ -674,7 +674,7 @@ async def upload_measurement_image(measurement_id: int, file: UploadFile = File(
         db.close()
 
 @router.delete("/api/measurements/{measurement_id}")
-async def delete_measurement(measurement_id: int):
+def delete_measurement(measurement_id: int):
     """ลบ measurement 1 row (เช่น ลบค่าที่อ่านผิดพลาด/เป็นการทดสอบ) + ลบไฟล์รูปด้วย
 
     เดิมลบแค่แถวใน DB ทำให้ไฟล์รูปกลายเป็น "ไฟล์กำพร้า" ค้างสะสมใน
@@ -736,7 +736,7 @@ async def delete_measurement(measurement_id: int):
 # mount "/media/alpl" (ท้ายไฟล์) ไม่ต้อง
 # ออก presigned URL แบบ MinIO เดิมอีกต่อไป (ไฟล์อยู่บนดิสก์เครื่องนี้ตรงๆ)
 @router.get("/api/image-url/{measurement_id}")
-async def get_image_url(measurement_id: int):
+def get_image_url(measurement_id: int):
     db = get_db()
     try:
         with db.cursor() as cur:

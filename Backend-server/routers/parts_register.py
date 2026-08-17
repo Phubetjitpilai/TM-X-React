@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.post("/api/parts/check")
-async def check_parts(body: PartsCheckRequest):
+def check_parts(body: PartsCheckRequest):
     """ถามทีเดียวว่า ALPL ชุดนี้ตัวไหน "มีอยู่แล้ว" / "ยังไม่มี" ในตาราง Parts
 
     ใช้ตอนกด Save ในฟอร์ม Part Entry — ทั้ง 3 โหมดใช้ endpoint เดียวกัน ต่างกัน
@@ -145,7 +145,7 @@ async def check_parts(body: PartsCheckRequest):
     }
 
 @router.get("/api/parts")
-async def list_parts(
+def list_parts(
     limit:  int = Query(10, ge=1, le=1000),   # มีเพดาน กันยิง limit=999999 ดึงทั้งตาราง
     offset: int = Query(0, ge=0),
     search: Optional[str] = None,
@@ -195,7 +195,7 @@ async def list_parts(
         db.close()
 
 @router.get("/api/parts/{part_id}")
-async def get_part(part_id: int):
+def get_part(part_id: int):
     """คืน config ของ part 1 ตัวตาม ALPL number (รวมชื่อ handler/vendor/
     owner/package_size ที่ join มาจาก lookup table แล้ว ไม่ใช่แค่ id)"""
     db = get_db()
@@ -210,7 +210,7 @@ async def get_part(part_id: int):
         db.close()
 
 @router.post("/api/parts", status_code=201)
-async def create_part(part: PartCreate):
+def create_part(part: PartCreate):
     """ลงทะเบียน ALPL part ใหม่: nominal X/Y, tolerance แยกแกน, และ template ของ TM-X ที่ใช้
 
     ทำไมต้องแยก endpoint นี้ออกจาก start_session: parts/templates ถูก config
@@ -226,7 +226,7 @@ async def create_part(part: PartCreate):
         db.close()
 
 @router.patch("/api/parts/{part_id}")
-async def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
+def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
     """อัปเดต config ของ part แบบ partial (เฉพาะ field ที่ส่งมาใน body)
 
     ทำไมต้องมี whitelist (`allowed`): เพื่อไม่ให้ request body ไปเขียนทับ column
@@ -285,7 +285,7 @@ async def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
         db.close()
 
 @router.delete("/api/parts/{part_id}")
-async def delete_part(part_id: int):
+def delete_part(part_id: int):
     """ลบ Part 1 row ออกจากตาราง `parts_specifications`
 
     **กฎการลบ (ตามที่ตกลงกันไว้)**: ลบได้ต่อเมื่อ ALPL นี้ "ไม่มีข้อมูลการวัด

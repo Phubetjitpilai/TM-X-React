@@ -45,6 +45,19 @@ DB_CONFIG = dict(
     port=int(os.getenv("DB_PORT", 3306)),
     cursorclass=pymysql.cursors.DictCursor,
     autocommit=True,
+    # ⚠ ถ้าไม่ตั้ง pymysql ใช้ค่า default = 10 วินาที ซึ่งนานเกินไปมากเมื่อ MySQL
+    #   ดับ/ต่อไม่ติด เพราะทุก endpoint ยังเป็น `async def` อยู่ → การรอ connect
+    #   ค้าง **บล็อก event loop ทั้งเส้น** ไม่ใช่แค่ request ตัวเอง
+    #   ผลคือ uvicorn เสิร์ฟอะไรไม่ได้เลยระหว่างนั้น รวมถึงไฟล์ static —
+    #   หน้าเว็บกดเปลี่ยนหน้าไม่ไป ป้ายค้างที่ 'Connecting' (ทดสอบแล้วเกิดจริง
+    #   ตอนสั่ง `docker compose stop mysql`)
+    #
+    #   3 วินาทีพอสำหรับ LAN/localhost — ต่อไม่ติดใน 3 วิก็คือต่อไม่ติดจริง
+    #
+    # 📌 นี่เป็นแค่การ "ลดความเสียหาย" ไม่ใช่ตัวแก้ — ตัวแก้จริงคือเปลี่ยน
+    #    endpoint จาก `async def` เป็น `def` ให้ FastAPI รันใน threadpool
+    #    (Handle_Pi_Error.md ข้อ 2.3) แล้ว event loop จะไม่ถูกบล็อกตั้งแต่แรก
+    connect_timeout=3,
     # CLIENT.FOUND_ROWS: ค่า default ของ MySQL/pymysql คือ cur.rowcount หลัง UPDATE
     # จะนับเฉพาะ "แถวที่ค่าจริงเปลี่ยน" ไม่ใช่ "แถวที่ WHERE เจอ" — ทำให้กด Save โดย
     # ไม่แก้อะไรเลย (ส่ง payload ค่าเดิมกลับมา) แล้ว rowcount == 0 ทั้งที่แถวมีอยู่จริง

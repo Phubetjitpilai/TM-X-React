@@ -44,7 +44,7 @@ async def sse_stream(request: Request):
     return EventSourceResponse(generator())
 
 @router.get("/api/config")
-async def get_ui_config():
+def get_ui_config():
     """ค่าจาก .env ที่ฝั่งหน้าเว็บต้องใช้ — เบราว์เซอร์อ่านไฟล์ .env เองไม่ได้
 
     หน้าเว็บเรียกครั้งเดียวตอนโหลด แล้วเอาไปตั้ง setInterval ของ pollSessionState
@@ -66,7 +66,7 @@ async def get_ui_config():
 
 
 @router.get("/api/session/state")
-async def get_session_state():
+def get_session_state():
     """คืนสถานะปัจจุบันของ session ล่าสุด
 
     ทำไม: ตอน dashboard โหลดครั้งแรก (หรือ refresh) มันต้องรู้ว่า "มี run การวัด
@@ -919,7 +919,7 @@ async def continue_session(body: SessionContinueRequest):
     return {"ok": True}
 
 @router.post("/api/heartbeat")
-async def heartbeat(req: HeartbeatRequest):
+def heartbeat(req: HeartbeatRequest):
     """รับ heartbeat จาก Agent (ดู agent.py heartbeat_loop — ยิงมาทุก
     HEARTBEAT_INTERVAL วิ ไม่ว่าจะมี session running อยู่หรือไม่)
 

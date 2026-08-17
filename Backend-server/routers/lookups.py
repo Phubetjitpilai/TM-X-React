@@ -19,7 +19,7 @@ router = APIRouter()
 # owner/vendor/handler/operator ใหม่ ต้อง insert ตรงเข้า DB เอง
 # (ตามที่คุยกันไว้ — ไม่ทำ "add new" inline ในฟอร์ม)
 @router.get("/api/operators")
-async def list_operators():
+def list_operators():
     db = get_db()
     try:
         with db.cursor() as cur:
@@ -29,7 +29,7 @@ async def list_operators():
         db.close()
 
 @router.get("/api/owners")
-async def list_owners():
+def list_owners():
     db = get_db()
     try:
         with db.cursor() as cur:
@@ -39,7 +39,7 @@ async def list_owners():
         db.close()
 
 @router.get("/api/vendors")
-async def list_vendors():
+def list_vendors():
     db = get_db()
     try:
         with db.cursor() as cur:
@@ -49,7 +49,7 @@ async def list_vendors():
         db.close()
 
 @router.get("/api/handlers")
-async def list_handlers():
+def list_handlers():
     db = get_db()
     try:
         with db.cursor() as cur:
@@ -59,7 +59,7 @@ async def list_handlers():
         db.close()
 
 @router.get("/api/package-sizes")
-async def list_package_sizes():
+def list_package_sizes():
     """คืนรายการ package_size ทั้งหมด พร้อม nominal/tolerance + template_name
     — ใช้เติม datalist ของช่อง Package Size ใน index.html/edit.html และเป็น
     แหล่งข้อมูลของตาราง Lookup Tables → Package Size
@@ -86,7 +86,7 @@ async def list_package_sizes():
         db.close()
 
 @router.get("/api/part-numbers")
-async def list_part_numbers(package_size: str = Query(..., min_length=1)):
+def list_part_numbers(package_size: str = Query(..., min_length=1)):
     """คืนรายการ part_number (จากตาราง catalog part_number ตรงๆ ไม่ใช่ derive
     จาก parts_specifications ที่เคยลงทะเบียนแล้ว) ที่ผูกกับ package_size ที่
     ระบุ — ใช้เป็น dropdown ของช่อง Part Number ที่ cascade จาก Package Size
@@ -111,7 +111,7 @@ async def list_part_numbers(package_size: str = Query(..., min_length=1)):
         db.close()
 
 @router.get("/api/templates")
-async def list_templates():
+def list_templates():
     """คืนรายการ template ทั้งหมด — ใช้โดย Database Editor (edit.html) ตอน
     จัดการตาราง template (Add/Rename/Delete) และตอนสร้าง/แก้ package_size
     (เลือก template ที่จะผูกให้)
@@ -125,7 +125,7 @@ async def list_templates():
         db.close()
 
 @router.get("/api/part-numbers/all")
-async def list_all_part_numbers():
+def list_all_part_numbers():
     """คืนรายการ part_number ทั้งหมดพร้อมรายละเอียดครบ (package_size/handler/
     nominal/tolerance) — ใช้โดย Database Editor (edit.html) ต่างจาก
     GET /api/part-numbers (คืนแค่ชื่อ กรองด้วย package_size — ใช้เป็น cascading
@@ -214,83 +214,83 @@ def _delete_lookup(table: str, id_col: str, id_value: int, references: List[tupl
         db.close()
 
 @router.post("/api/operators", status_code=201)
-async def create_operator(body: LookupCreate):
+def create_operator(body: LookupCreate):
     return {"operator_id": _create_lookup("operator", "operator_name", body.name)}
 
 @router.patch("/api/operators/{operator_id}")
-async def rename_operator(operator_id: int, body: LookupUpdate):
+def rename_operator(operator_id: int, body: LookupUpdate):
     _rename_lookup("operator", "operator_id", "operator_name", operator_id, body.name)
     return {"ok": True}
 
 @router.delete("/api/operators/{operator_id}")
-async def delete_operator(operator_id: int):
+def delete_operator(operator_id: int):
     # operator ถูกอ้างอิงจาก measurements.operator_id เท่านั้น
     _delete_lookup("operator", "operator_id", operator_id, [("measurements", "operator_id")])
     return {"ok": True}
 
 @router.post("/api/owners", status_code=201)
-async def create_owner(body: LookupCreate):
+def create_owner(body: LookupCreate):
     return {"owner_id": _create_lookup("owner", "owner_name", body.name)}
 
 @router.patch("/api/owners/{owner_id}")
-async def rename_owner(owner_id: int, body: LookupUpdate):
+def rename_owner(owner_id: int, body: LookupUpdate):
     _rename_lookup("owner", "owner_id", "owner_name", owner_id, body.name)
     return {"ok": True}
 
 @router.delete("/api/owners/{owner_id}")
-async def delete_owner(owner_id: int):
+def delete_owner(owner_id: int):
     # owner ถูกอ้างอิงจาก parts_specifications.owner_id เท่านั้น
     _delete_lookup("owner", "owner_id", owner_id, [("parts_specifications", "owner_id")])
     return {"ok": True}
 
 @router.post("/api/vendors", status_code=201)
-async def create_vendor(body: LookupCreate):
+def create_vendor(body: LookupCreate):
     return {"vendor_id": _create_lookup("vendor", "vendor_name", body.name)}
 
 @router.patch("/api/vendors/{vendor_id}")
-async def rename_vendor(vendor_id: int, body: LookupUpdate):
+def rename_vendor(vendor_id: int, body: LookupUpdate):
     _rename_lookup("vendor", "vendor_id", "vendor_name", vendor_id, body.name)
     return {"ok": True}
 
 @router.delete("/api/vendors/{vendor_id}")
-async def delete_vendor(vendor_id: int):
+def delete_vendor(vendor_id: int):
     # vendor ถูกอ้างอิงจาก parts_specifications.vendor_id เท่านั้น
     _delete_lookup("vendor", "vendor_id", vendor_id, [("parts_specifications", "vendor_id")])
     return {"ok": True}
 
 @router.post("/api/handlers", status_code=201)
-async def create_handler(body: LookupCreate):
+def create_handler(body: LookupCreate):
     return {"handler_id": _create_lookup("handler", "handler_name", body.name)}
 
 @router.patch("/api/handlers/{handler_id}")
-async def rename_handler(handler_id: int, body: LookupUpdate):
+def rename_handler(handler_id: int, body: LookupUpdate):
     _rename_lookup("handler", "handler_id", "handler_name", handler_id, body.name)
     return {"ok": True}
 
 @router.delete("/api/handlers/{handler_id}")
-async def delete_handler(handler_id: int):
+def delete_handler(handler_id: int):
     # handler ถูกอ้างอิงจาก part_number.handler_id เท่านั้น (parts_specifications
     # ไม่มี handler_id ตรงๆ แล้ว — derive ผ่าน part_number)
     _delete_lookup("handler", "handler_id", handler_id, [("part_number", "handler_id")])
     return {"ok": True}
 
 @router.post("/api/templates", status_code=201)
-async def create_template(body: LookupCreate):
+def create_template(body: LookupCreate):
     return {"template_id": _create_lookup("template", "template_name", body.name)}
 
 @router.patch("/api/templates/{template_id}")
-async def rename_template(template_id: int, body: LookupUpdate):
+def rename_template(template_id: int, body: LookupUpdate):
     _rename_lookup("template", "template_id", "template_name", template_id, body.name)
     return {"ok": True}
 
 @router.delete("/api/templates/{template_id}")
-async def delete_template(template_id: int):
+def delete_template(template_id: int):
     # template ถูกอ้างอิงจาก package_size.template_id เท่านั้น
     _delete_lookup("template", "template_id", template_id, [("package_size", "template_id")])
     return {"ok": True}
 
 @router.post("/api/package-sizes", status_code=201)
-async def create_package_size(body: PackageSizeCreate):
+def create_package_size(body: PackageSizeCreate):
     db = get_db()
     try:
         with db.cursor() as cur:
@@ -313,7 +313,7 @@ async def create_package_size(body: PackageSizeCreate):
         db.close()
 
 @router.patch("/api/package-sizes/{package_size_id}")
-async def update_package_size(package_size_id: int, body: PackageSizeUpdate):
+def update_package_size(package_size_id: int, body: PackageSizeUpdate):
     db = get_db()
     try:
         with db.cursor() as cur:
@@ -346,13 +346,13 @@ async def update_package_size(package_size_id: int, body: PackageSizeUpdate):
         db.close()
 
 @router.delete("/api/package-sizes/{package_size_id}")
-async def delete_package_size(package_size_id: int):
+def delete_package_size(package_size_id: int):
     # package_size ถูกอ้างอิงจาก part_number.package_size_id เท่านั้น
     _delete_lookup("package_size", "package_size_id", package_size_id, [("part_number", "package_size_id")])
     return {"ok": True}
 
 @router.post("/api/part-numbers", status_code=201)
-async def create_part_number(body: PartNumberCreate):
+def create_part_number(body: PartNumberCreate):
     db = get_db()
     try:
         with db.cursor() as cur:
@@ -379,7 +379,7 @@ async def create_part_number(body: PartNumberCreate):
         db.close()
 
 @router.patch("/api/part-numbers/{part_number_id}")
-async def update_part_number(part_number_id: int, body: PartNumberUpdate):
+def update_part_number(part_number_id: int, body: PartNumberUpdate):
     db = get_db()
     try:
         with db.cursor() as cur:
@@ -416,7 +416,7 @@ async def update_part_number(part_number_id: int, body: PartNumberUpdate):
         db.close()
 
 @router.delete("/api/part-numbers/{part_number_id}")
-async def delete_part_number(part_number_id: int):
+def delete_part_number(part_number_id: int):
     # part_number ถูกอ้างอิงจาก parts_specifications.part_number_id เท่านั้น
     _delete_lookup("part_number", "part_number_id", part_number_id, [("parts_specifications", "part_number_id")])
     return {"ok": True}
