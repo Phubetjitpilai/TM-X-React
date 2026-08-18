@@ -8,6 +8,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 import re
 import secrets
 import shutil
@@ -25,7 +26,7 @@ from pymysql.constants import CLIENT
 from dotenv import load_dotenv
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel
@@ -66,6 +67,21 @@ DB_CONFIG = dict(
     # นับจากแถวที่ WHERE จับคู่เจอแทน ทำให้เช็ค 404 เดิมถูกต้องอีกครั้ง
     client_flag=CLIENT.FOUND_ROWS,
 )
+
+# ── circuit breaker ของ get_db() ────────────────────────────────────────────
+# ต่อไม่ติดครั้งหนึ่งแล้วหยุดลองกี่วินาที ก่อนยอมให้ลองใหม่ (ดู get_db)
+#
+# ตั้งสั้น ๆ พอ: จุดประสงค์คือกันไม่ให้ request ที่กองกันอยู่ต้องรอ connect_timeout
+# ทุกตัว ไม่ใช่การ "ปิดระบบ" — MySQL กลับมาแล้วต้องเจอเร็วด้วย
+#   2 วิ = แย่สุดคือหน้าเว็บช้ากว่าความจริง 2 วิหลัง MySQL ฟื้น ซึ่งไม่มีใครรู้สึก
+#   ยาวกว่านี้เริ่มน่ารำคาญตอน start MySQL แล้วกดรีเฟรชแต่ยังขึ้น DB Offline
+DB_BREAKER_COOLDOWN = float(os.getenv("DB_BREAKER_COOLDOWN", 2))
+
+# เวลา (monotonic) ที่อนุญาตให้ลองต่อ DB ใหม่ได้ · 0 = breaker ปิดอยู่ ต่อได้ปกติ
+#
+# ⚠ ห้ามประกาศซ้ำในไฟล์อื่น ต้องมาจาก `from shared import *` เท่านั้น ไม่งั้นจะ
+#   กลายเป็นคนละตัวแปรโดยไม่มี error — breaker จะไม่ทำงานเลยแบบเงียบ ๆ
+_db_retry_after = 0.0
 
 _PROJECT_ROOT = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -337,12 +353,54 @@ def get_db():
     500 ดิบไม่มี CORS header แนบมา (ปัญหาเดียวกับที่ _notify_agent_start เจอกับ Agent)
     จับไว้ตรงนี้ที่เดียวแล้ว raise เป็น HTTPException(503) แทน เพื่อให้ CORS header
     ยังติดมาด้วยเสมอ ไม่ต้องไปแก้ทุก endpoint
+
+    ── circuit breaker: ไม่ลองต่อซ้ำถ้าเพิ่งต่อไม่ติดไปเมื่อกี้ ──────────────
+    ปัญหาที่แก้: `connect_timeout=3` เป็นราคาที่จ่าย **ต่อ request** ไม่ใช่ต่อ
+    เหตุการณ์ — MySQL ดับทีเดียวแต่ทุก endpoint ที่เรียก get_db() ต้องไปนั่งรอ
+    ครบ 3 วิของตัวเองเหมือนกันหมด (get_db ไม่มี pool เปิดใหม่ทุกครั้งโดยตั้งใจ)
+    เปิดหน้าเว็บ 1 ครั้งยิงหลาย request + poll ทุก 2 วิ → กองสะสมจนเว็บเหมือนค้าง
+
+    ⚠ ที่ต้องเข้าใจ: "ต่อไม่ติด" มี 2 แบบ ราคาต่างกันมาก
+        ปฏิเสธทันที (RST)  พอร์ตปิดสนิท → เคอร์เนลตอบกลับเลย    ~1 ms
+        เงียบไม่ตอบ        พอร์ตเปิดแต่ไม่มีใครรับสาย → ต้องรอ  เต็ม 3 วิ
+      แบบหลังเจอบ่อยตอน `docker compose stop mysql` บน Windows เพราะ port proxy
+      ของ Docker Desktop ยังจองพอร์ตค้างไว้ TCP จึงต่อติดแต่ handshake ไม่มา
+
+    วิธีทำงาน: ต่อไม่ติดครั้งหนึ่ง → จำเวลาไว้ → request ที่เข้ามาภายใน
+    DB_BREAKER_COOLDOWN วิถัดไปโยน 503 ทันทีโดย **ไม่ลองต่อเลย** (0 ms) พอพ้น
+    cooldown ค่อยปล่อยให้ลองใหม่ ต่อติดเมื่อไหร่ล้างสถานะทิ้ง กลับสู่ปกติทันที
+
+        ไม่มี breaker   ทุก request → รอ 3 วิ → 503
+        มี breaker      ตัวแรก      → รอ 3 วิ → 503 แล้วจำไว้
+                        ที่เหลือ     → 503 ทันที จนกว่าจะพ้น cooldown
+
+    ผลพลอยได้: log เลิกท่วม — เดิม heartbeat_checker ยิงทุก 2 วิ แล้วพิมพ์
+    "Database connection failed" ทุกรอบจนหา error อื่นไม่เจอ
+
+    ไม่ใช้ lock: ตัวแปรตัวเดียวเป็น float การอ่าน/เขียนเป็น atomic ใต้ GIL อยู่แล้ว
+    กรณีแย่สุดคือมี request 2-3 ตัวหลุดไปลองต่อพร้อมกันตอน cooldown เพิ่งหมด
+    ซึ่งไม่มีผลเสีย (แค่เสียเวลา connect เพิ่มไม่กี่ครั้ง) — แลกกับการไม่ต้องมี
+    lock บนเส้นทางที่ร้อนที่สุดของทั้งระบบ
     """
+    global _db_retry_after
+
+    # breaker เปิดอยู่ = เพิ่งรู้มาว่าต่อไม่ติด ไม่ต้องไปเสียเวลาลองใหม่
+    # ใช้ monotonic ไม่ใช่ time.time() — ภูมิคุ้มกันการปรับนาฬิกาเครื่อง/DST
+    # ถ้าใช้ time.time() แล้วนาฬิกาถูกเลื่อนถอยหลัง breaker จะค้างเปิดยาว
+    if time.monotonic() < _db_retry_after:
+        raise HTTPException(503, "เชื่อมต่อฐานข้อมูลไม่สำเร็จ (เพิ่งลองไปเมื่อครู่ "
+                                 "— จะลองใหม่อัตโนมัติ)")
+
     try:
-        return pymysql.connect(**DB_CONFIG)
+        conn = pymysql.connect(**DB_CONFIG)
     except pymysql.MySQLError as exc:
-        log.error("Database connection failed: %s", exc)
+        _db_retry_after = time.monotonic() + DB_BREAKER_COOLDOWN
+        log.error("Database connection failed: %s (หยุดลองต่อ %.0f วิ)",
+                  exc, DB_BREAKER_COOLDOWN)
         raise HTTPException(503, f"เชื่อมต่อฐานข้อมูลไม่สำเร็จ: {exc}")
+
+    _db_retry_after = 0.0   # ต่อติดแล้ว ปิด breaker ทันที
+    return conn
 
 # ── Lifespan ─────────────────────────────────────────────────────────────────
 async def _reload_session_queues() -> None:
@@ -881,6 +939,30 @@ class ImageUpdate(BaseModel):
     image_path:    Optional[str] = None
     upload_failed: bool = False
 
+# ⚠⚠ FROM + JOIN ของหน้า Export มีที่เดียวคือตรงนี้ — EXPORT_SELECT (ดึงข้อมูล)
+#     กับ query ที่ใช้ COUNT/กรอง ต้องใช้ก้อนเดียวกันเสมอ
+#
+#     เดิมประกาศแยกกัน 2 ที่แล้วเนื้อในไม่ตรงกัน: ตัวดึงข้อมูล join package_size
+#     ด้วย COALESCE(p.package_size_id, pn.package_size_id) แต่ตัวนับ join ด้วย
+#     pn.package_size_id อย่างเดียว ผลคือ **ชิ้นงานโหมด IPM หายจากการกรอง
+#     Package Size ทั้งหมด** เพราะ IPM ลงทะเบียนโดยไม่มี part_number (part_number_id
+#     เป็น NULL ได้ — ดู CLAUDE.md หัวข้อ Database Schema) พอ pn เป็น NULL แล้ว
+#     ps ก็ NULL ตาม ทั้งที่ Part ตัวนั้นมี package_size ของตัวเองอยู่
+#     อาการที่เห็น: กรอง Package Size แล้วได้แต่รายการโหมด New
+COALESCE_PKG = "COALESCE(p.package_size_id, pn.package_size_id)"
+
+_EXPORT_FROM = f"""
+    FROM measurements m
+    LEFT JOIN operator op             ON m.operator_id = op.operator_id
+    LEFT JOIN parts_specifications p  ON m.number_alpl = p.number_alpl
+    LEFT JOIN part_number pn          ON p.part_number_id = pn.part_number_id
+    LEFT JOIN handler h               ON pn.handler_id = h.handler_id
+    LEFT JOIN package_size ps         ON ps.package_size_id = {COALESCE_PKG}
+    LEFT JOIN template t              ON ps.template_id = t.template_id
+    LEFT JOIN vendor v                ON p.vendor_id = v.vendor_id
+    LEFT JOIN owner o                 ON p.owner_id = o.owner_id
+"""
+
 EXPORT_SELECT = """
     SELECT m.measurement_id, m.session_id, m.number_alpl, m.value_x, m.value_y,
            m.`offset` AS `offset`,
@@ -895,17 +977,7 @@ EXPORT_SELECT = """
            h.handler_name, ps.package_size, t.template_name,
            v.vendor_name, o.owner_name,
            p.po_number, p.description, p.recieve_date
-    FROM measurements m
-    LEFT JOIN operator op             ON m.operator_id = op.operator_id
-    LEFT JOIN parts_specifications p  ON m.number_alpl = p.number_alpl
-    LEFT JOIN part_number pn          ON p.part_number_id = pn.part_number_id
-    LEFT JOIN handler h               ON pn.handler_id = h.handler_id
-    LEFT JOIN package_size ps
-           ON ps.package_size_id = COALESCE(p.package_size_id, pn.package_size_id)
-    LEFT JOIN template t              ON ps.template_id = t.template_id
-    LEFT JOIN vendor v                ON p.vendor_id = v.vendor_id
-    LEFT JOIN owner o                 ON p.owner_id = o.owner_id
-"""
+""" + _EXPORT_FROM
 
 def _fmt_num(v, digits: int = 3):
     return "" if v is None else f"{float(v):.{digits}f}"
@@ -1083,18 +1155,6 @@ def _day_end(v):
 def _day_start(v):
     return f"{v} 00:00:00" if isinstance(v, str) and _DATE_ONLY_RE.match(v.strip()) else v
 
-_EXPORT_FROM = """
-    FROM measurements m
-    LEFT JOIN operator op             ON m.operator_id = op.operator_id
-    LEFT JOIN parts_specifications p  ON m.number_alpl = p.number_alpl
-    LEFT JOIN part_number pn          ON p.part_number_id = pn.part_number_id
-    LEFT JOIN handler h               ON pn.handler_id = h.handler_id
-    LEFT JOIN package_size ps         ON pn.package_size_id = ps.package_size_id
-    LEFT JOIN template t              ON ps.template_id = t.template_id
-    LEFT JOIN vendor v                ON p.vendor_id = v.vendor_id
-    LEFT JOIN owner o                 ON p.owner_id = o.owner_id
-"""
-
 REPORT_GROUP_BY = "tolerance_spec"
 
 # พารามิเตอร์ filter ที่ /api/export/preview กับ /api/export/csv รับเหมือนกันทุกตัว
@@ -1227,7 +1287,9 @@ __all__ = [
     "HTTPException",
     "HeartbeatRequest",
     "Image",
+    "DB_BREAKER_COOLDOWN",
     "ImageUpdate",
+    "JSONResponse",
     "LAST_EVENT_FRESH_SEC",
     "List",
     "LookupCreate",

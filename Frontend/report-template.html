@@ -611,6 +611,13 @@
   // ══════════════════════════════════════════════════════════════════════
   document.addEventListener('DOMContentLoaded', async () => {
     initTopbar(); connectSSE(); bindToolbar();
+    // ต่อ DB ไม่ได้ = ล็อกทั้งหน้า · ทุกอย่างที่นี่ (โหลดคอลัมน์ · เทมเพลต ·
+    // preview · บันทึกผัง) ต้องอ่าน/เขียน DB ทั้งหมด กดได้ก็ได้แต่ error
+    //
+    // หน้านี้ถูกลืมตอนแรกเพราะเปิดจาก Export อีกทีหนึ่ง (ไม่ได้อยู่บนเมนูหลัก)
+    // แต่มันเป็นหน้าเต็มแยกไฟล์ มี topbar + ป้ายสถานะของตัวเอง จึงต้องมีตัวเฝ้า
+    // ของตัวเองเหมือนหน้าอื่น
+    watchDbStatus();
     document.getElementById('editor-kind').textContent = `Export · ${OUTPUT}`;
     document.querySelector('#export-menu-btn').textContent = 'Export';
     document.title = `TM-X · เทมเพลตรายงาน ${OUTPUT}`;

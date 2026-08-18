@@ -662,6 +662,12 @@
   document.addEventListener('DOMContentLoaded', async () => {
     initTopbar();
     connectSSE({
+      // ⚠ ต้องมี onOpen — SSE ตั้งป้ายเป็น 'online' ทุกครั้งที่ต่อติด โดยที่มัน
+      //   ไม่เคยแตะ DB เลยจึงไม่มีทางรู้ว่า MySQL ตายอยู่ ถ้าไม่ยิง query จริง
+      //   ตามไปทันที ป้ายจะค้าง 🟢 Online ทั้งที่ตารางว่างและ banner ขึ้นแล้ว
+      //   (เป็นบั๊กที่เจอจริง — หน้า Export ไม่เป็นเพราะ watchDbStatus ดักไว้ให้)
+      //   หน้า Home ใช้วิธีเดียวกันนี้ (onOpen: loadSessionState)
+      onOpen: checkSessionRunning,
       // กด Back กลับมาที่หน้านี้ — BFCache ไม่ยิง DOMContentLoaded ซ้ำ
       // ต้องโหลดตารางใหม่เอง ไม่งั้นแสดงข้อมูล ณ ตอนที่ออกไป
       onRestore: async () => {
@@ -689,7 +695,17 @@
   async function checkSessionRunning() {
     try {
       const r = await fetch(`${API}/api/session/state`);
+
+      // ── ต่อ DB ไม่ได้ → ล็อกทั้งหน้า ────────────────────────────────────
+      // ทุกปุ่มในหน้านี้ลงเอยที่ query สักตัวเสมอ (Add/Edit/Delete/กู้คืน)
+      // ปล่อยให้กดได้มีแต่เสีย — กรอกฟอร์มยาว ๆ เสร็จแล้วกด Save ไปเจอ error
+      // ตอนท้าย แล้วของที่พิมพ์ไว้ก็หายไปกับ modal ที่ปิดตัวเอง
+      //
+      // ป้ายบน topbar ก็ต้องเปลี่ยนด้วย ไม่งั้นจะขึ้น 🟢 Online ทั้งที่ตารางว่าง
+      setServerBadgeFromPoll(r.ok);
+      setDbLock(!r.ok);
       if (!r.ok) return;
+
       const d = await r.json();
       const running = d.state === 'running';
       if (running !== sessionRunning) {
@@ -699,7 +715,11 @@
         renderPartsTable();
         renderMeasTable();
       }
-    } catch (e) { /* poll ล้มเหลวเงียบๆ — ไม่ให้กระทบการใช้งานหน้าอื่น */ }
+    } catch (e) {
+      // ยิงไม่ออกเลย = Backend ล่มทั้งตัว · ป้ายปล่อยให้ SSE เป็นคนตั้ง (onerror
+      // → offline) จะได้ไม่ชี้ผิดจุด แต่ต้องล็อกอยู่ดีเพราะบันทึกอะไรไม่ได้แน่
+      setDbLock(true, '⛔ ติดต่อ Backend ไม่ได้ — บันทึก/แก้ไข/ลบไม่ได้จนกว่าจะกลับมา');
+    }
   }
 
   // cache ของ catalog Part Number + Package Size (พร้อม template) — ใช้แสดง

@@ -31,7 +31,25 @@
 
 /* ── Reset & base ──────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-html, body, #root { height: 100%; }
+/* ⚠⚠ ห้ามใส่ `height: 100%` ให้ html/body/#root — เคยมีและเป็นต้นเหตุของอาการ
+   "หน้า Home มี scrollbar ของทั้งหน้า + แถบบนอยู่คนละตำแหน่งในแต่ละหน้า"
+
+   vanilla ตั้งแค่ `body { min-height: 100vh }` **ไม่ได้ล็อกความสูง** body จึง
+   โตตามเนื้อหาได้ตามปกติ แล้วหน้าเลื่อนที่ระดับ page เหมือนเว็บทั่วไป
+
+   พอใส่ height:100% เข้าไป body ถูกบังคับให้สูงเท่าจอเป๊ะ แต่เนื้อหาข้างในล้น
+   ออกมาอยู่ดี เพราะ **flex item มี min-height: auto เป็นค่าเริ่มต้น** — มันหด
+   ต่ำกว่าความสูงของเนื้อหาตัวเองไม่ได้ ต่อให้สั่ง flex:1 ก็เอาไม่อยู่ ทุกชั้นเลย
+   ดันกันจนทะลุออกมาที่ body → เกิด scrollbar ทั้งที่ "ตั้งใจ" ให้พอดีจอ
+   และ scrollbar-gutter ก็ช่วยไม่ได้ เพราะไม่ได้เกิดจากหน้ายาว แต่เกิดจากโครง
+   ที่ขัดกันเอง
+
+   ตอนนี้ให้ตรงกับ vanilla ทุกประการ: ความสูงมาจากเนื้อหา ไม่ล็อกอะไรทั้งนั้น */
+html { scrollbar-gutter: stable; }   /* จองที่ scrollbar ไว้ ทุกหน้าจะได้กว้างเท่ากัน */
+/* #root เป็นชั้นที่ vanilla ไม่มี — ต้องทำตัว "โปร่งใส" ให้มากที่สุด
+   flex:1 + flex column ทำให้ลูกของมัน (header + .layout) ประพฤติตัวเหมือนเป็น
+   ลูกตรงของ body แบบฝั่ง vanilla เป๊ะ */
+#root { display: flex; flex-direction: column; flex: 1; }
 body {
   font-family: 'Segoe UI', system-ui, sans-serif;
   background: var(--bg);
@@ -79,12 +97,22 @@ select:focus, input:focus, textarea:focus {
   top: 0;
   z-index: 100;
 }
-.topbar-left { display: flex; align-items: center; gap: 1.5rem; }
+/* แถบบนแบ่ง 3 โซน: โลโก้ซ้าย · เมนูกึ่งกลาง · ป้ายสถานะขวา
+   ⚠ ซ้าย/ขวาต้อง flex:1 เท่ากัน และเมนูกลางต้อง flex:0 0 auto — ทำแบบนี้เมนู
+     จะอยู่กึ่งกลางจอ "เป๊ะ" เสมอ ไม่ขยับตามความยาวของชื่อหน้า (Dashboard /
+     Database Editor / Export ยาวไม่เท่ากัน) หรือป้ายสถานะที่เปลี่ยนข้อความได้
+     ถ้าใช้ justify-content:center เฉยๆ เมนูจะเลื่อนไปมาเวลาสองข้างยาวไม่เท่ากัน
+
+   เคยขาด flex:1 ไป เมนูเลยไปกองติดกับชื่อระบบจนอ่านต่อกันเป็นพืด
+   ("TM-X Database EditorHome Edit Export") */
+.topbar-left, .topbar-right { display: flex; align-items: center; gap: 1rem; flex: 1; min-width: 0; }
+.topbar-right { justify-content: flex-end; }
 .topbar-title {
   font-size: 1.1rem;
   font-weight: 700;
   letter-spacing: .03em;
   color: var(--text);
+  white-space: nowrap;
 }
 .topbar-title span { color: var(--accent); }
 .topbar-back {
@@ -93,15 +121,20 @@ select:focus, input:focus, textarea:focus {
   font-weight: 600;
 }
 .topbar-back:hover { color: var(--accent); }
-.topbar-nav { display: flex; align-items: center; gap: 1.25rem; }
+.topbar-nav { display: flex; align-items: center; gap: 0.4rem; flex: 0 0 auto; }
 .topbar-link {
   font-size: 0.85rem;
   font-weight: normal;
   color: var(--muted);
-  transition: color .15s;
+  padding: 0.4rem 0.9rem;
+  border-radius: 7px;
+  transition: color .15s, background .15s;
+  white-space: nowrap;
 }
-.topbar-link:hover,
-.topbar-link.active { color: var(--accent); }
+.topbar-link:hover { color: var(--accent); background: var(--surface2); }
+/* หน้าที่เปิดอยู่ — พื้นหลังฟ้าอ่อน + ตัวเข้ม ให้เห็นชัดตอนมองผ่านๆ
+   (โทนเดียวกับตัวที่เลือกอยู่ใน dropdown ของ Export) */
+.topbar-link.active { background: rgba(55,138,222,.12); color: var(--accent); font-weight: 700; }
 .station-badge {
   font-size: 0.8rem;
   font-weight: 600;
@@ -109,9 +142,578 @@ select:focus, input:focus, textarea:focus {
   border-radius: 999px;
   border: 1px solid var(--border);
 }
+/* ── โลโก้ + เมนู Export แบบ dropdown (ยกจาก Frontend/shared.css) ────────
+   ห้อยใต้ตัวเมนูโดยตรง (absolute เทียบกับ .topbar-menu) · ลูกศรบอกว่ากดแล้ว
+   มีตัวเลือกย่อย ไม่ได้ไปหน้าเลยเหมือน Home/Edit
+   line-height:1 ที่ลูกศร — ไม่งั้นจะดันคำว่า Export ให้ลอยสูงกว่าเมนูอื่น */
+.topbar-logo { height: 26px; width: auto; display: block; flex-shrink: 0; }
+.topbar-brand { display: flex; align-items: center; gap: 0.7rem; }
+.topbar-menu { position: relative; display: flex; align-items: center; }
+.topbar-menu > .topbar-link {
+  cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem;
+}
+.topbar-caret { font-size: 0.55rem; line-height: 1; transition: transform .15s; display: inline-block; }
+.topbar-menu.open > .topbar-link { background: rgba(55,138,222,.12); color: var(--accent); }
+.topbar-menu.open .topbar-caret { transform: rotate(180deg); }
+.topbar-dropdown {
+  display: none;
+  position: absolute;
+  left: -0.65rem;
+  top: 1.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 158px;
+  overflow: hidden;
+  z-index: 200;
+}
+.topbar-menu.open .topbar-dropdown { display: block; }
+.topbar-dropdown a, .topbar-dropdown span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.55rem 0.8rem;
+  font-size: 0.83rem;
+  color: var(--text);
+}
+.topbar-dropdown a + a, .topbar-dropdown a + span, .topbar-dropdown span + span { border-top: 1px solid var(--surface2); }
+.topbar-dropdown a:hover { background: var(--surface2); }
+.topbar-dropdown a.active { background: rgba(55,138,222,.1); color: var(--accent); }
+
 .station-badge.online     { background: var(--ok-bg);   border-color: var(--ok);   color: var(--ok); }
 .station-badge.offline    { background: var(--ng-bg);   border-color: var(--ng);   color: var(--ng); }
 .station-badge.connecting { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+/* db-offline ใช้โทนเดียวกับ connecting โดยตั้งใจ — ทั้งคู่คือ "ใช้งานไม่ได้
+   เต็มที่ แต่ยังไม่ถึงขั้นขาดการติดต่อ" ตัวหนังสือเป็นตัวแยกว่าเป็นเรื่องไหน */
+.station-badge.db-offline { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+
+/* ── ปุ่มมาตรฐาน (ยกจาก Frontend/shared.css + edit.html) ──────────────────
+   ⚠ 3 คลาสนี้ถูกใช้ใน ConfirmDialog / PartEntry / SessionControl / Measurements
+     มาตั้งแต่แรกแต่ **ไม่เคยมีนิยาม** — ปุ่มจึงออกมาเป็นปุ่มเปล่าของเบราว์เซอร์
+     เป็นบั๊กชนิดเดียวกับ .mock-banner ฝั่ง vanilla คือ "ใช้คลาสที่ไม่มีอยู่จริง"
+     ซึ่งไม่มี error อะไรเตือนเลย ต้องไล่เทียบเอง                            */
+.btn-primary,
+.btn-ghost,
+.btn-danger {
+  padding: 0.45rem 1.1rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.btn-primary:hover:not(:disabled) { filter: brightness(0.93); }
+.btn-ghost { background: transparent; border-color: var(--border); color: var(--muted); }
+.btn-ghost:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
+.btn-danger { background: transparent; border-color: #f7c1c1; color: var(--ng); }
+.btn-danger:hover:not(:disabled) { background: var(--ng-bg); }
+.btn-primary:disabled,
+.btn-ghost:disabled,
+.btn-danger:disabled { opacity: .55; cursor: not-allowed; }
+
+/* หัว Modal กลาง (Modal.tsx) — vanilla ไม่มีคลาสนี้เพราะแต่ละหน้าเขียน modal
+   ของตัวเอง ฝั่งนี้ใช้ component เดียวร่วมกัน จึงต้องมีนิยามกลาง */
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* ตารางฟอร์มทั่วไป — โครงเดียวกับ .entry-form-grid ที่ Part Entry ใช้ */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.85rem;
+  margin-bottom: 1rem;
+}
+.form-grid label {
+  font-size: 0.75rem;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 0.3rem;
+  display: block;
+}
+.form-grid input, .form-grid select, .form-grid textarea { width: 100%; }
+
+/* ป้ายโหมดขนาดเล็กบนหัวการ์ด Part Entry — โทนสีเดียวกับ .pe-mode-badge-lg
+   ของ vanilla (IPM ฟ้า · New ม่วง · Rework ส้ม) แค่ย่อขนาดลง */
+.pe-mode-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: .04em;
+  padding: 0.15rem 0.6rem;
+  border-radius: 999px;
+}
+.pe-mode-badge.ipm    { background: rgba(55,138,222,.12); color: var(--accent); }
+.pe-mode-badge.new    { background: rgba(127,119,221,.15); color: var(--accent2); }
+.pe-mode-badge.rework { background: var(--warn-bg); color: var(--warn); }
+
+.img-cell { text-align: left; }
+
+/* ══════════════════════════════════════════════════════════════════════
+   หน้า Export (ยกจาก Frontend/export.html ทั้งชุด)
+   ══════════════════════════════════════════════════════════════════════ */
+.card-head {
+  font-size: 0.8rem; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 1rem;
+}
+
+/* ── แถบบอกขั้นตอน ────────────────────────────────────────────────────── */
+.steps { display: flex; align-items: center; gap: 0.6rem; font-size: 0.8rem; color: var(--muted); margin-bottom: 1.1rem; flex-wrap: wrap; }
+.step { display: flex; align-items: center; gap: 0.4rem; }
+.step .num {
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--surface2); color: var(--muted);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.7rem; font-weight: 700;
+}
+.step.on { color: var(--text); font-weight: 600; }
+.step.on .num { background: var(--accent); color: #fff; }
+.step.done .num { background: var(--ok-bg); color: var(--ok); }
+
+/* ── รายการ Template ──────────────────────────────────────────────────── */
+.tpl {
+  border: 1px solid var(--border); border-radius: 9px;
+  padding: 0.85rem 1rem; margin-bottom: 0.65rem; cursor: pointer;
+}
+.tpl.sel { border-color: var(--accent); background: rgba(55,138,222,.045); }
+.tpl-head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.55rem; flex-wrap: wrap; }
+.tpl-name { font-size: 0.92rem; font-weight: 600; }
+.tpl-acts { margin-left: auto; display: flex; gap: 0.35rem; }
+.badge { font-size: 0.7rem; padding: 0.12rem 0.55rem; border-radius: 999px; background: var(--surface2); color: var(--muted); }
+.badge.lock { background: var(--warn-bg); color: var(--warn); }
+.btn-mini {
+  font-size: 0.75rem; padding: 0.25rem 0.6rem;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 6px; font-weight: 500; cursor: pointer;
+}
+.btn-mini:disabled { color: #b4b2a9; background: var(--surface2); cursor: not-allowed; }
+.btn-mini.del:not(:disabled) { color: var(--ng); border-color: #f7c1c1; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.chip { font-size: 0.7rem; padding: 0.15rem 0.5rem; border-radius: 5px; background: var(--surface2); color: var(--muted); }
+.chip.meas { background: #eeedfe; color: #534ab7; }
+.btn-add-tpl {
+  width: 100%; padding: 0.65rem; margin-top: 0.3rem;
+  border: 1px dashed #d3d1c7; background: var(--surface);
+  color: var(--muted); font-size: 0.85rem; border-radius: var(--radius); cursor: pointer;
+}
+.empty { text-align: center; color: var(--muted); padding: 2rem; font-size: 0.85rem; }
+.actions { display: flex; justify-content: space-between; gap: 0.6rem; margin-top: 1.1rem; flex-wrap: wrap; align-items: flex-end; }
+
+/* ── ตัวกรอง ──────────────────────────────────────────────────────────────
+   ล็อกไว้ 5 คอลัมน์ตายตัว (ไม่ใช้ auto-fit) เพราะมี 15 ช่องพอดี → ได้ 3 แถว
+   เป๊ะทุกครั้ง · ของเดิมใช้ auto-fit minmax(160px) แล้วบนจอกว้างมันยัดได้ 8
+   คอลัมน์ เหลือ 2 แถวที่ช่องแคบจนป้ายชื่อกับ placeholder เบียดกันอ่านยาก
+   minmax(0,1fr) กัน content ที่ยาว (เช่น multi-select ที่ติ๊กหลายค่า) ดัน
+   คอลัมน์ให้ล้นออกนอกกรอบ */
+.filters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.9rem 1.1rem; }
+.filters-actions { display: flex; justify-content: flex-end; margin-top: 0.9rem; }
+@media (max-width: 1250px) { .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (max-width: 1000px) { .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 760px)  { .filters { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.latest-toggle {
+  display: flex; align-items: center; gap: 0.6rem;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0.6rem 0.85rem; margin-bottom: 0.85rem;
+  cursor: pointer;
+}
+.latest-toggle input { width: auto; }
+.latest-toggle strong { display: block; font-size: 0.82rem; }
+.latest-toggle small { font-size: 0.72rem; color: var(--muted); }
+
+/* ── ตัวอย่างข้อมูล ───────────────────────────────────────────────────── */
+.count { font-size: 0.8rem; color: var(--muted); margin: 1rem 0 0.5rem; }
+/* ⚠ ห้ามใส่ max-height ให้ .pv-wrap — CSV preview ได้แค่ 5 แถวจาก backend อยู่แล้ว
+   (limit ตั้งต้นของ /api/export/preview) ไม่มีอะไรให้เลื่อน ส่วนผังรายงานถ้าโดน
+   ครอบความสูงจะมีสกรอลบาร์คร่อมกลางตาราง ทั้งที่ต้องเห็นทั้งใบก่อนสั่งพิมพ์ */
+.pv-wrap { overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.pv-wrap table { border-collapse: collapse; width: 100%; }
+.pv-wrap th, .pv-wrap td {
+  font-size: 0.78rem; padding: 0.4rem 0.6rem; white-space: nowrap;
+  border-bottom: 1px solid var(--border); text-align: left;
+}
+.pv-wrap th { background: var(--surface2); position: sticky; top: 0; font-weight: 600; }
+
+/* ผังรายงาน — เส้นขอบหนาเฉพาะช่องที่มีเนื้อหา ตรงกับกติกาที่ตกลงไว้ว่าหน้าแก้ไข
+   ไม่ต้องโชว์เส้น แต่ตอน preview/export ต้องมี (เหมือนที่ openpyxl ใส่ให้ใน .xlsx)
+
+   ⚠ ทุกกฎต้องเขียนเป็น `.rpt-wrap .rpt-sheet ...` ไม่ใช่ `.rpt-sheet ...` เฉยๆ
+     เพราะกล่องนี้ใช้คลาส `pv-wrap rpt-wrap` ร่วมกัน แล้ว `.pv-wrap td` มีน้ำหนัก
+     (0,2,0) มากกว่า `.rpt-sheet td` (0,1,1) — ผังรายงานจะได้เส้นเทาบาง ๆ กับ
+     padding ของตาราง preview แทนกรอบดำหนาของรายงาน (อาการที่เจอจริง)
+     เหตุผลเดียวกันกับ tr:hover ที่ทำให้แถวเปลี่ยนสีตอนเอาเมาส์ชี้ ซึ่งรายงาน
+     บนกระดาษไม่ควรมี */
+.rpt-wrap { overflow: auto; background: #fff; padding: 1rem; }
+.rpt-wrap .rpt-sheet { border-collapse: collapse; margin: 0 auto; background: #fff; width: 100%; }
+.rpt-wrap .rpt-sheet td {
+  padding: 3px 8px; font-size: 0.8rem; white-space: nowrap;
+  font-family: Tahoma, sans-serif; color: #000;
+  border: 0; background: transparent;
+}
+.rpt-wrap .rpt-sheet td.bx { border: 2px solid #000; }
+.rpt-wrap tr:hover td { background: transparent; }
+
+/* ── พิมพ์เป็น PDF ─────────────────────────────────────────────────────────
+   ผังฉบับเต็ม (full=1) ถูกวาดลง #print-root ในหน้าเดิม แล้วสั่ง window.print()
+   — ไม่เปิดหน้าต่างใหม่ จะได้ไม่โดน pop-up blocker */
+#print-root { display: none; }
+@media print {
+  @page { size: landscape; margin: 12mm; }
+  /* บังคับพิมพ์สีพื้นออกมาด้วย — ปกติเบราว์เซอร์ตัดสีพื้นทิ้งเพื่อประหยัดหมึก
+     ทำให้เซลล์ที่ลงสีไว้กลายเป็นขาวหมดในไฟล์ PDF
+     ⚠ ใส่เฉพาะใน #print-root ห้ามใส่ที่ html/body — ไม่งั้นพื้นสีเทาอมครีมของ
+       หน้าเว็บจะถูกพิมพ์เป็นพื้นเทาเต็มหน้ากระดาษด้วย */
+  #print-root, #print-root * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+  body > *:not(#print-root) { display: none !important; }
+  /* React แขวนทุกอย่างไว้ใต้ #root — ตัวเลือกด้านบนจึงยังไม่พอ ต้องซ่อนพี่น้อง
+     ของ #print-root ที่อยู่ข้างในอีกชั้นด้วย (ต่างจาก vanilla ที่ #print-root
+     เป็นลูกตรงของ body) */
+  #root > *:not(#print-root) { display: none !important; }
+  #root { display: block !important; }
+  #print-root { display: block !important; background: #fff !important; }
+  #print-root table { border-collapse: collapse; margin: 0 auto; }
+  /* border: 0 กับทุกช่อง แล้วใส่คืนเฉพาะช่องที่มีเนื้อหา (.bx) —
+     กันเส้นจางๆ ของช่องเปล่าโผล่มาในไฟล์ */
+  #print-root td {
+    padding: 4px 10px; white-space: nowrap; border: 0;
+    font-family: Tahoma, sans-serif; color: #000;
+  }
+  #print-root td.bx { border: 2px solid #000; }
+}
+
+/* ข้อความ error ใต้ช่องกรอง (เช่น ALPL ผิดรูปแบบ) */
+.fld-err { font-size: 0.72rem; color: var(--ng); margin-top: -0.4rem; margin-bottom: 0.6rem; }
+
+/* ── ช่องชื่อไฟล์ ─────────────────────────────────────────────────────── */
+.fname-group { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; min-width: 220px; }
+.fname-label { font-size: 0.72rem; color: var(--muted); }
+.fname-label .req { color: var(--ng); }
+.fname-row { display: flex; align-items: center; gap: 0.3rem; }
+.fname-row input { flex: 1; }
+.fname-ext { font-size: 0.8rem; color: var(--muted); }
+.fname-hint { font-size: 0.72rem; color: var(--muted); text-align: right; margin-top: 0.3rem; min-height: 1em; }
+.fname-hint.warn { color: var(--warn); }
+
+/* ── Modal สร้าง/แก้ Template ─────────────────────────────────────────── */
+.overlay {
+  display: none; position: fixed; inset: 0; background: rgba(0,0,0,.5);
+  z-index: 300; align-items: center; justify-content: center; padding: 1rem;
+}
+.overlay.open { display: flex; }
+.overlay .modal {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 1.25rem 1.5rem; width: 100%; max-width: 780px; max-height: 90vh; overflow-y: auto;
+}
+.modal-head { display: flex; align-items: center; justify-content: space-between; }
+.modal-close { background: transparent; border: 0; font-size: 1rem; color: var(--muted); cursor: pointer; }
+.picker { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+.pk-box { border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem; max-height: 340px; overflow-y: auto; }
+.pk-title { font-size: 0.75rem; font-weight: 700; color: var(--muted); margin-bottom: 0.5rem; }
+.pk-group { font-size: 0.7rem; color: var(--accent); font-weight: 700; margin: 0.55rem 0 0.2rem; }
+.pk-item { display: flex; align-items: center; gap: 0.45rem; padding: 0.2rem 0.1rem; font-size: 0.82rem; cursor: pointer; }
+.pk-item input { width: auto; }
+.ord-item {
+  display: flex; align-items: center; gap: 0.45rem;
+  border: 1px solid var(--border); border-radius: 6px;
+  padding: 0.35rem 0.5rem; margin-bottom: 0.3rem; font-size: 0.82rem;
+  background: var(--surface); cursor: grab;
+}
+.ord-item.drag { opacity: .45; }
+.ord-grip { color: var(--muted); }
+.ord-x { margin-left: auto; background: transparent; border: 0; color: var(--muted); cursor: pointer; }
+.ord-x:hover { color: var(--ng); }
+
+/* ── ตารางสรุปผล IPM (คัดลอกไปวาง Excel) ────────────────────────────────
+   ใช้ฟอนต์ monospace เพื่อให้ตัวเลขเรียงตรงคอลัมน์กัน อ่านเทียบง่ายก่อนก๊อป */
+.ipm-summary-table { width: 100%; border-collapse: collapse; }
+.ipm-summary-table td {
+  border: 1px solid var(--border);
+  padding: 0.55rem 0.9rem;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+.ipm-summary-table td:first-child { width: 55%; }
+
+/* ── Part Entry แบบหลายกลุ่ม (ยกจาก Frontend/index.html) ─────────────────
+   1 กลุ่ม = ALPL หลายตัวที่ใช้ข้อมูลชุดเดียวกัน · กด +Add เพิ่มกลุ่มได้ */
+.entry-group {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  margin-bottom: 0.85rem; background: var(--surface);
+}
+.entry-group.collapsed .entry-group-body { display: none; }
+.entry-group-head {
+  display: flex; align-items: center; gap: 0.6rem;
+  padding: 0.55rem 0.75rem; background: var(--surface2);
+  border-radius: var(--radius) var(--radius) 0 0;
+  cursor: pointer; user-select: none;
+}
+.entry-group.collapsed .entry-group-head { border-radius: var(--radius); }
+.entry-group-title { font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
+.entry-group-sum {
+  font-size: 0.75rem; color: var(--muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;
+}
+.entry-group-arrow { font-size: 0.7rem; color: var(--muted); }
+.entry-group-del {
+  background: transparent; border: 1px solid var(--border); color: var(--ng);
+  border-radius: var(--radius); font-size: 0.72rem; padding: 0.2rem 0.5rem; cursor: pointer;
+}
+.entry-group-del:hover { background: var(--ng); color: #fff; border-color: var(--ng); }
+.entry-group-body { padding: 0.85rem 0.75rem 0.1rem; }
+/* ⚠ จำนวนคอลัมน์มาจากตัวแปร --cols ที่ component ใส่ให้ตามโหมด ไม่ได้ใช้
+     auto-fill เหมือน .entry-form-grid ปกติ เพราะผังต้องคงที่ — auto-fill จะยัด
+     ช่องขึ้นบรรทัดเดียวกันเองตามความกว้างที่เหลือ ทำให้ "ALPL | Package Size |
+     Part Number" หลุดบรรทัดไม่เหมือนกันในแต่ละจอ
+   minmax(0,1fr) ไม่ใช่ 1fr เฉย ๆ — กัน <select> ที่มีข้อความยาวดันคอลัมน์ล้น */
+.entry-group-body .entry-form-grid {
+  grid-template-columns: repeat(var(--cols, 2), minmax(0, 1fr));
+  margin-bottom: 0.4rem;
+}
+@media (max-width: 760px) {
+  .entry-group-body .entry-form-grid { grid-template-columns: 1fr; }
+  .entry-group-body .entry-form-grid .form-group[class*="span-"] { grid-column: auto; }
+}
+.entry-form-grid select.invalid { border-color: var(--ng); }
+/* ช่องที่ระบบเติมค่าให้จากข้อมูลที่ลงทะเบียนไว้ — ดูออกทันทีว่า "ไม่ใช่ของที่
+   พิมพ์เอง" และแก้ที่นี่ไม่ได้ (ต้องไปแก้ที่ Edit › Parts)
+   ⚠ ใช้ disabled ทั้ง input และ select — readonly ใช้กับ <select> ไม่ได้ */
+.entry-form-grid input.auto-locked,
+.entry-form-grid select.auto-locked {
+  background: var(--surface2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.autofill-note { color: var(--muted); }
+.entry-group-add { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 1rem; }
+.entry-group-hint { font-size: 0.72rem; color: var(--muted); }
+
+/* ── ป้าย OK/NG รายแกน + ช่วงที่รับได้ ในกล่อง Value X/Y/Offset ──────────
+   บอกว่า "พังที่แกนไหน" ไม่ใช่รู้แค่ Result รวม — ตอนวัดไม่ผ่านจะได้รู้ทันที
+   ว่าต้องไปแก้อะไร ส่วน tc-range คือช่วงที่รับได้ของแกนนั้นไว้เทียบว่าเกินเท่าไหร่
+   ⚠ Offset เทียบกับเพดานตัวเดียว (offset_tol) ไม่ใช่ช่วง 2 ฝั่งเหมือน X/Y
+     ข้อความจึงเป็น "ไม่เกิน x.xxx" ไม่ใช่ "รับได้ a – b" */
+.tc-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 0.5rem; margin-bottom: 0.2rem;
+}
+.tc-axis {
+  font-size: 0.68rem; font-weight: 700;
+  padding: 0.1rem 0.5rem; border-radius: 999px; letter-spacing: .03em;
+}
+.tc-axis.ok { background: var(--ok-bg); color: var(--ok); }
+.tc-axis.ng { background: var(--ng-bg); color: var(--ng); }
+.tc-range { font-size: 0.68rem; color: var(--muted); margin-top: 0.25rem; min-height: 1em; }
+.telemetry-cell.offset .tc-value { color: var(--muted); }
+
+/* คอลัมน์ "เกณฑ์" ในตาราง Measurements — เป็นค่าอ้างอิงที่แก้ไม่ได้
+   🔒 มาจาก ::after ห้ามพิมพ์ซ้ำใน JSX */
+.th-spec, .td-spec { color: var(--muted); white-space: nowrap; }
+.th-spec::after { content: ' 🔒'; font-size: 0.85em; opacity: .6; }
+
+/* ── Live Telemetry: ปุ่ม Clear · แถบคิว · แถบสัดส่วน (ยกจาก index.html) ── */
+.btn-clear {
+  background: transparent; border: 1px solid var(--border);
+  color: var(--muted); padding: 0.2rem 0.6rem; border-radius: var(--radius);
+  font-size: 0.78rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.btn-clear:hover:not(:disabled) { background: var(--surface2); color: var(--text); }
+.btn-clear:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.telemetry-queue { margin-bottom: 0.85rem; }
+.tq-label { font-size: 0.7rem; color: var(--muted); margin-bottom: 0.4rem; }
+.tq-strip { display: flex; gap: 0.4rem; overflow-x: auto; padding-bottom: 0.35rem; }
+.tq-chip {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 0.3rem;
+  font-size: 0.8rem; font-weight: 600; padding: 0.32rem 0.65rem;
+  border-radius: 7px; border: 1px solid transparent;
+  white-space: nowrap; font-family: inherit; line-height: 1.4;
+}
+.tq-chip.ok   { background: var(--ok-bg); color: var(--ok); }
+.tq-chip.ng   { background: var(--ng-bg); color: var(--ng); }
+.tq-chip.now  { background: var(--surface); color: var(--accent); border-color: var(--accent); }
+.tq-chip.wait { background: var(--surface2); color: var(--muted); }
+.tq-ico { font-size: 0.75rem; }
+.tq-dot {
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--accent); animation: tq-pulse 1.4s ease-in-out infinite;
+}
+@keyframes tq-pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+/* แถบสัดส่วนผลการวัด: เขียว=OK แดง=NG เทา=ยังไม่วัด — บอกครบ 3 อย่างในภาพเดียว */
+.telemetry-bar {
+  display: flex; height: 6px; border-radius: 3px;
+  overflow: hidden; background: var(--surface2); margin-bottom: 0.6rem;
+}
+.tb-ok { background: var(--ok); transition: width .3s; }
+.tb-ng { background: var(--ng); transition: width .3s; }
+.telemetry-counts { display: flex; align-items: center; gap: 0.55rem; font-weight: 600; }
+.tcount.ok  { color: var(--ok); }
+.tcount.ng  { color: var(--ng); }
+.tcount-sep { color: var(--border); }
+
+/* ── ชิปข้อมูลในแถบ Session Control (ยกจาก Frontend/index.html) ──────────
+   ทุกชิปเป็น "ป้ายกำกับตัวเล็ก + ค่าในกล่องเทา" วางแนวนอนบรรทัดเดียว
+   ตัวที่ยังไม่มีค่าจะถูกซ่อนทั้งชิป ไม่ใช่โชว์ขีดกลางไว้ — แถบตอน idle จะได้
+   ไม่รกด้วยช่องว่างเปล่า
+   ปุ่ม Start/Stop ดันไปชิดขวาด้วย margin-left:auto (ไม่ใช้ spacer div) */
+.session-chip { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.session-btns { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-left: auto; }
+.sc-label {
+  font-size: 0.7rem; color: var(--muted); font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase;
+}
+/* ⚠ ไม่ทำ text-transform: uppercase เหมือน STATUS โดยตั้งใจ — ค่าพวกนี้เป็น
+     ข้อมูลจริง (ชื่อคน/โหมด) บังคับพิมพ์ใหญ่แล้ว "Nut" จะกลายเป็น "NUT" ซึ่ง
+     ไม่ใช่ชื่อที่เขาเขียน ส่วน STATUS เป็นคำที่เราตั้งเองจึงทำได้
+   สี: var(--text) ดำเข้มสุด ต่างจากป้าย STATUS ที่สีเปลี่ยนตามสถานะ — แบ่ง
+     หน้าที่ให้ชัดว่า "สี = สถานะ" · "ดำ = ข้อเท็จจริงที่ไม่เปลี่ยนตามสถานะ" */
+.sc-value {
+  font-size: 1rem; font-weight: 700; letter-spacing: .04em;
+  color: var(--text); background: var(--surface2);
+  border-radius: var(--radius); padding: 0.2rem 0.75rem;
+}
+/* ── ชิป PI — ต่างจากชิปอื่น 2 อย่างโดยตั้งใจ ────────────────────────────
+   ① ไม่ซ่อนตอน idle — ประโยชน์หลักคือดูก่อนกด Start ว่าเครื่องพร้อมไหม
+   ② มีสี ซึ่งขัดกติกา "สี = สถานะเท่านั้น" ของแถบนี้ — แต่ชิปนี้ *เป็น* สถานะ
+      จริงๆ ไม่ใช่ข้อเท็จจริงคงที่แบบ Operator/Measure Type
+   3 สถานะ ไม่ใช่ 2 — "ไม่ทราบ" ต้องแยกจาก "ออฟไลน์" ให้ชัด */
+.sc-pi { display: inline-flex; align-items: center; gap: 0.35rem; }
+.sc-pi.online  { color: #15803d; background: #dcfce7; }
+.sc-pi.offline { color: #b91c1c; background: #fee2e2; }
+.sc-pi.unknown { color: #a16207; background: #fef9c3; }
+
+/* ── คอลัมน์ read-only ในหน้า Edit (ยกจาก edit.html) ────────────────────
+   คอลัมน์ที่ระบบ derive มาให้ (Handler ← Part Number · Template ← Package Size)
+   หรือแก้ย้อนหลังไม่ได้ (ผลการวัด) — ทำให้ดู "จางกว่า" คอลัมน์ที่แก้ได้จริง
+   เพื่อสื่อว่าเป็นข้อมูลอ้างอิงให้ดูเฉยๆ
+   ⚠ 🔒 มาจาก ::after ของ CSS ไม่ใช่จาก markup — ห้ามพิมพ์ซ้ำใน JSX ไม่งั้นได้ 2 อัน */
+.th-derived, .td-derived { background: var(--surface2); color: var(--muted); }
+.th-derived::after { content: ' 🔒'; font-size: 0.85em; opacity: .6; }
+.derived-legend {
+  background: var(--surface2); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 0 0.35rem; font-weight: 600;
+}
+/* ค่าที่วัดได้ — เขียวคืออยู่ในเกณฑ์ แดงคือหลุด */
+.val-ok { color: var(--ok); font-weight: 600; }
+.val-ng { color: var(--ng); font-weight: 600; }
+
+/* ── ถังขยะหน้า Edit (ยกจาก Frontend/edit.html) ────────────────────────── */
+.count { font-size: 0.78rem; color: var(--muted); font-weight: normal; }
+.trash-actions { display: flex; gap: 0.4rem; white-space: nowrap; }
+/* กู้คืน = เขียว · ลบถาวร = แดง — สองปุ่มนี้อยู่ติดกันในแถวเดียวและผลลัพธ์
+   ตรงข้ามกันสุดขั้ว ต้องแยกออกจากกันให้ชัดที่สุดเท่าที่ทำได้ */
+.btn-restore {
+  background: transparent; border: 1px solid var(--ok); color: var(--ok);
+  padding: 0.25rem 0.7rem; border-radius: 6px; font-size: 0.8rem;
+  font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.btn-restore:hover:not(:disabled) { background: var(--ok-bg); }
+.btn-purge {
+  background: transparent; border: 1px solid var(--ng); color: var(--ng);
+  padding: 0.25rem 0.7rem; border-radius: 6px; font-size: 0.8rem;
+  font-weight: 600; cursor: pointer; white-space: nowrap;
+}
+.btn-purge:hover:not(:disabled) { background: var(--ng-bg); }
+.btn-restore:disabled, .btn-purge:disabled { opacity: .55; cursor: not-allowed; }
+/* ใกล้ครบกำหนดแล้ว — เน้นให้สะดุดตาว่าถ้าจะกู้ต้องรีบ (ของหายเองตาม
+   DELETED_RETENTION_DAYS แม้ไม่มีใครกดลบ) */
+.trash-soon { color: var(--ng); font-weight: 700; }
+
+/* ── ช่องกรองหน้า Export (.fg) + multi-select (ยกจาก Frontend/export.html) ── */
+.fg label { display: block; font-size: 0.72rem; color: var(--muted); margin-bottom: 0.25rem; }
+.fg label .hint {
+  font-size: 0.65rem; color: var(--accent);
+  background: rgba(55,138,222,.1); border-radius: 4px; padding: 0 0.3rem; margin-left: 0.2rem;
+}
+.fg input.bad { border-color: var(--ng); }
+.fg .err { font-size: 0.68rem; color: var(--ng); margin-top: 0.2rem; min-height: 1em; }
+
+.ms { position: relative; }
+.ms-btn {
+  width: 100%; text-align: left; background: var(--bg);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 0.4rem 0.6rem; font-size: 0.875rem; font-weight: normal;
+  color: var(--text); display: flex; align-items: center; gap: 0.35rem;
+  cursor: pointer;
+}
+.ms-btn .ms-txt { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-btn .ms-txt.none { color: #8a8985; }
+.ms-btn .ms-n {
+  background: var(--accent); color: #fff; font-size: 0.65rem;
+  border-radius: 999px; padding: 0.05rem 0.4rem; flex-shrink: 0;
+}
+.ms-btn:disabled { background: var(--surface2); color: #b4b2a9; cursor: not-allowed; }
+.ms-panel {
+  display: none; position: absolute; z-index: 150; top: calc(100% + 3px); left: 0; right: 0;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  max-height: 230px; overflow-y: auto; padding: 0.3rem;
+  box-shadow: 0 2px 8px rgba(0,0,0,.08);
+}
+.ms.open .ms-panel { display: block; }
+.ms-opt {
+  display: flex; align-items: center; gap: 0.45rem;
+  padding: 0.3rem 0.4rem; font-size: 0.82rem; cursor: pointer; border-radius: 5px;
+}
+.ms-opt:hover { background: var(--surface2); }
+.ms-opt input { width: auto; }
+.ms-empty { font-size: 0.75rem; color: var(--muted); padding: 0.5rem 0.4rem; }
+.ms-tools {
+  display: flex; gap: 0.4rem; padding: 0.2rem 0.4rem 0.4rem;
+  border-bottom: 1px solid var(--surface2); margin-bottom: 0.25rem;
+}
+.ms-tools button {
+  font-size: 0.7rem; padding: 0.15rem 0.45rem; background: transparent;
+  border: 1px solid var(--border); border-radius: 5px; color: var(--muted); font-weight: normal;
+  cursor: pointer;
+}
+
+/* ── ล็อกทั้งหน้าเมื่อต่อ DB ไม่ได้ (Layout.tsx) ──────────────────────── */
+.db-lock-banner {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  border-radius: var(--radius);
+  padding: 0.6rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin: 1rem 2rem 0;
+}
+/* <fieldset> มี style ติดมาจากเบราว์เซอร์เยอะ (border/margin/padding/min-width)
+   ต้องล้างให้หมด ไม่งั้นมีกรอบโผล่มาครอบทั้งหน้าและ layout เพี้ยน
+   ⚠ min-width: 0 สำคัญ — ค่า default ของ fieldset คือ min-content ซึ่งทำให้
+     flex/grid ข้างในยืดเกินจอแล้วเกิด scrollbar แนวนอนโดยไม่มีสาเหตุ
+
+   ⚠⚠ ห้ามใช้ `display: contents` ตรงนี้ — **Chrome/Edge ไม่รองรับกับ <fieldset>**
+      (เป็นข้อยกเว้นเฉพาะ element นี้ · Firefox รองรับ) พอมันเงียบ ๆ ไม่ทำงาน
+      fieldset จะยังเป็นกล่องจริงคั่นระหว่าง #root กับ .layout ทำให้
+      `.layout { flex: 1 }` ตายเพราะพ่อไม่ใช่ flex container → เนื้อหาไม่ถูก
+      จำกัดความสูง → body งอก scrollbar → แถบบนขยับตำแหน่งไม่เท่ากันทุกหน้า
+      (เจอจริงมาแล้ว ไล่หาสาเหตุยากเพราะ CSS ไม่ error อะไรเลย)
+
+   วิธีที่ใช้แทน: ให้ fieldset เป็น flex column ที่กินพื้นที่ที่เหลือเอง
+   ผลลัพธ์เท่ากับตอนไม่มีมันอยู่ แต่ไม่ต้องพึ่งฟีเจอร์ที่เบราว์เซอร์ไม่รองรับ */
+.page-lock {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
 
 /* ── Layout (Dashboard / index.html) ──────────────────────────────── */
 .layout {
@@ -620,16 +1222,28 @@ tr[data-clickable] { cursor: pointer; }
 .result-badge.ok { background: var(--ok-bg); color: var(--ok); }
 .result-badge.ng { background: var(--ng-bg); color: var(--ng); }
 
+/* ⚠ ห้ามใส่ border/background ให้ปุ่มนี้ — ตัวไอคอน SVG เป็นภาพเต็มใบอยู่แล้ว
+     ถ้ามีกรอบครอบอีกชั้นจะกลายเป็น "กล่องทึบ" ที่ดูเหมือนรูปโหลดไม่ขึ้น
+     (เคยเป็นแบบนั้นจริง — ปุ่มว่างเปล่าไม่มีไอคอนข้างในด้วย) */
 .img-btn-inner {
   background: transparent;
-  border: 1px solid var(--border);
-  width: 28px;
-  height: 28px;
+  border: none;
+  width: 30px;
+  height: 30px;
   padding: 0;
-  border-radius: 4px;
-  display: inline-block;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform .12s, filter .12s;
 }
-.img-btn-inner:hover { background: var(--surface2); border-color: var(--muted); }
+/* overflow:visible กันเบราว์เซอร์เฉือนขอบไอคอนถ้าคำนวณ viewport ไม่ตรงกับกล่อง
+   ปุ่มพอดี (ค่าเริ่มต้นของ <svg> คือ overflow:hidden ซึ่งจะตัดด้านขวา/ล่างหาย
+   ไปเงียบ ๆ) */
+.img-btn-inner svg { display: block; overflow: visible; }
+.img-btn-inner:hover { transform: scale(1.12); filter: brightness(0.92); }
+.img-btn-inner:focus-visible { outline: 2px solid var(--muted); outline-offset: 2px; }
 .no-img { color: var(--border); }
 .no-img.upload-failed { color: var(--ng); font-weight: 600; cursor: help; }
 
@@ -639,7 +1253,24 @@ tr[data-clickable] { cursor: pointer; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.row-actions { display: flex; gap: 0.4rem; }
+/* ⚠ <td class="row-actions"> ต้องเป็น table-cell ปกติ ห้ามใส่ display:flex
+   ให้มันเอง — <td> ที่เป็น flex จะหลุดจากการคำนวณคอลัมน์ของ table-layout:fixed
+   แล้วปุ่มจะไปอยู่นอกเส้นแบ่งแถว (อาการที่เจอในตาราง Lookup)
+   ให้ห่อปุ่มไว้ใน <div class="actions-inner"> แล้วให้ div เป็น flex แทน
+   — ทำเหมือนกันทุกตารางในหน้านี้ (Parts / Measurements / Lookup) */
+.row-actions > .actions-inner {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+}
+/* แถวที่ถูกแก้แล้วยังไม่ได้กด Save — ปุ่มเขียวเด่นเตือนว่ายังค้างอยู่ */
+.btn-icon.dirty {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #fff;
+  font-weight: 600;
+}
+.btn-icon.dirty:hover { background: var(--ok); opacity: .85; }
 .btn-icon.delete:hover { background: var(--ng-bg); border-color: var(--ng); color: var(--ng); }
 .btn-icon.edit:hover { background: rgba(55,138,222,.1); border-color: var(--accent); color: var(--accent); }
 
@@ -694,138 +1325,6 @@ tr[data-clickable] { cursor: pointer; }
 .modal-close:hover { color: var(--text); }
 
 /* ── Measurement Report modal (Dashboard, click a row) ─────────────────── */
-.report-modal-box {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 0;
-  width: 96vw;
-  max-width: 1280px;
-  max-height: 94vh;
-  overflow-y: auto;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-}
-.report-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 1.25rem 1.5rem;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.report-header-title { font-size: 1.1rem; font-weight: 700; color: var(--text); }
-.report-header-sub { font-size: 0.83rem; color: var(--muted); margin-top: 0.25rem; }
-.report-header-right { display: flex; align-items: center; gap: 0.85rem; }
-.report-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1.25rem;
-  padding: 1.5rem;
-}
-@media (max-width: 900px) {
-  .report-grid { grid-template-columns: 1fr; }
-}
-.report-cell {
-  background: var(--surface2);
-  border-radius: var(--radius);
-  padding: 1.25rem;
-}
-.report-image-cell {
-  padding: 0;
-  overflow: hidden;
-  min-height: 420px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #14140f;
-}
-.report-image-cell img {
-  width: 100%;
-  height: 100%;
-  max-height: 640px;
-  object-fit: contain;
-  display: block;
-}
-.report-image-cell .report-no-image {
-  color: var(--muted);
-  font-size: 0.85rem;
-  text-align: center;
-}
-.report-status-cell {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.6rem;
-  min-height: 140px;
-}
-.report-status-label {
-  font-size: 0.75rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: .08em;
-  font-weight: 700;
-}
-.report-status-value {
-  font-size: 2.6rem;
-  font-weight: 800;
-  letter-spacing: .03em;
-  line-height: 1;
-}
-.report-status-value.ok { color: var(--ok); }
-.report-status-value.ng { color: var(--ng); }
-.report-section-title {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: .05em;
-  text-transform: uppercase;
-  margin-bottom: 0.9rem;
-}
-.report-section-title .bar { width: 3px; height: 14px; display: inline-block; border-radius: 1px; background: var(--accent); }
-.report-dims-cell .report-section-title { color: var(--accent2); }
-.report-dims-cell .report-section-title .bar { background: var(--accent2); }
-.report-specs-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 0.7rem 1.25rem;
-  font-size: 0.85rem;
-}
-.report-specs-grid .rs-full { grid-column: 1 / -1; }
-.report-specs-grid .rs-label { color: var(--muted); font-size: 0.72rem; margin-bottom: 0.15rem; }
-.report-specs-grid .rs-value { color: var(--text); word-break: break-word; }
-.report-dims-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 1rem;
-}
-.report-dim-label { font-size: 0.78rem; color: var(--muted); margin-bottom: 0.2rem; }
-.report-dim-value { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.6rem; }
-.report-dim-value.x { color: var(--accent); }
-.report-dim-value.y { color: var(--accent2); }
-.report-tol-box {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 0.6rem 0.75rem;
-  font-size: 0.78rem;
-}
-.report-tol-box .tol-row { display: flex; justify-content: space-between; color: var(--muted); }
-.report-tol-box .tol-row + .tol-row { margin-top: 0.2rem; }
-.report-close {
-  background: transparent;
-  border: none;
-  color: var(--muted);
-  font-size: 1.4rem;
-  padding: 0.2rem 0.4rem;
-  line-height: 1;
-  flex-shrink: 0;
-}
-.report-close:hover { color: var(--text); }
 
 /* ── Edit/Add modal (Editor page, shared Parts + Measurements) ───────── */
 .edit-modal-box {
@@ -855,6 +1354,80 @@ tr[data-clickable] { cursor: pointer; }
 .field-locked-note {
   font-size: 0.7rem;
   color: var(--muted);
+}
+
+/* ── กล่องยืนยัน/แจ้งเตือนกลาง (ยกจาก Frontend/shared.css ทั้งชุด) ─────────
+   ⚠ z-index 400 สูงกว่า .modal-overlay (200) โดยตั้งใจ — เด้งทับ Part Entry
+     modal ได้โดยไม่ต้องปิดฟอร์มก่อน */
+.ui-dialog-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .5);
+  z-index: 400;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.ui-dialog-overlay.open { display: flex; }
+.ui-dialog-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem 1.1rem;
+  width: 100%;
+  max-width: 460px;
+}
+.ui-dialog-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 0.6rem;
+}
+.ui-dialog-msg {
+  font-size: 0.88rem;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-line;     /* ให้ \n ในข้อความขึ้นบรรทัดใหม่ได้เหมือน confirm() เดิม */
+  margin-bottom: 1.25rem;
+}
+.ui-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+.ui-dialog-actions button {
+  padding: 0.45rem 1.1rem;
+  border-radius: var(--radius);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.ui-dialog-cancel { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.ui-dialog-cancel:hover { background: var(--surface2); }
+.ui-dialog-ok { background: var(--accent); border: 1px solid var(--accent); color: #fff; }
+.ui-dialog-ok:hover { filter: brightness(0.93); }
+.ui-dialog-ok.danger { background: var(--ng); border-color: var(--ng); }
+
+/* กล่องค่า read-only ในฟอร์ม Add/Edit (ค่าที่ผูกมากับ Part Number · ข้อมูลของ
+   Measurement ที่แก้ย้อนหลังไม่ได้) — พื้นเทาเข้มกว่าฟอร์มเล็กน้อยเพื่อสื่อว่า
+   "ดูได้อย่างเดียว" โดยไม่ต้องทำเป็น input ที่ disabled (ซึ่งจะดูเหมือนช่องที่
+   ปลดล็อกได้ถ้าทำอะไรถูกจังหวะ ทั้งที่ไม่มีทางแก้ที่นี่ได้เลย)
+   auto-fit + minmax ให้จำนวนคอลัมน์ยุบตามความกว้างที่เหลือเอง */
+.derived-preview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 0.6rem;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.6rem 0.75rem;
+  font-size: 0.85rem;
+}
+.derived-cell-label {
+  font-size: 0.7rem;
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .modal-actions {
@@ -899,3 +1472,97 @@ tr[data-clickable] { cursor: pointer; }
   z-index: 300;
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ══════════════════════════════════════════════════════════════════════
+   Measurement report modal (ยกจาก Frontend/index.html ทั้งชุด)
+   แถวบน: รูป (ซ้าย) + การ์ดผลรายแกนพร้อมแถบเทียบสเปค (ขวา)
+   แถวล่าง: ข้อมูล Part แบบอ้างอิง
+   ══════════════════════════════════════════════════════════════════════ */
+.report-modal-box {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 12px; padding: 0;
+  width: 75vw; max-width: 1280px; max-height: 95vh;
+  overflow-y: auto; position: relative;
+  display: flex; flex-direction: column;
+}
+.report-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.report-header-title { font-size: 1.1rem; font-weight: 700; color: var(--text); }
+.report-header-sub { font-size: 0.83rem; color: var(--muted); margin-top: 0.25rem; }
+.report-header-right { display: flex; align-items: center; gap: 0.85rem; }
+.report-verdict {
+  font-size: 1.35rem; font-weight: 800; letter-spacing: .03em;
+  padding: 0.25rem 1.1rem; border-radius: 8px; line-height: 1.3;
+}
+.report-verdict.ok { background: var(--ok-bg); color: var(--ok); }
+.report-verdict.ng { background: var(--ng-bg); color: var(--ng); }
+.report-body {
+  display: grid;
+  grid-template-columns: minmax(0, 389px) minmax(0, 1fr);
+  gap: 1.25rem; padding: 1.25rem 1.5rem;
+  align-items: start;   /* กันไม่ให้กล่องรูปถูกยืดสูงตามคอลัมน์ขวา */
+}
+@media (max-width: 900px) { .report-body { grid-template-columns: 1fr; } }
+.report-image-cell {
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius);
+  aspect-ratio: 1 / 1;   /* ⚠ ต้องตรงกับรูป HEAD-A ของ TM-X (2048×2048 จัตุรัส) */
+  overflow: hidden; display: flex; align-items: center; justify-content: center;
+}
+.report-image-cell img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.report-image-cell .report-no-image { color: var(--muted); font-size: 0.85rem; }
+.report-axes { display: flex; flex-direction: column; gap: 0.85rem; }
+
+/* ── การ์ดผลรายแกน + แถบเทียบสเปค ─────────────────────────────────────
+   แถบบอกด้วย "ตำแหน่ง" แทนตัวเลข — เห็นทันทีว่าเกินไปนิดเดียวหรือหลุดไปไกล
+   โดยไม่ต้องคำนวณในหัว · โซนรับได้กิน 25%–75% ของความกว้าง */
+.rax { border: 1px solid var(--border); border-radius: 9px; padding: 0.85rem 1rem 0.9rem; }
+.rax-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.75rem; }
+.rax-name { font-size: 0.78rem; color: var(--muted); }
+.rax-tag { font-size: 0.7rem; font-weight: 700; padding: 0.1rem 0.6rem; border-radius: 999px; }
+.rax-tag.ok { background: var(--ok-bg); color: var(--ok); }
+.rax-tag.ng { background: var(--ng-bg); color: var(--ng); }
+.rax-value { font-size: 1.6rem; font-weight: 700; margin-top: 0.15rem; }
+.rax-value.ok { color: var(--ok); }
+.rax-value.ng { color: var(--ng); }
+.rax-value .unit { font-size: 0.8rem; font-weight: 400; color: var(--muted); }
+.rax-bar { position: relative; height: 14px; margin: 2.1rem 0 2.4rem; }
+.rax-track { position: absolute; inset: 3px 0; background: var(--surface2); border-radius: 4px; }
+.rax-zone { position: absolute; top: 0; bottom: 0; left: 25%; width: 50%; background: #C0DD97; border-radius: 4px; }
+/* offset ไม่มี "ต่ำกว่าสเปค" (ยิ่งน้อยยิ่งดี) โซนรับได้จึงกินจากซ้ายสุดถึงเพดาน */
+.rax-zone.offset { left: 0; width: 75%; }
+.rax-nom { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--ok); opacity: .5; }
+.rax-mark { position: absolute; top: -6px; height: 26px; width: 4px; border-radius: 2px; transform: translateX(-50%); }
+.rax-mark.ok { background: var(--ok); }
+.rax-mark.ng { background: var(--ng); }
+.rax-zlabel {
+  position: absolute; top: -1.35rem; font-size: 0.68rem; color: var(--muted);
+  transform: translateX(-50%); white-space: nowrap;
+}
+.rax-zlabel.mid { color: var(--ok); }
+.rax-tick {
+  position: absolute; top: 1.3rem; font-size: 0.68rem; color: var(--muted);
+  transform: translateX(-50%); white-space: nowrap; text-align: center;
+}
+.rax-far { position: absolute; top: -2px; font-size: 0.8rem; font-weight: 700; color: var(--ng); }
+.rax-dev { font-size: 0.78rem; }
+.rax-dev.ok { color: var(--muted); }
+.rax-dev.ng { color: var(--ng); }
+
+.report-specs {
+  border-top: 1px solid var(--border); background: var(--surface2);
+  padding: 1rem 1.5rem 1.25rem;
+  display: grid; grid-template-columns: repeat(4, 1fr);
+  gap: 0.8rem 1.25rem; font-size: 0.82rem;
+}
+.report-specs .rs-full { grid-column: 1 / -1; }
+.report-specs .rs-label { color: var(--muted); font-size: 0.7rem; margin-bottom: 0.1rem; }
+.report-specs .rs-value { color: var(--text); word-break: break-word; }
+.report-close {
+  background: transparent; border: none; color: var(--muted);
+  font-size: 1.4rem; padding: 0.2rem 0.4rem; line-height: 1;
+  flex-shrink: 0; cursor: pointer;
+}
+.report-close:hover { color: var(--text); }

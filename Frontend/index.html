@@ -1449,8 +1449,13 @@
 
   // SSE หลุด = ขาดการติดต่อ Backend → ชิป PI ต้องกลายเป็น "ไม่ทราบ" ทันที
   // ไม่ใช่ค้างเขียวไว้ · เป็นทางที่ 3 ที่ต้องดัก นอกจาก poll ล้มเหลว 2 ทาง
+  //
+  // ⚠ ยกเว้น 'db-offline' — กรณีนั้น Backend **ยังตอบได้** (มันเป็นคนบอกเราเองว่า
+  //   ต่อ MySQL ไม่ได้) และแนบ pi_status มากับ body ของ 503 ด้วย เราจึงยังรู้
+  //   สถานะ Pi อยู่จริงๆ ถ้าดักรวมไปด้วยจะไปล้างค่าที่ pollSessionState เพิ่งตั้ง
+  //   ให้ทิ้งทุกครั้งที่ป้ายเปลี่ยนเป็น db-offline แล้วชิปจะเด้งกลับเป็น 🟡 ทันที
   document.addEventListener('station-status', (e) => {
-    if (e.detail !== 'online') setPiUnknown();
+    if (e.detail !== 'online' && e.detail !== 'db-offline') setPiUnknown();
   });
   let measurements  = [];   // "หน้าปัจจุบัน" ของตาราง Measurements เท่านั้น (server-side pagination — ดู loadMeasurementsPage)
   let parts         = [];
@@ -1840,17 +1845,67 @@
    *  ค้างไว้ กลายเป็นบอกว่า "Pi ยังอยู่" ทั้งที่เราไม่รู้อะไรแล้ว
    */
   function setPiUnknown() {
-    if (sessionControl.pi_status === null) return;   // เป็นอยู่แล้ว ไม่ต้องวาดซ้ำ
-    sessionControl.pi_status = null;
+    setPiStatus(null);
+  }
+
+  /** ตั้งชิป PI เป็นค่าที่ระบุ — รับได้ 3 ค่าเท่านั้น true / false / null
+   *
+   *  แยกออกมาจาก setPiUnknown() ตอนที่ backend เริ่มแนบ pi_status มากับ body
+   *  ของ 503 ด้วย (ดู get_session_state) — เดิมทางนี้มีแต่ "ตั้งเป็นไม่ทราบ"
+   *  เพราะ 503 ไม่เคยมีเนื้อในให้อ่าน
+   *
+   *  ค่าอื่นที่ไม่ใช่ true/false ถูกยุบเป็น null ทั้งหมด กัน undefined หรือ
+   *  string หลุดเข้ามาแล้วชิปวาดผิดแบบเงียบๆ
+   */
+  function setPiStatus(v) {
+    const next = (v === true || v === false) ? v : null;
+    if (sessionControl.pi_status === next) return;   // เป็นอยู่แล้ว ไม่ต้องวาดซ้ำ
+    sessionControl.pi_status = next;
     renderSessionChips();
+  }
+
+  /** จัดการ response ที่ไม่ ok ของ /api/session/state — ใช้ร่วมกันทั้ง 2 ที่
+   *
+   *  ทำไมต้องแยกออกมา: loadSessionState กับ pollSessionState ยิง endpoint เดียวกัน
+   *  และต้องตีความผลเหมือนกันเป๊ะ ตอนแรกเขียนแยกกันแล้วลืมใส่ให้ตัวแรก ผลคือ
+   *  ตอนเปิดหน้าเว็บป้ายขึ้น 🟢 Server Online ค้างอยู่ 2 วิ (จนกว่า poll รอบแรก
+   *  จะทำงาน) ทั้งที่ loadSessionState รู้ตั้งแต่ 50 ms แล้วว่า DB ล่ม
+   *
+   *  สำคัญเป็นพิเศษเพราะตัวนี้ทำงาน "ก่อน" เสมอ — ทั้งตอนเปิดหน้าครั้งแรกและ
+   *  ทุกครั้งที่ SSE reconnect (ดู onOpen ใน connectSSE)
+   */
+  async function handleStateNotOk(r) {
+    // 503 = Backend ยังอยู่แต่ต่อ MySQL ไม่ได้ · รหัสอื่นถือว่ามีปัญหาเหมือนกัน
+    setServerBadgeFromPoll(false);
+
+    // MySQL ดับ ≠ Pi ดับ — backend ยังตอบได้ (มันเป็นคนส่ง 503 นี้มาเอง) และ
+    // pi_status ของมันอยู่ใน memory ไม่พึ่ง DB จึงแนบมากับ body ของ 503 ด้วย
+    // ผลคือได้ 🟡 DB Offline + 🟢 Pi Online พร้อมกัน = เห็นทันทีว่าพังแค่ MySQL
+    //
+    // ต้องแยก "ไม่มีคีย์" ออกจาก "คีย์เป็น null" ให้ขาด — 502 จาก proxy หรือ
+    // backend เวอร์ชันเก่าไม่มีคีย์นี้ ต้องตกไปเป็นไม่ทราบตามเดิม ถ้าเช็คแบบ
+    // falsy เฉยๆ ทั้ง null และ false จะตกรางเดียวกัน
+    let piFromBody;
+    try {
+      const body = await r.json();
+      if (body && 'pi_status' in body) piFromBody = body.pi_status;
+    } catch (_) { /* body ไม่ใช่ JSON — ถือว่าไม่มีข้อมูล */ }
+
+    if (piFromBody === undefined) setPiUnknown();
+    else                          setPiStatus(piFromBody);
   }
 
   async function loadSessionState() {
     let d = null;
     try {
       const r = await fetch(`${API}/api/session/state`);
-      if (r.ok) { d = await r.json(); updateSession(d); }
-      else setPiUnknown();
+      if (r.ok) {
+        setServerBadgeFromPoll(true);
+        d = await r.json();
+        updateSession(d);
+      } else {
+        await handleStateNotOk(r);
+      }
     } catch (e) { console.warn('loadSessionState:', e); setPiUnknown(); }
     // วาดแถบคิว ALPL ใหม่ทุกครั้งที่ sync สถานะ session — ครอบคลุมทั้งตอนเปิดหน้า
     // ครั้งแรกและตอน SSE reconnect (ดู sse.onopen) ทำให้แถบไม่หายถ้า refresh
@@ -1868,32 +1923,13 @@
    *  ตอนนี้ยิงแค่ session/state ตัวเดียว แล้วเทียบลายเซ็น — เหมือนเดิมทุกอย่าง
    *  ก็จบแค่นั้น ต่อเมื่อมีอะไรขยับจริงถึงค่อยไปดึงสถิติ/คิวตามมา
    *  (เส้นทาง SSE ไม่ได้ถูกแตะ — measurement ที่เข้ามาสดยังอัปเดตทันทีเหมือนเดิม) */
-  /** ตั้งป้าย Server จากผลของ poll — ใช้แยก "DB ล่ม" ออกจาก "Backend ล่ม"
-   *
-   *  SSE บอกได้แค่ว่าคุยกับ Backend รู้เรื่องไหม มันไม่เคยแตะ DB เลยจึงไม่มีทาง
-   *  รู้ว่า MySQL ตายอยู่ — ป้ายจะค้างเขียวทั้งที่ไม่มีอะไรโหลดขึ้นสักช่อง
-   *  ส่วน poll เส้นนี้ยิง query จริงทุกครั้ง status code ของมันจึงเป็นตัวเดียว
-   *  ที่บอกความจริงเรื่อง DB ได้
-   *
-   *  ⚠ SSE หลุด (offline) ถือว่าหนักกว่าเสมอ — ห้ามให้ poll มาลดระดับเป็น
-   *    db-offline เพราะตอน Backend ตายสนิท poll ก็ล้มเหลวเหมือนกัน แล้วจะกลาย
-   *    เป็นบอกว่า "แค่ DB ล่ม" ทั้งที่ทั้งเครื่องไม่ตอบ
-   */
-  function setServerBadgeFromPoll(ok) {
-    if (stationStatus === 'offline') return;
-    const want = ok ? 'online' : 'db-offline';
-    if (stationStatus !== want) setStationBadge(want);
-  }
+  // setServerBadgeFromPoll() ย้ายไปอยู่ shared.js แล้ว — หน้า Edit/Export ใช้ด้วย
 
   async function pollSessionState() {
     let d;
     try {
       const r = await fetch(`${API}/api/session/state`);
-      if (!r.ok) {
-        // 503 = Backend ยังอยู่แต่ต่อ MySQL ไม่ได้ · รหัสอื่นถือว่ามีปัญหาเหมือนกัน
-        setServerBadgeFromPoll(false);
-        return setPiUnknown();
-      }
+      if (!r.ok) return await handleStateNotOk(r);
       setServerBadgeFromPoll(true);
       d = await r.json();
     } catch (e) {
@@ -1985,7 +2021,15 @@
 
     // ข้อความบนปุ่มต้องบอก "ติดอะไรอยู่" ไม่ใช่แค่กดไม่ได้เฉยๆ — ไม่งั้นผู้ใช้
     // จะนึกว่าระบบพัง แล้วไปไล่หาที่ฟอร์ม Part Entry ทั้งที่ปัญหาอยู่ที่เครื่อง
-    if (!isRunning && !piOnline) {
+    //
+    // เรียงตามลำดับความสำคัญ: DB ก่อน Pi เพราะ DB ล่มแล้วกด Start ไม่ได้แน่นอน
+    // ไม่ว่า Pi จะเป็นยังไง (start_session ต้องเขียน session ลง DB) — และเป็น
+    // อย่างเดียวที่ผู้ใช้แก้เองได้ทันทีด้วยการเปิด MySQL
+    if (!isRunning && stationStatus === 'db-offline') {
+      btnStart.textContent = '▶ Start (DB Offline)';
+      btnStart.title = 'Backend ต่อฐานข้อมูลไม่ได้ — เริ่มการวัดไม่ได้เพราะ '
+                     + 'ต้องเขียน session ลง DB ก่อน · ตรวจว่า MySQL ทำงานอยู่ไหม';
+    } else if (!isRunning && !piOnline) {
       btnStart.textContent = sessionControl.pi_status === false
         ? '▶ Start (Pi Offline)'
         : '▶ Start (Waiting for Pi)';   // ปุ่มบอก "ทำไมกดไม่ได้" จึงใช้คำต่างจากชิปนิดหน่อย

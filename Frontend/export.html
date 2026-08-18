@@ -514,6 +514,12 @@
     document.title = `TM-X · Export ${FMT_LABEL}`;
     initTopbar();
     connectSSE();
+    // ต่อ DB ไม่ได้ = ล็อกทั้งหน้า · ทุกปุ่มที่นี่ (โหลดเทมเพลต / preview /
+    // ดาวน์โหลด) ต้องอ่านจาก DB ทั้งหมด กดได้ก็ได้ไฟล์เปล่าหรือ error เฉยๆ
+    //
+    // หน้านี้ไม่เคยถาม backend เป็นระยะมาก่อน (โหลดทีเดียวตอนเปิด) จึงต้องเพิ่ม
+    // ตัวเฝ้าเข้ามา ไม่งั้น MySQL ดับหลังเปิดหน้าไปแล้วจะไม่มีใครรู้เลย
+    watchDbStatus();
     buildMulti();
     bindHandlers();
     await Promise.all([loadColumns(), loadTemplates(), loadFilterOptions()]);

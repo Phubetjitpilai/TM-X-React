@@ -181,6 +181,22 @@ select:focus, input:focus, textarea:focus {
    แต่ยังไม่ถึงขั้นขาดการติดต่อ" ตัวหนังสือเป็นตัวแยกว่าเป็นเรื่องไหน */
 .station-badge.db-offline { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
 
+/* ── แถบเตือนตอนต่อ DB ไม่ได้ (setDbLock สร้างให้เอง) ─────────────────────
+   ⚠ ต้องอยู่ที่นี่ ไม่ใช่ในไฟล์ใดไฟล์หนึ่ง — setDbLock ทำงานได้ทุกหน้า แต่เดิม
+   คลาส .mock-banner ถูกนิยามไว้ใน edit.html ที่เดียว หน้า Export/Report จึงได้
+   แถบที่ "มีอยู่จริงแต่ไม่มีสไตล์" คือโผล่เป็นข้อความเปล่า ๆ ไม่มีกรอบเหลือง
+   มองแล้วนึกว่าไม่ขึ้น ทั้งที่ล็อกทำงานถูกต้องอยู่ */
+.db-lock-banner {
+  background: var(--warn-bg);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  border-radius: var(--radius);
+  padding: 0.6rem 1rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+}
+
 /* ── Toast — ข้อความแจ้งผลลอยขึ้นมาด้านล่างจอ ─────────────────────────── */
 .toast {
   position: fixed;

@@ -1,0 +1,144 @@
+/* ══════════════════════════════════════════════════════════════════════════
+   ตัวแก้ผังรายงาน (report-template) — ยกจาก Frontend/report-template.html
+
+   ⚠ ทุกกฎถูกครอบด้วย .rt-root โดยตั้งใจ — ต้นฉบับใช้ชื่อคลาสกลางๆ อย่าง
+     .cell .sheet .pal .badge .card ซึ่งชนกับหน้า Edit/Dashboard ที่อยู่ใน
+     stylesheet เดียวกันแน่นอน (vanilla ไม่ชนเพราะแต่ละหน้าเป็นคนละไฟล์)
+   ══════════════════════════════════════════════════════════════════════════ */
+.rt-root { padding: 1.25rem 1.5rem 3rem; width: 100%; max-width: 1500px; margin: 0 auto; }
+/* ช่องกรอกของหน้านี้ต้องเล็กกว่าค่ากลาง เพราะอยู่ในแถบเครื่องมือที่พื้นที่จำกัด */
+.rt-root input, .rt-root select {
+  background: var(--surface); border-radius: 6px; padding: .35rem .55rem; font-size: .82rem;
+}
+.rt-app { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: visible; }
+
+.rt-hd {
+  padding: .6rem .85rem; border-bottom: 1px solid var(--border); background: var(--surface2);
+  display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; font-size: .82rem; color: var(--muted);
+}
+
+/* ── Ribbon แบบ Excel — จัดเป็นกลุ่ม มีชื่อกลุ่มกำกับด้านล่าง ───────────── */
+.rt-ribbon {
+  display: flex; align-items: stretch; gap: 0; background: var(--surface);
+  border-bottom: 1px solid var(--border); padding: .3rem .5rem 0; flex-wrap: wrap;
+}
+.rt-root .rgroup { display: flex; flex-direction: column; padding: 0 .7rem; border-right: 1px solid var(--border); }
+.rt-root .rgroup:last-child { border-right: none; }
+.rt-root .rrow { display: flex; align-items: center; gap: .2rem; min-height: 28px; }
+.rt-root .rname { font-size: .6rem; color: var(--muted); text-align: center; padding: .15rem 0 .25rem; letter-spacing: .02em; }
+.rt-root .tb {
+  border: 1px solid transparent; background: var(--surface); border-radius: 4px; padding: .22rem .38rem;
+  font-size: .8rem; color: var(--text); display: inline-flex; align-items: center; gap: .15rem;
+  line-height: 1; min-width: 26px; justify-content: center; cursor: pointer;
+}
+.rt-root .tb:hover { background: var(--surface2); }
+.rt-root .tb.on { background: rgba(55,138,222,.14); border-color: var(--accent); color: var(--accent); }
+.rt-root .tb small { font-size: .7rem; color: var(--text); }
+.rt-root .tb b { font-weight: 700; } .rt-root .tb i { font-style: italic; } .rt-root .tb u { text-decoration: underline; }
+.rt-root .tb.del { color: var(--ng); }
+.rt-root .tb.del:hover { background: var(--ng-bg); }
+/* Format Painter กำลังทำงาน — ปุ่มค้างสว่างและเคอร์เซอร์เปลี่ยนทั้งตาราง */
+.rt-root .tb.armed { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+.rt-root .sheet.painting td.cell { cursor: copy; }
+.rt-root .sep { width: 1px; height: 19px; background: var(--border); margin: 0 .25rem; }
+/* ไอคอน SVG — ใช้ SVG เพราะไอคอนจัดวาง 3 แบบต้องดูต่างกันชัดๆ ตัวอักษร ≡ ใช้ไม่ได้ */
+.rt-root .ic { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; fill: none; display: block; }
+
+/* ปุ่มสีแบบ Excel — แถบสีอยู่ใต้ตัวอักษร กดที่ตัวอักษร = ใช้สีล่าสุด */
+.rt-root .colorbtn { position: relative; display: inline-flex; align-items: center; border: 1px solid transparent; border-radius: 4px; }
+.rt-root .colorbtn:hover { background: var(--surface2); }
+.rt-root .colorbtn .main { padding: .22rem .3rem .1rem; display: flex; flex-direction: column; align-items: center; gap: 1px; cursor: pointer; font-size: .8rem; line-height: 1; }
+.rt-root .colorbtn .bar { width: 15px; height: 4px; border-radius: 1px; border: 1px solid rgba(0,0,0,.12); }
+.rt-root .colorbtn .car { border: none; background: transparent; cursor: pointer; font-size: .55rem; color: var(--muted); padding: .22rem .2rem; line-height: 1; }
+.rt-root .colorbtn .car:hover { color: var(--text); }
+.rt-root .colorbtn input[type=color] { position: absolute; width: 0; height: 0; opacity: 0; pointer-events: none; padding: 0; border: 0; }
+.rt-root .cpanel {
+  position: absolute; top: calc(100% + 4px); left: 0; z-index: 70;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(0,0,0,.18); padding: .55rem; width: 214px;
+}
+.rt-root .cpl { font-size: .66rem; font-weight: 700; color: var(--muted); margin: .1rem 0 .3rem; letter-spacing: .02em; }
+.rt-root .cgrid { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; }
+.rt-root .cgrid.tint { margin-top: 4px; }
+.rt-root .sw { width: 100%; aspect-ratio: 1/1; border: 1px solid rgba(0,0,0,.18); border-radius: 2px; cursor: pointer; padding: 0; display: block; }
+.rt-root .sw:hover { outline: 2px solid var(--accent); outline-offset: 1px; }
+.rt-root .crow { display: flex; align-items: center; gap: .45rem; padding: .35rem .3rem; border-radius: 4px; cursor: pointer; font-size: .78rem; color: var(--text); }
+.rt-root .crow:hover { background: var(--surface2); }
+.rt-root .crow .box { width: 15px; height: 15px; border: 1px solid var(--border); border-radius: 2px; flex: none; }
+.rt-root .cpanel hr { border: none; border-top: 1px solid var(--border); margin: .45rem 0; }
+
+/* ── แถบสูตร ───────────────────────────────────────────────────────────── */
+.rt-fbar { display: flex; border-bottom: 1px solid var(--border); font-size: .8rem; align-items: stretch; }
+.rt-root .nbox { width: 62px; border-right: 1px solid var(--border); padding: .35rem .5rem; color: var(--muted); background: var(--surface2); font-weight: 600; text-align: center; }
+.rt-root .fx { flex: 1; padding: .35rem .6rem; display: flex; align-items: center; gap: .35rem; min-width: 0; }
+.rt-root .fx input { border: none; flex: 1; padding: .1rem; font-size: .8rem; background: transparent; }
+.rt-root .fx input:focus { outline: none; }
+
+/* ── ตัวตาราง ──────────────────────────────────────────────────────────── */
+.rt-body { display: grid; grid-template-columns: 190px 1fr; min-height: 340px; }
+.rt-root .pal { border-right: 1px solid var(--border); background: var(--surface2); padding: .6rem; overflow-y: auto; max-height: 520px; }
+.rt-root .palt { font-size: .66rem; color: var(--muted); font-weight: 700; margin: .6rem 0 .3rem; text-transform: uppercase; letter-spacing: .04em; }
+.rt-root .palt:first-child { margin-top: 0; }
+.rt-root .pc {
+  display: flex; align-items: center; gap: .3rem; background: #eeedfe; color: #534ab7;
+  border-radius: 5px; padding: .2rem .45rem; font-size: .72rem; margin-bottom: .25rem;
+  cursor: grab; user-select: none;
+}
+.rt-root .pc.gray { background: #e8e6df; color: var(--muted); }
+.rt-root .pc:active { cursor: grabbing; }
+.rt-root .pc .gp { opacity: .5; font-size: .7rem; }
+/* ชิปที่ถูกวางไปแล้ว — จางลงและลากซ้ำไม่ได้ */
+.rt-root .pc.used { opacity: .45; cursor: not-allowed; }
+.rt-root .pc.used .gp { visibility: hidden; }
+
+.rt-root .sheet { overflow: auto; max-height: 520px; }
+.rt-root .sheet table { border-collapse: separate; border-spacing: 0; font-size: .72rem; white-space: nowrap; }
+.rt-root .ch td, .rt-root td.rn {
+  background: var(--surface2); border: 1px solid #d3d1c7; text-align: center; color: var(--muted);
+  font-size: .62rem; padding: .1rem .2rem; position: relative; user-select: none; cursor: pointer;
+}
+.rt-root .ch td { min-width: 92px; }
+.rt-root td.rn, .rt-root .ch td.rn { min-width: 26px; width: 26px; }
+.rt-root .ch td.hi, .rt-root td.rn.hi { background: rgba(55,138,222,.15); color: var(--accent); }
+.rt-root td.cell {
+  border: 1px solid var(--border); padding: .25rem .4rem; background: var(--surface);
+  height: 26px; vertical-align: middle; cursor: cell; overflow: hidden; max-width: 220px;
+}
+.rt-root td.cell.sel { outline: 2px solid #185FA5; outline-offset: -2px; }
+/* เซลล์อื่นในช่วงที่คลุมด้วย Shift+คลิก — ฟ้าอ่อนแบบ Excel */
+.rt-root td.cell.inrange { background: rgba(55,138,222,.13) !important; }
+.rt-root td.cell.drop { outline: 2px dashed var(--accent); outline-offset: -2px; background: rgba(55,138,222,.1); }
+.rt-root td.cell.datarow { background: #fbfaff; }
+/* ช่องข้อมูลในเซลล์ — แสดงเป็นตัวอักษรธรรมดา ไม่ใส่พื้นหลัง/สีพิเศษ เพราะรูปแบบ
+   ที่เห็นตรงนี้คือรูปแบบที่จะออกไปในไฟล์จริง */
+.rt-root .tok { cursor: grab; white-space: nowrap; }
+.rt-root .tok:active { cursor: grabbing; }
+/* inline-flex ที่ span ไม่ใช่ flex ที่ td — display:flex บน td ทำให้เส้นขอบเพี้ยน */
+.rt-root .vwrap { display: inline-flex; align-items: center; gap: .25rem; max-width: 100%; }
+.rt-root .vsel {
+  height: 19px; padding: 0 .1rem; font-size: .62rem; border-radius: 3px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--muted);
+  cursor: pointer; flex: none;
+}
+.rt-root .vsel:hover { border-color: var(--accent); color: var(--accent); }
+.rt-root .vsel.wide { max-width: 86px; }
+.rt-root .cellinput { width: 100%; border: none; outline: none; background: transparent; font: inherit; color: inherit; text-align: inherit; padding: 0; }
+.rt-root .rowbadge { position: absolute; left: -2px; top: -1px; bottom: -1px; width: 3px; background: var(--accent2); border-radius: 2px; }
+
+.rt-root .legend { padding: .55rem .85rem; border-top: 1px solid var(--border); background: var(--surface2); font-size: .72rem; color: var(--muted); line-height: 1.7; }
+.rt-root .pill { background: #eeedfe; color: #534ab7; font-size: .65rem; padding: .1rem .45rem; border-radius: 999px; }
+
+/* เมนูของหัวคอลัมน์/เลขแถว — แทน prompt() ให้พิมพ์เลขของต้นฉบับ ซึ่งไม่มีใคร
+   เดาได้ว่ามีฟีเจอร์นี้ และมันบล็อก event loop ทั้งเส้นระหว่างเปิดอยู่ */
+.rt-headmenu {
+  position: fixed; z-index: 300; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 12px 30px rgba(0,0,0,.18); padding: .3rem; min-width: 168px;
+}
+.rt-headmenu .hm-title { font-size: .66rem; font-weight: 700; color: var(--muted); padding: .25rem .5rem .35rem; }
+.rt-headmenu button {
+  display: block; width: 100%; text-align: left; background: transparent; border: none;
+  padding: .38rem .5rem; font-size: .78rem; color: var(--text); border-radius: 5px; cursor: pointer;
+}
+.rt-headmenu button:hover { background: var(--surface2); }
+.rt-headmenu button.del { color: var(--ng); }
+.rt-headmenu button.del:hover { background: var(--ng-bg); }

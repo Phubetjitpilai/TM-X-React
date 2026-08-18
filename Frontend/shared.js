@@ -324,6 +324,124 @@ function setStationBadge(status) {
   document.dispatchEvent(new CustomEvent('station-status', { detail: status }));
 }
 
+/** ตั้งป้าย Server จากผลของการยิง query จริง — ใช้แยก "DB ล่ม" ออกจาก "Backend ล่ม"
+ *
+ *  SSE บอกได้แค่ว่าคุยกับ Backend รู้เรื่องไหม มันไม่เคยแตะ DB เลยจึงไม่มีทางรู้
+ *  ว่า MySQL ตายอยู่ — ป้ายจะค้างเขียวทั้งที่ไม่มีอะไรโหลดขึ้นสักช่อง
+ *  ส่วน request ที่ยิง query จริง status code ของมันเป็นตัวเดียวที่บอกความจริงได้
+ *
+ *  ⚠ SSE หลุด (offline) ถือว่าหนักกว่าเสมอ — ห้ามให้ตัวนี้ลดระดับเป็น db-offline
+ *    เพราะตอน Backend ตายสนิท query ก็ล้มเหลวเหมือนกัน แล้วจะกลายเป็นบอกว่า
+ *    "แค่ DB ล่ม" ทั้งที่ทั้งเครื่องไม่ตอบ → ไปไล่หาสาเหตุผิดจุด
+ */
+function setServerBadgeFromPoll(ok) {
+  if (stationStatus === 'offline') return;
+  const want = ok ? 'online' : 'db-offline';
+  if (stationStatus !== want) setStationBadge(want);
+}
+
+/* ── ล็อกทั้งหน้าเมื่อ Backend ทำงานกับข้อมูลไม่ได้ ────────────────────────
+   ทุกปุ่มในหน้า Edit/Export ลงเอยที่ query สักตัวเสมอ ปล่อยให้กดได้ตอน DB ล่ม
+   มีแต่เสีย — ผู้ใช้กรอกฟอร์มยาว ๆ เสร็จแล้วกด Save เพื่อไปเจอ error ตอนท้าย
+   แล้วข้อมูลที่พิมพ์ไว้ก็หายไปกับ modal ที่ปิดตัวเอง */
+let _dbLocked = false;
+let _dbLockObserver = null;
+
+/** ปิด/เปิดการใช้งานทุกปุ่มและช่องกรอกใน <main> (เมนูบนยังกดได้ ให้ออกจากหน้าได้)
+ *
+ *  ⚠ จำไว้ว่า "เราเป็นคนปิด" ด้วย data-db-locked — ห้ามเปิดคืนแบบเหมารวม
+ *    เพราะบางปุ่มถูกปิดไว้ด้วยเหตุผลอื่นอยู่ก่อนแล้ว (เช่นตอน session running
+ *    หน้า Edit ปิดปุ่ม Edit/Delete ไว้) ถ้าเปิดคืนหมดจะกลายเป็นปลดล็อกให้
+ *    แก้ข้อมูลกลางการวัดโดยไม่มีใครรู้ตัว
+ */
+function setDbLock(locked, message) {
+  const root = document.querySelector('main') || document.body;
+  if (!root) return;
+
+  const apply = () => {
+    root.querySelectorAll('button, input, select, textarea').forEach(el => {
+      if (el.disabled) return;             // ถูกปิดด้วยเหตุผลอื่นอยู่แล้ว ไม่ยุ่ง
+      el.disabled = true;
+      el.dataset.dbLocked = '1';           // ปักธงว่าเราเป็นคนปิด
+    });
+  };
+
+  if (locked === _dbLocked) {
+    if (locked) apply();                   // มีของใหม่โผล่มาหลังล็อก → ปิดเพิ่ม
+    return;
+  }
+  _dbLocked = locked;
+
+  let banner = document.getElementById('db-lock-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'db-lock-banner';
+    // ⚠ ใช้ .db-lock-banner ที่นิยามใน shared.css — ห้ามใช้ .mock-banner เพราะ
+    //   คลาสนั้นมีอยู่ใน edit.html ไฟล์เดียว หน้าอื่นจะได้แถบที่ไม่มีสไตล์
+    //   (โผล่เป็นข้อความเปล่า ๆ จนนึกว่าไม่ขึ้น ทั้งที่ล็อกทำงานถูกอยู่)
+    banner.className = 'db-lock-banner';
+    root.prepend(banner);
+  }
+
+  if (locked) {
+    banner.textContent = message || '⛔ ต่อฐานข้อมูลไม่ได้ — ดูข้อมูลเดิมได้ '
+                                  + 'แต่บันทึก/แก้ไข/ลบไม่ได้จนกว่าจะเชื่อมต่อได้อีกครั้ง';
+    banner.style.display = '';
+    apply();
+
+    // ตารางถูก render ใหม่ได้ตลอด (จาก cache ที่ค้างอยู่) ปุ่มชุดใหม่จะเกิดมา
+    // แบบกดได้ ถ้าไม่เฝ้าไว้ ล็อกจะรั่วแบบเงียบ ๆ — สังเกตยากมากเพราะกดได้
+    // เฉพาะหลัง render เท่านั้น
+    if (!_dbLockObserver) {
+      _dbLockObserver = new MutationObserver(() => { if (_dbLocked) apply(); });
+      _dbLockObserver.observe(root, { childList: true, subtree: true });
+    }
+  } else {
+    banner.style.display = 'none';
+    if (_dbLockObserver) { _dbLockObserver.disconnect(); _dbLockObserver = null; }
+    root.querySelectorAll('[data-db-locked]').forEach(el => {
+      el.disabled = false;
+      delete el.dataset.dbLocked;
+    });
+  }
+}
+
+/** เฝ้าดูว่า Backend ยังทำงานกับ DB ได้ไหม แล้วล็อก/ปลดล็อกหน้าให้อัตโนมัติ
+ *
+ *  สำหรับหน้า Edit/Export ที่ไม่ได้ถือสถานะสดอะไร — หน้า Home คุมเองเพราะมัน
+ *  ต้องใช้ผลของ request เดียวกันนี้ทำอย่างอื่นต่ออีกหลายอย่าง (pi_status, คิว)
+ *
+ *  ใช้ /api/session/state เป็นตัววัดเพราะเป็น endpoint ที่เบาที่สุดที่ยังแตะ DB
+ *  จริง (query เดียว ไม่มี JOIN) — เอาไว้ถาม "ยังต่อได้ไหม" ได้โดยไม่เปลือง
+ */
+function watchDbStatus(pollMs = 5000) {
+  const tick = async () => {
+    try {
+      const r = await fetch(`${API}/api/session/state`);
+      setServerBadgeFromPoll(r.ok);
+      setDbLock(!r.ok);
+    } catch (_) {
+      // ยิงไม่ออกเลย = Backend ล่มทั้งตัว ปล่อยให้ SSE เป็นคนตั้งป้าย (onerror →
+      // offline) จะได้ไม่ชี้ผิดจุด แต่ยังต้องล็อกอยู่ดี เพราะบันทึกอะไรไม่ได้แน่
+      setDbLock(true, '⛔ ติดต่อ Backend ไม่ได้ — บันทึก/แก้ไข/ลบไม่ได้จนกว่าจะกลับมา');
+    }
+  };
+
+  // ⚠ SSE ตั้งป้ายเป็น 'online' ทุกครั้งที่ต่อติด (onopen) โดยที่มันไม่เคยแตะ DB
+  //   เลย — ถ้าไม่ตรวจซ้ำทันที ป้ายจะค้าง 🟢 อยู่จนกว่า tick ถัดไปจะมาถึง
+  //   (นานถึง pollMs) ทั้งที่ banner ขึ้นแล้วว่าต่อ DB ไม่ได้ · ดักตรงนี้ที่เดียว
+  //   ทุกหน้าที่ใช้ watchDbStatus ได้ผลหมด
+  //
+  //   ไม่วนซ้ำ: tick → setServerBadgeFromPoll จะยิง event ต่อก็ต่อเมื่อค่า
+  //   "เปลี่ยนจริง" เท่านั้น และค่าที่ยิงออกคือ db-offline ซึ่งไม่เข้าเงื่อนไขนี้
+  document.addEventListener('station-status', e => {
+    if (e.detail === 'online') tick();
+  });
+
+  tick();
+  return setInterval(tick, pollMs);
+}
+
 /**
  * เชื่อม SSE พร้อมต่อใหม่อัตโนมัติเมื่อหลุด และคุมป้ายสถานะให้ด้วย
  *
