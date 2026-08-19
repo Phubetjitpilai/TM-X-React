@@ -85,9 +85,12 @@ interface Telemetry {
   /** ธงจาก backend ว่า offset ถูกนับเป็นเกณฑ์ไหม — false = โหมด IPM */
   offset_counts?: boolean;
   measure_type?: string | null;
-  /** ระยะเยื้อง — โหมด IPM ไม่เอามาตัดสิน OK/NG จึงซ่อนกล่องนี้ทั้งใบ
-   *  (ยังบันทึกลง DB ตามปกติ) */
-  offset?: number | null;
+  offset_ghx?: number | null;
+  offset_ghy?: number | null;
+  offset_opx?: number | null;
+  offset_opy?: number | null;
+  offset_pos_gh?: string | null;
+  offset_pos_op?: string | null;
   result: string;
   measurement_id?: number;
 }
@@ -705,13 +708,12 @@ export default function DashboardPage() {
   const axY = axisInfo(telemetry?.value_y, telemetry?.nominal_y, telemetry?.upper_tol, telemetry?.lower_tol, telemetry?.ok_y);
   const okOffset =
     telemetry?.ok_offset != null ? telemetry.ok_offset
-    : telemetry?.offset != null && telemetry?.offset_tol != null
-      ? Math.abs(telemetry.offset) <= telemetry.offset_tol
+    : telemetry?.offset_tol != null && telemetry?.offset_ghx != null
+      ? (Math.abs(telemetry.offset_ghx) <= telemetry.offset_tol &&
+         Math.abs(telemetry.offset_ghy ?? 0) <= telemetry.offset_tol &&
+         Math.abs(telemetry.offset_opx ?? 0) <= telemetry.offset_tol &&
+         Math.abs(telemetry.offset_opy ?? 0) <= telemetry.offset_tol)
       : null;
-  // ธงจาก backend ก่อน ถ้าไม่มีค่อยดู measure_type ของ event แล้วค่อยดูโหมด session
-  const offsetHidden =
-    telemetry?.offset_counts === false ||
-    (telemetry?.measure_type ?? sessionMode ?? "").toUpperCase() === "IPM";
 
 
   async function startFromQueue() {
