@@ -259,7 +259,13 @@ def get_current_session():
     return None
 
 
-def post_to_backend(session_id, value_x, value_y, q1, q2, q3, q4, offset_ghx, offset_ghy, offset_opx, offset_opy):
+def post_to_backend(
+    session_id,
+    value_x, value_y,
+    tr_gh, tl_gh, bl_gh, br_gh,
+    tr_op, tl_op, bl_op, br_op,
+    offset_ghx, offset_ghy, offset_opx, offset_opy
+):
     """POST ค่าเข้า backend — format ตรงตาม MeasurementCreate ใน main.py
 
     ไม่ส่ง number_alpl แล้ว — backend เลือก ALPL จากตำแหน่งปัจจุบันในคิวของ
@@ -272,14 +278,25 @@ def post_to_backend(session_id, value_x, value_y, q1, q2, q3, q4, offset_ghx, of
             "session_id":  session_id,
             "value_x":     value_x,
             "value_y":     value_y,
-            "q1" : q1,
-            "q2" : q2,
-            "q3" : q3,
-            "q4" : q4,
+
+            # ── กลุ่มค่า GH ──
+            "tr_gh":       tr_gh,
+            "tl_gh":       tl_gh,
+            "bl_gh":       bl_gh,
+            "br_gh":       br_gh,
+
+            # ── กลุ่มค่า OP ──
+            "tr_op":       tr_op,
+            "tl_op":       tl_op,
+            "bl_op":       bl_op,
+            "br_op":       br_op,
+
+            # ── กลุ่มค่า Offset ──
             "offset_ghx":  offset_ghx,
             "offset_ghy":  offset_ghy,
             "offset_opx":  offset_opx,
             "offset_opy":  offset_opy,
+
             "client_uuid": str(uuid.uuid4()),
         },
         timeout=10,
@@ -466,15 +483,20 @@ def _handle_capture_inner(image_path, t_recv):
         _remove_quietly(image_path)
         return
 
-    value_x, value_y, q1, q2, q3, q4, offset_ghx, offset_ghy, offset_opx, offset_opy= pair
     t_txt = time.time()   # จับเวลาหลังได้ค่าคู่กับรูปแล้ว
 
     # ── ด่าน 2: ค่าที่วัดไม่ติด ──────────────────────────────────────────
-    if _is_error_value(value_x) or _is_error_value(value_y) or _is_error_value(q1) or _is_error_value(q2) or _is_error_value(q3) or _is_error_value(q4) or _is_error_value(offset_ghx) or _is_error_value(offset_ghy) or _is_error_value(offset_opx) or _is_error_value(offset_opy):
+    if any(_is_error_value(v) for v in pair):
         report("MEASURE_FAILED",
                f"TM-X วัดไม่ติด ข้าม ไม่บันทึกลง DB")
         _remove_quietly(image_path)
         return
+    (
+    value_x, value_y,
+    tr_gh, tl_gh, bl_gh, br_gh,
+    tr_op, tl_op, bl_op, br_op,
+    offset_ghx, offset_ghy, offset_opx, offset_opy
+    ) = pair
 
     # ── ด่าน 3: ต้องมี session ที่ running อยู่ ─────────────────────────
     session_id = get_current_session()
@@ -486,9 +508,22 @@ def _handle_capture_inner(image_path, t_recv):
     t_session = time.time()
 
     # ── ด่าน 4: ส่งเข้า Backend ─────────────────────────────────────────
-    print(f"✅ {name}  ({size_mb:.1f} MB)  →  value_x={value_x}  value_y={value_y}  q1={q1} q2={q2} q3={q3} q4={q4} offset_ghx={offset_ghx} offset_ghy={offset_ghy} offset_opx={offset_opx} offset_ghx={offset_opy}")
+    print(
+    f"✅ {name} ({size_mb:.1f} MB) → "
+    f"value_x={value_x} value_y={value_y} "
+    f"tr_gh={tr_gh} tl_gh={tl_gh} bl_gh={bl_gh} br_gh={br_gh} "
+    f"tr_op={tr_op} tl_op={tl_op} bl_op={bl_op} br_op={br_op} "
+    f"offset_ghx={offset_ghx} offset_ghy={offset_ghy} "
+    f"offset_opx={offset_opx} offset_opy={offset_opy}"
+    )
     try:
-        resp = post_to_backend(session_id, value_x, value_y, q1, q2, q3, q4, offset_ghx, offset_ghy, offset_opx, offset_opy)
+        resp = post_to_backend(
+        session_id,
+        value_x, value_y,
+        tr_gh, tl_gh, bl_gh, br_gh,
+        tr_op, tl_op, bl_op, br_op,
+        offset_ghx, offset_ghy, offset_opx, offset_opy
+        )
     except Exception as exc:
         report("BACKEND_REJECT",
                f"POST /api/measurements ไม่สำเร็จ: {exc} — เก็บรูปไว้ไม่ลบ")

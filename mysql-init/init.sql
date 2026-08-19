@@ -161,10 +161,12 @@ CREATE TABLE measurements (
   number_alpl    INT          NOT NULL,
   value_x        FLOAT        NOT NULL,
   value_y        FLOAT        NOT NULL,
-  -- ⚠ ต้องมี backtick ครอบเสมอ — OFFSET เป็น reserved keyword ของ MySQL 8
-  --   (ใช้กับ LIMIT ... OFFSET) เขียนเปล่าๆ จะได้ ERROR 1064 ตั้งแต่ CREATE TABLE
-  --   ทุก query ที่อ้างคอลัมน์นี้ก็ต้องใส่ backtick เหมือนกัน
-  `offset`       FLOAT        NOT NULL DEFAULT 0,
+  offset_ghx     FLOAT        NOT NULL,
+  offset_ghy     FLOAT        NOT NULL,
+  offset_opx     FLOAT        NOT NULL,
+  offset_opy     FLOAT        NOT NULL,
+  offset_pos_gh  VARCHAR(20)  NOT NULL,
+  offset_pos_op  VARCHAR(20)  NOT NULL, 
   result         VARCHAR(10)  NOT NULL,
   note           TEXT,
   operator_id    INT          NOT NULL,

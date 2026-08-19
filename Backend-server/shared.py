@@ -911,24 +911,33 @@ MEASUREMENTS_SELECT = """
            ON ips.package_size_id = COALESCE(p.package_size_id, pn.package_size_id)
 """
 
+# main.py
+
 class MeasurementCreate(BaseModel):
-    # session_id บังคับแล้ว (Optional ไว้เพื่อให้ error message อ่านง่ายกว่า 422
-    # ดิบๆ ของ Pydantic — create_measurement เช็คเองแล้วตอบ 400 พร้อมคำอธิบาย)
     session_id:  Optional[int] = None
-    # ⚠ ไม่ได้ใช้แล้ว — เก็บ field ไว้เฉยๆ เพื่อให้ Agent รุ่นเก่าที่ยังส่งมา POST
-    #   ผ่านได้เหมือนเดิม backend เลือก ALPL จากตำแหน่งในคิวของตัวเองเสมอ
-    #   (ดู create_measurement) ค่าที่ Agent ส่งมาคือ ALPL ตัวแรกของคิวตลอด
-    #   ซึ่งผิดตั้งแต่ชิ้นที่ 2 จึงห้ามเอาไปใช้เด็ดขาด
     number_alpl: Optional[int] = None
     value_x:     float
     value_y:     float
-    # ค่าที่ 3 จากไฟล์ .txt ของ TM-X (+0000.003) — ความเยื้องของชิ้นงาน
-    # default 0 เพื่อให้สคริปต์เก่าที่ยังไม่ส่งฟิลด์นี้มา ยัง POST ผ่านได้เหมือนเดิม
-    offset:      float = 0
+
+    # ── ค่า Offset แต่ละแกน ──────────────────────────
+    offset_ghx:  float = 0.0
+    offset_ghy:  float = 0.0
+    offset_opx:  float = 0.0
+    offset_opy:  float = 0.0
+
+    # ── ค่า Offset 4 มุมของ GH ───────────────────────
+    tr_gh:       float = 0.0
+    tl_gh:       float = 0.0
+    br_gh:       float = 0.0
+    bl_gh:       float = 0.0
+
+    # ── ค่า Offset 4 มุมของ OP ───────────────────────
+    tr_op:       float = 0.0
+    tl_op:       float = 0.0
+    br_op:       float = 0.0
+    bl_op:       float = 0.0
+
     note:        Optional[str] = None
-    # UUID ที่ Agent สร้างขึ้นต่อการวัด 1 ครั้ง (uuid4) — ส่งมาด้วยทุกครั้งที่มา
-    # จาก agent.py (ไม่มีถ้าเป็น manual add จาก edit.html) ใช้กัน insert ซ้ำ
-    # ตอน Agent retry POST นี้ (ดู create_measurement)
     client_uuid: Optional[str] = None
 
 class ImageUpdate(BaseModel):
