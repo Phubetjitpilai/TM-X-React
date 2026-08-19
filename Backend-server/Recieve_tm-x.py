@@ -142,6 +142,7 @@ _jobs_lock = threading.Lock()
 
 # ── ตัวแปรและ Lock สำหรับนับจำนวน ──────────────────────────────────────────
 image_count = 0
+row_txt_count = 0
 count_lock = threading.Lock()  # ใช้คุมทั้ง image_count และ row_txt_count
 
 
@@ -171,23 +172,27 @@ def _parse_measurement_line(line: str):
     """แปลง 1 บรรทัดของไฟล์ผลวัด (.txt) → (value_x, value_y, offset_ghx, offset_ghy, offset_opx, offset_opy)
     """
     parts = [p.strip() for p in line.strip().split(",")]
-    if len(parts) < 2:
+    if len(parts) < 14:
         return None
     try:
         value_x = float(parts[0])
         value_y = float(parts[1])
-        q1 = float(parts[2])
-        q2 = float(parts[3])
-        q3 = float(parts[4])
-        q4 = float(parts[5])
-        offset_ghx = float(parts[6])
-        offset_ghy = float(parts[7])
-        offset_opx = float(parts[8])
-        offset_opy = float(parts[9])
+        tr_gh = float(parts[2])
+        tl_gh = float(parts[3])
+        bl_gh = float(parts[4])
+        br_gh = float(parts[5])
+        tr_op = float(parts[6])
+        tl_op = float(parts[7])
+        bl_op = float(parts[8])
+        br_op = float(parts[9])
+        offset_ghx = float(parts[10])
+        offset_ghy = float(parts[11])
+        offset_opx = float(parts[12])
+        offset_opy = float(parts[13])
 
     except ValueError:
         return None
-    return value_x, value_y, q1, q2, q3, q4, offset_ghx, offset_ghy, offset_opx, offset_opy
+    return value_x, value_y, tr_gh,tl_gh,bl_gh,br_gh, tr_op, tl_op, bl_op, br_op, offset_ghx, offset_ghy, offset_opx, offset_opy
 
 
 def _read_lines(path: str):

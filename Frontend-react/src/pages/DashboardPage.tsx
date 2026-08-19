@@ -706,14 +706,6 @@ export default function DashboardPage() {
   // ── ผลรายแกนของค่าที่เพิ่งวัด ────────────────────────────────────────────
   const axX = axisInfo(telemetry?.value_x, telemetry?.nominal_x, telemetry?.upper_tol, telemetry?.lower_tol, telemetry?.ok_x);
   const axY = axisInfo(telemetry?.value_y, telemetry?.nominal_y, telemetry?.upper_tol, telemetry?.lower_tol, telemetry?.ok_y);
-  const okOffset =
-    telemetry?.ok_offset != null ? telemetry.ok_offset
-    : telemetry?.offset_tol != null && telemetry?.offset_ghx != null
-      ? (Math.abs(telemetry.offset_ghx) <= telemetry.offset_tol &&
-         Math.abs(telemetry.offset_ghy ?? 0) <= telemetry.offset_tol &&
-         Math.abs(telemetry.offset_opx ?? 0) <= telemetry.offset_tol &&
-         Math.abs(telemetry.offset_opy ?? 0) <= telemetry.offset_tol)
-      : null;
 
 
   async function startFromQueue() {
@@ -914,34 +906,43 @@ export default function DashboardPage() {
                     </div>
                     <div className="tc-range">{telemetry ? axY.range : ""}</div>
                   </div>
-                  {/* Offset เทียบกับเพดาน offset_tol ตัวเดียว ไม่ใช่ช่วง nominal ± tol
-                      เหมือน X/Y
-                      ⚠ โหมด IPM **ซ่อนกล่องนี้ทั้งใบ** (ยังบันทึกค่าลง DB ตามปกติ)
-                        เพราะ offset ไม่ถูกใช้ตัดสินอะไรในโหมดนั้น การโชว์ตัวเลขที่
-                        ไม่มีผลต่อ OK/NG ทำให้คนหน้าเครื่องต้องตีความเองว่า
-                        "แล้วตัวเลขนี้ดีหรือไม่ดี" */}
-                  {/* ⚠ ซ่อนทั้งใบเมื่อ offset ไม่ถูกนับเป็นเกณฑ์ (โหมด IPM)
-                      ใช้ธง offset_counts จาก backend ก่อน ถ้า event เก่าไม่มีค่อย
-                      ดู measure_type — **ค่ายังถูกบันทึกลง DB ตามปกติ** แค่ไม่แสดง
-                      เพราะตัวเลขที่ไม่มีผลต่อ OK/NG วางอยู่ข้างตัวที่มีผล ทำให้คน
-                      หน้าเครื่องต้องตีความเองว่าดีหรือไม่ดี */}
-                  {!offsetHidden && (
-                    <div className="telemetry-cell offset">
-                      <div className="tc-head">
-                        <span className="tc-label">Offset</span>
-                        {okOffset != null && (
-                          <span className={`tc-axis ${okOffset ? "ok" : "ng"}`}>{okOffset ? "OK" : "NG"}</span>
-                        )}
-                      </div>
-                      <div className="tc-value">
-                        {telemetry?.offset != null ? Number(telemetry.offset).toFixed(3) : "—"}
-                        <span> mm</span>
-                      </div>
-                      <div className="tc-range">
-                        {telemetry?.offset_tol != null ? `ไม่เกิน ${Number(telemetry.offset_tol).toFixed(3)}` : ""}
-                      </div>
+                  {/* Offset 4 แกน — แสดงทุกโหมด */}
+                  <div className="telemetry-cell offset">
+                    <div className="tc-head">
+                      <span className="tc-label">Offset GH-X</span>
                     </div>
-                  )}
+                    <div className="tc-value">
+                      {telemetry?.offset_ghx != null ? Number(telemetry.offset_ghx).toFixed(3) : "—"}
+                      <span> mm</span>
+                    </div>
+                  </div>
+                  <div className="telemetry-cell offset">
+                    <div className="tc-head">
+                      <span className="tc-label">Offset GH-Y</span>
+                    </div>
+                    <div className="tc-value">
+                      {telemetry?.offset_ghy != null ? Number(telemetry.offset_ghy).toFixed(3) : "—"}
+                      <span> mm</span>
+                    </div>
+                  </div>
+                  <div className="telemetry-cell offset">
+                    <div className="tc-head">
+                      <span className="tc-label">Offset OP-X</span>
+                    </div>
+                    <div className="tc-value">
+                      {telemetry?.offset_opx != null ? Number(telemetry.offset_opx).toFixed(3) : "—"}
+                      <span> mm</span>
+                    </div>
+                  </div>
+                  <div className="telemetry-cell offset">
+                    <div className="tc-head">
+                      <span className="tc-label">Offset OP-Y</span>
+                    </div>
+                    <div className="tc-value">
+                      {telemetry?.offset_opy != null ? Number(telemetry.offset_opy).toFixed(3) : "—"}
+                      <span> mm</span>
+                    </div>
+                  </div>
                 </div>
                 <div className={`telemetry-result-col${telemetry ? (telemetry.result === "OK" ? " ok" : " ng") : ""}`}>
                   <div className="telemetry-result-label">Result</div>
