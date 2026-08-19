@@ -183,33 +183,6 @@ def list_measurements(
 
 @router.post("/api/measurements")
 async def create_measurement(req: MeasurementCreate):
-    """บันทึก measurement หนึ่งรายการที่ส่งมาจาก Agent และตัดสิน OK/NG
-
-    Endpoint นี้ถูกเรียกครั้งละ 1 ชิ้นงานที่ TM-X วัดได้ ส่งต่อมาโดย Agent
-    พร้อม session_id ที่ได้รับตอนเริ่ม session — Agent ส่ง `number_alpl` มาด้วย
-    เหมือนเดิมเสมอ (ไม่ต้องแก้ agent.py) แต่ตอนนี้ backend จะตัดสินเองว่าจะใช้
-    ALPL ไหนจริงๆ ตามประเภทของ session:
-
-    **ALPL มาจากคิวของ backend เท่านั้น** — เพิกเฉยค่า `req.number_alpl` ที่ Agent
-    ส่งมาเสมอ แล้วใช้ ALPL ตามตำแหน่งปัจจุบันในคิวแทน
-    (`session_queues[session_id]["queue"][position]`) เพราะ Agent ไม่รู้
-    (และไม่จำเป็นต้องรู้) ว่ากำลังวัดตัวไหนอยู่ในคิว มันรู้แค่ว่า
-    "วัดเสร็จแล้ว ได้ value_x/value_y เท่านี้"
-
-    เส้นทางที่ถูกถอดออกไปแล้ว (อย่าเอากลับมาโดยไม่คุยกันก่อน):
-
-      - **Manual add จากหน้าเว็บ** (`session_id` เป็น None) — ปุ่ม
-        "+ Add Measurement" ใน edit.html ถูกถอดออกแล้วตามที่ตกลงกันว่า
-        **ผลวัดต้องมาจากการวัดจริงเท่านั้น ห้ามพิมพ์เอง** จึงไม่รับ POST ที่ไม่มี
-        session_id อีกต่อไป (เดิมจะสร้าง session ปลอมให้ 1 แถวแล้วบันทึกด้วย
-        measure_type='Manual')
-      - **Fallback ใช้ `req.number_alpl` ตอนคิวหาย** — เดิมถ้า `session_queues`
-        ไม่มี entry ของ session นี้ (เช่น backend restart แล้วโหลดคิวกลับไม่สำเร็จ)
-        จะตกมาใช้ค่าที่ Agent ส่งมา ซึ่ง **ผิดเสมอตั้งแต่ชิ้นที่ 2 เป็นต้นไป**
-        เพราะค่านั้นอ่านมาจาก `sessions.number_alpl` ที่ไม่เคยถูก UPDATE เลย
-        = ALPL ตัวแรกของคิวตลอดทั้ง session → ข้อมูลผิด ALPL เข้า DB แบบเงียบๆ
-        ตอนนี้เปลี่ยนเป็น "ปฏิเสธไปเลย" ดีกว่าเดา (ดู HTTPException 409 ด้านล่าง)
-    """
     # ผลวัดต้องผูกกับ session ที่ Agent กำลัง running อยู่จริงเท่านั้น
     if req.session_id is None:
         raise HTTPException(

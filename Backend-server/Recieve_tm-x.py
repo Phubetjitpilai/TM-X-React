@@ -140,6 +140,10 @@ _txt_lock = threading.Lock()
 _jobs_in_flight = 0
 _jobs_lock = threading.Lock()
 
+# ── ตัวแปรและ Lock สำหรับนับจำนวน ──────────────────────────────────────────
+image_count = 0
+count_lock = threading.Lock()  # ใช้คุมทั้ง image_count และ row_txt_count
+
 
 def _job_begin():
     global _jobs_in_flight
@@ -164,14 +168,7 @@ def _is_error_value(v: float) -> bool:
 
 
 def _parse_measurement_line(line: str):
-    """แปลง 1 บรรทัดของไฟล์ผลวัด (.txt) → (value_x, value_y, offset, ts_key)
-
-    รูปแบบจริง 9 ช่อง: "+0005.047,+0005.045,+0000.003,26,07,31,17,28,42"
-      ช่อง 1-2 = value_x / value_y
-      ช่อง 3   = offset (ความเยื้อง) — backend เอาไปเทียบกับ offset_tol ของ part_number
-      ช่อง 4-9 = เวลาที่วัด ประกอบเป็น ts_key "260731_172842" ไว้จับคู่กับชื่อไฟล์รูป
-    คืน None ถ้ารูปแบบไม่ตรง (ไม่ throw เพราะไฟล์อาจมีบรรทัดแปลกๆ ปนมา
-    ไม่ควรทำให้ทั้งไฟล์ใช้ไม่ได้)
+    """แปลง 1 บรรทัดของไฟล์ผลวัด (.txt) → (value_x, value_y, offset_ghx, offset_ghy, offset_opx, offset_opy)
     """
     parts = [p.strip() for p in line.strip().split(",")]
     if len(parts) < 2:
@@ -179,25 +176,18 @@ def _parse_measurement_line(line: str):
     try:
         value_x = float(parts[0])
         value_y = float(parts[1])
+        q1 = float(parts[2])
+        q2 = float(parts[3])
+        q3 = float(parts[4])
+        q4 = float(parts[5])
+        offset_ghx = float(parts[6])
+        offset_ghy = float(parts[7])
+        offset_opx = float(parts[8])
+        offset_opy = float(parts[9])
+
     except ValueError:
         return None
-
-    # ไฟล์รุ่นเก่า/ไฟล์ทดสอบที่มีแค่ 2 ช่อง ยังอ่านได้ — offset เป็น 0 ไปก่อน
-    offset = 0.0
-    if len(parts) >= 3:
-        try:
-            offset = float(parts[2])
-        except ValueError:
-            pass
-
-    ts_key = None
-    if len(parts) >= 9:
-        try:
-            yy, mm, dd, hh, mi, ss = (int(p) for p in parts[3:9])
-            ts_key = f"{yy:02d}{mm:02d}{dd:02d}_{hh:02d}{mi:02d}{ss:02d}"
-        except ValueError:
-            pass
-    return value_x, value_y, offset, ts_key
+    return value_x, value_y, q1, q2, q3, q4, offset_ghx, offset_ghy, offset_opx, offset_opy
 
 
 def _read_lines(path: str):
@@ -217,39 +207,35 @@ def _image_ts_key(image_path: str):
     return f"{m.group(1)}_{m.group(2)}" if m else None
 
 
-def _find_measurement_for_image(ts_key: str, timeout: float = TXT_WAIT_TIMEOUT):
-    """หาบรรทัดใน .txt ที่เวลาตรงกับรูปใบนี้ — ไล่จากไฟล์ที่ได้รับล่าสุดก่อน
+def _find_measurement_for_image(image_count: int, timeout: float = TXT_WAIT_TIMEOUT):
+    """หาผลการวัดจากบรรทัดที่ตรงกับลำดับรูป (image_count) ในไฟล์ .txt ล่าสุด
 
-    ถ้ายังไม่เจอจะวนรอจนครบ timeout (เผื่อกรณี .txt มาถึงช้ากว่ารูป) คืน
-    (value_x, value_y) หรือ None ถ้าหมดเวลาแล้วยังไม่เจอ
+    วนรอจนกว่าไฟล์ .txt จะมีจำนวนบรรทัดครบตาม image_count หรือจนกว่าจะหมดเวลา
+    คืนค่า (value_x, value_y, offset) หรือ None หากหมดเวลาแล้วยังไม่มีข้อมูล
     """
     deadline = time.time() + timeout
     while True:
+        target_path = None
         with _txt_lock:
-            paths = list(reversed(_txt_paths))
-        for path in paths:
-            for line in _read_lines(path):
-                parsed = _parse_measurement_line(line)
-                if parsed and parsed[3] == ts_key:
-                    return parsed[0], parsed[1], parsed[2]
+            if _txt_paths:
+                target_path = _txt_paths[-1]  # ไฟล์ .txt ที่ได้รับล่าสุด
+
+        if target_path:
+            lines = _read_lines(target_path)
+            total_rows = len(lines)
+
+            # 1. เช็คว่ามีจำนวนบรรทัดใน .txt ถึงลำดับชิ้นงานที่ต้องการแล้วหรือยัง
+            if total_rows >= image_count:
+                # image_count เริ่มที่ 1 (1, 2, 3...) ต้อง -1 เพื่อแปลงเป็น Index 0-based ของ List
+                target_line = lines[image_count - 1]
+                parsed = _parse_measurement_line(target_line)
+                if parsed is not None:
+                    return parsed  # คืนค่า (value_x, value_y, offset_ghx, offset_ghy, offset_opx, offset_opy)
+
+        # 2. ถ้าบรรทัดยังมาไม่ถึง ให้รอแล้ววนเช็คใหม่จนกว่าจะหมด timeout
         if time.time() >= deadline:
             return None
         time.sleep(0.3)
-
-
-def _fallback_last_line():
-    """แผนสำรองตอนแกะเวลาจากชื่อไฟล์รูปไม่ได้ — ใช้บรรทัดล่าสุดของ .txt ที่
-    ได้รับล่าสุด (วิธีเดิมก่อนรู้ว่าชื่อไฟล์มีเวลาให้จับคู่)
-    """
-    with _txt_lock:
-        path = _txt_paths[-1] if _txt_paths else None
-    if not path:
-        return None
-    lines = _read_lines(path)
-    if not lines:
-        return None
-    parsed = _parse_measurement_line(lines[-1])
-    return (parsed[0], parsed[1], parsed[2]) if parsed else None
 
 
 def get_current_session():
@@ -273,7 +259,7 @@ def get_current_session():
     return None
 
 
-def post_to_backend(session_id, value_x, value_y, offset):
+def post_to_backend(session_id, value_x, value_y, q1, q2, q3, q4, offset_ghx, offset_ghy, offset_opx, offset_opy):
     """POST ค่าเข้า backend — format ตรงตาม MeasurementCreate ใน main.py
 
     ไม่ส่ง number_alpl แล้ว — backend เลือก ALPL จากตำแหน่งปัจจุบันในคิวของ
@@ -286,7 +272,14 @@ def post_to_backend(session_id, value_x, value_y, offset):
             "session_id":  session_id,
             "value_x":     value_x,
             "value_y":     value_y,
-            "offset":      offset,
+            "q1" : q1,
+            "q2" : q2,
+            "q3" : q3,
+            "q4" : q4,
+            "offset_ghx":  offset_ghx,
+            "offset_ghy":  offset_ghy,
+            "offset_opx":  offset_opx,
+            "offset_opy":  offset_opy,
             "client_uuid": str(uuid.uuid4()),
         },
         timeout=10,
@@ -371,6 +364,7 @@ def clear_temp_dir(wait_timeout: float = 30.0):
     ⚠ ยึด TEMP_IMAGE_DIR เป็น absolute path ที่ resolve แล้วเสมอ ไม่รับ path
       จากที่อื่นมาลบ — พลาดตรงนี้ทีเดียวคือลบผิดโฟลเดอร์บนเครื่องจริง
     """
+    global image_count, row_txt_count
     # ── รอให้งานที่ค้างอยู่เสร็จก่อน ────────────────────────────────────
     deadline = time.time() + wait_timeout
     if _jobs_count() > 0:
@@ -393,6 +387,11 @@ def clear_temp_dir(wait_timeout: float = 30.0):
 
     with _txt_lock:
         _txt_paths.clear()   # path ที่จำไว้ชี้ไปยังไฟล์ที่ไม่มีแล้ว
+
+    with count_lock:
+        image_count = 0
+        row_txt_count = 0
+    print("🔄 รีเซ็ต image_count และ row_txt_count เป็น 0 เรียบร้อย")
 
     if removed_files or removed_dirs:
         print(f"🧹 ล้าง {os.path.basename(TEMP_IMAGE_DIR)} แล้ว "
@@ -448,6 +447,9 @@ def _handle_capture(image_path, t_recv=None):
 
 
 def _handle_capture_inner(image_path, t_recv):
+    global image_count
+    with count_lock:
+        image_count += 1
     name = os.path.basename(image_path)
     t_recv = t_recv or time.time()
     try:
@@ -456,30 +458,21 @@ def _handle_capture_inner(image_path, t_recv):
         size_mb = 0.0
 
     # ── ด่าน 1: จับคู่ค่ากับรูป ──────────────────────────────────────────
-    ts_key = _image_ts_key(image_path)
-    if ts_key:
-        pair = _find_measurement_for_image(ts_key)
-        if pair is None:
-            report("TXT_NOT_FOUND",
-                   f"หาบรรทัดใน .txt ที่เวลาตรงกับรูป {ts_key} ไม่เจอ "
-                   f"(รอ {TXT_WAIT_TIMEOUT:.0f} วิแล้ว) — ทิ้งรูป")
-            _remove_quietly(image_path)
-            return
-    else:
-        print(f"⚠️ {name}: ชื่อไฟล์ไม่มีเวลาให้จับคู่ — ใช้บรรทัดล่าสุดของ .txt แทน")
-        pair = _fallback_last_line()
-        if pair is None:
-            report("TXT_NOT_FOUND", f"{name}: ยังไม่มีไฟล์ .txt ให้อ่านเลย — ทิ้งรูป")
-            _remove_quietly(image_path)
-            return
+    #ts_key = _image_ts_key(image_path)
+    #if ts_key:
+    pair = _find_measurement_for_image(image_count)
+    if pair is None:
+        report("TXT_NOT_FOUND",f"หาบรรทัดใน .txt ไม่เจอ "f"(รอ {TXT_WAIT_TIMEOUT:.0f} วิแล้ว) — ทิ้งรูป")
+        _remove_quietly(image_path)
+        return
 
-    value_x, value_y, offset = pair
+    value_x, value_y, q1, q2, q3, q4, offset_ghx, offset_ghy, offset_opx, offset_opy= pair
     t_txt = time.time()   # จับเวลาหลังได้ค่าคู่กับรูปแล้ว
 
     # ── ด่าน 2: ค่าที่วัดไม่ติด ──────────────────────────────────────────
-    if _is_error_value(value_x) or _is_error_value(value_y) or _is_error_value(offset):
+    if _is_error_value(value_x) or _is_error_value(value_y) or _is_error_value(q1) or _is_error_value(q2) or _is_error_value(q3) or _is_error_value(q4) or _is_error_value(offset_ghx) or _is_error_value(offset_ghy) or _is_error_value(offset_opx) or _is_error_value(offset_opy):
         report("MEASURE_FAILED",
-               f"TM-X วัดไม่ติด ({value_x}, {value_y}, {offset}) — ข้าม ไม่บันทึกลง DB")
+               f"TM-X วัดไม่ติด ข้าม ไม่บันทึกลง DB")
         _remove_quietly(image_path)
         return
 
@@ -493,9 +486,9 @@ def _handle_capture_inner(image_path, t_recv):
     t_session = time.time()
 
     # ── ด่าน 4: ส่งเข้า Backend ─────────────────────────────────────────
-    print(f"✅ {name}  ({size_mb:.1f} MB)  →  value_x={value_x}  value_y={value_y}  offset={offset}")
+    print(f"✅ {name}  ({size_mb:.1f} MB)  →  value_x={value_x}  value_y={value_y}  q1={q1} q2={q2} q3={q3} q4={q4} offset_ghx={offset_ghx} offset_ghy={offset_ghy} offset_opx={offset_opx} offset_ghx={offset_opy}")
     try:
-        resp = post_to_backend(session_id, value_x, value_y, offset)
+        resp = post_to_backend(session_id, value_x, value_y, q1, q2, q3, q4, offset_ghx, offset_ghy, offset_opx, offset_opy)
     except Exception as exc:
         report("BACKEND_REJECT",
                f"POST /api/measurements ไม่สำเร็จ: {exc} — เก็บรูปไว้ไม่ลบ")
@@ -532,12 +525,7 @@ def _handle_capture_inner(image_path, t_recv):
 
 
 def _log_received_file(path: str, note: str = ""):
-    """โหมดรับอย่างเดียว — รายงานไฟล์ที่เพิ่งได้มา ไม่แตะต้องไฟล์เลย
-
-    ตั้งใจให้พิมพ์ข้อมูลที่ "ต้องรู้ตอนต่อ TM-X" ออกมาให้ครบ: ชื่อไฟล์จริงที่
-    TM-X ตั้งมา, ขนาด, และถ้าเป็นไฟล์ข้อความก็ลองแปลงค่าให้ดูด้วยว่ารูปแบบตรง
-    กับที่โค้ดคาดไว้จริงไหม
-    """
+    """โหมดรับอย่างเดียว — รายงานไฟล์ที่เพิ่งได้มา ไม่แตะต้องไฟล์เลย"""
     rel  = os.path.relpath(path, TEMP_IMAGE_DIR)
     ext  = os.path.splitext(path)[1].lower()
     when = time.strftime("%H:%M:%S")
@@ -563,8 +551,7 @@ def _log_received_file(path: str, note: str = ""):
     elif _is_error_value(parsed[0]) or _is_error_value(parsed[1]):
         print(f"           ⏭ TM-X วัดไม่ติด ({parsed[0]}, {parsed[1]}) — โหมดจริงจะข้ามบรรทัดนี้")
     else:
-        print(f"           แปลงค่าได้: value_x={parsed[0]}  value_y={parsed[1]}  "
-              f"offset={parsed[2]}  (เวลา {parsed[3]})")
+        print(f"           แปลงค่าได้: value_x={parsed[0]}  value_y={parsed[1]}  offset={parsed[2]}")
 
 
 class ReceiverFTPHandler(FTPHandler):

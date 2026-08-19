@@ -45,7 +45,8 @@ def _idx(name, default):
 
 GM_IDX_X      = _idx("GM_IDX_X", "0")
 GM_IDX_Y      = _idx("GM_IDX_Y", "1")
-GM_IDX_OFFSET = _idx("GM_IDX_OFFSET", "")     # ว่าง = ไม่มี offset ใน GM
+GM_IDX_OFFSET_X = _idx("GM_IDX_OFFSET_X", "6")     # ว่าง = ไม่มี offset ใน GM
+GM_IDX_OFFSET_Y = _idx("GM_IDX_OFFSET_Y", "7")     # ว่าง = ไม่มี offset ใน GM
 
 # ── สถานะระดับโมดูล ────────────────────────────────────────────────────────
 # ทุกตัวต้องมีค่าตั้งต้นตรงนี้ ห้ามให้ไปเกิดครั้งแรกใน command_flow เท่านั้น
@@ -89,22 +90,21 @@ async def command(req: CommandRequest):
         print("\n ได้รับคำสั่ง Start จาก Backend")
         groups = req.groups
         if not groups:
-            raise HTTPException(400, "payload ไม่มี `groups` — Backend ส่ง template/ALPL "
-                                     "มาในฟิลด์นี้ (ดู _build_groups ใน main.py)")
+            raise HTTPException(400, "payload ไม่มี `groups`")
         if any(not g.alpl for g in groups):
-            # กลุ่มว่าง = ยิง PW ฟรีโดยไม่มีชิ้นงานตามมา
             raise HTTPException(400, "มีกลุ่มที่ `alpl` ว่างเปล่า")
+        if any(g.limits is None for g in groups):
+            raise HTTPException(400, "มีกลุ่มที่ไม่ได้ระบุ `limits`")
 
         all_alpl = [a for g in groups for a in g.alpl]
         if len(set(all_alpl)) != len(all_alpl):
-            raise HTTPException(400, "มี ALPL ซ้ำข้ามกลุ่ม — คิวจะเหลื่อมกับฝั่ง Backend")
+            raise HTTPException(400, "มี ALPL ซ้ำข้ามกลุ่ม")
         if req.target_count != len(all_alpl):
-            raise HTTPException(400, f"target_count ({req.target_count}) ไม่เท่ากับจำนวน ALPL "
-                                     f"รวมทุกกลุ่ม ({len(all_alpl)})")
+            raise HTTPException(400, f"target_count ({req.target_count}) ไม่เท่ากับจำนวน ALPL รวมทุกกลุ่ม ({len(all_alpl)})")
         templates = {g.template_name for g in groups}
         if len(templates) > 1:
-            raise HTTPException(400, f"Pi ยังรองรับ template เดียวต่อ session — ได้มา "
-                                     f"{sorted(templates)} (ลูป 2 ชั้นคือแผนข้อ 8)")
+            raise HTTPException(400, f"Pi ยังรองรับ template เดียวต่อ session — ได้มา {sorted(templates)}")
+        
         threading.Thread(
             target=command_flow,
             args=(req.session_id, groups, req.target_count),
@@ -181,6 +181,7 @@ def get_measured_count(session_id):
     return data.get("measured_count")
 
 # curl -X POST http://<ip-ของ-pi>:9998/trigger
+# วนถามจนกว่ามันจะตอบ is_ready 
 def wait_for_trigger_mcu():
     global _waiting_for_trigger
     _trigger.clear()
@@ -314,8 +315,8 @@ def trigger_tmx(sock):
     อย่างปลอดภัย** เพราะรหัส 03 แปลว่าทริกเกอร์ถูก *ละเว้น* ไม่ได้วัดเลย
     จึงไม่มีทางได้ measurement ซ้ำสองอัน
     """
-    clear_measurement(sock)                      # MRS ก่อนเสมอ ห้ามลืม
-
+    #clear_measurement(sock)                      # MRS ก่อนเสมอ ห้ามลืม
+    
     for attempt in range(1, T1_RETRY + 1):
         resp, ok = send_recv(sock, "T1")
         if ok:
@@ -331,25 +332,42 @@ def trigger_tmx(sock):
     return False
 
 
-def judge(x, y, offset, limits):
+def judge(x, y, offset_x, offset_y, limits):
     """ตัดสิน OK/NG จาก limits ที่ Backend คำนวณมาให้ — คืน ("OK"|"NG", เหตุผล[])
 
     เทียบขอบตรงๆ ไม่ต้องคำนวณอะไรเอง เพราะ Backend บวก/ลบ _TOL_EPS มาให้แล้ว
     `offset_max = None` → โหมดนี้ไม่ตรวจ offset (IPM) ให้ถือว่าผ่าน
     """
-    if limits is None:
-        return "OK", ["ไม่มี limits มาด้วย — ข้ามการตัดสิน"]
 
     reasons = []
-    if x is None or not (limits.x_lo <= x <= limits.x_hi):
-        reasons.append(f"X {x} นอกช่วง {limits.x_lo:.4f}–{limits.x_hi:.4f}")
-    if y is None or not (limits.y_lo <= y <= limits.y_hi):
-        reasons.append(f"Y {y} นอกช่วง {limits.y_lo:.4f}–{limits.y_hi:.4f}")
+    if x is None:
+        reasons.append("อ่านค่า Xไม่ได้ (ค่าเป็น None)")
+    elif not (limits.x_lo <= x <= limits.x_hi):
+        reasons.append(f"ค่า X ({x:.4f}) นอกช่วงเกณฑ์ ({limits.x_lo:.4f}–{limits.x_hi:.4f})")
+    if y is None:
+        reasons.append("อ่านค่า Y ไม่ได้ (ค่าเป็น None)")
+    elif not (limits.y_lo <= y <= limits.y_hi):
+        reasons.append(f"ค่า Y ({y:.4f}) นอกช่วงเกณฑ์ ({limits.y_lo:.4f}–{limits.y_hi:.4f})")
     if limits.offset_max is not None:
-        if offset is None or abs(offset) > limits.offset_max:
-            reasons.append(f"offset {offset} เกิน {limits.offset_max}")
+        if offset_x is None or abs(offset_x) > limits.offset_max:
+            reasons.append(f"offset_x {offset_x} เกิน {limits.offset_max}")
+        if offset_y is None or abs(offset_y) > limits.offset_max:
+            reasons.append(f"offset_y {offset_y} เกิน {limits.offset_max}")
     return ("NG" if reasons else "OK"), reasons
 
+def clean_tools(tools):
+    """คัดกรองเอาเฉพาะข้อมูลที่สถานะ (index 1) ไม่เป็น 0 และ 3"""
+    if not tools:
+        return []
+        # กรองเอาเฉพาะ item ที่สถานะไม่ใช่ 0 หรือ 3 (รองรับทั้ง int และ string)
+    return [item for item in tools if str(item[0]) not in ("-9999.999")]
+
+            # ── ดึงค่าออกมาตาม index ที่ตั้งไว้ ────────────────────────────
+def _val(idx,tools):
+    if idx is None or idx >= len(tools):
+        return None
+    return tools[idx][0]
+            
 
 def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
     """วน GM จนได้ค่าใหม่ → ตัดสิน OK/NG → พิมพ์ผล
@@ -375,32 +393,28 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
         resp, ok = send_recv(sock, "GM,3,0", timeout=2.0)
         polls += 1
         tools = parse_gm(resp) if ok else None
-
         if tools and has_real_value(tools):
-            # ── ดึงค่าออกมาตาม index ที่ตั้งไว้ ────────────────────────────
-            def _val(idx):
-                if idx is None or idx >= len(tools):
-                    return None
-                return tools[idx][0]
-
-            x, y, offset = _val(GM_IDX_X), _val(GM_IDX_Y), _val(GM_IDX_OFFSET)
-            result, reasons = judge(x, y, offset, limits)
+            tools_new = clean_tools(tools)
+            print(tools_new)
+        
+            x, y, offset_x, offset_y = _val(GM_IDX_X,tools_new), _val(GM_IDX_Y,tools_new), _val(GM_IDX_OFFSET_X,tools_new), _val(GM_IDX_OFFSET_Y,tools_new)
+            result, reasons = judge(x, y, offset_x, offset_y, limits)
 
             print(f"   📥 ได้ค่าหลัง {(time.time()-t0)*1000:.0f} ms "
                   f"(ถาม GM {polls} ครั้ง · TM-X คืนมา {len(tools)} เครื่องมือ)")
-            print(f"      X={x} · Y={y} · offset={offset}")
+            print(f"      X={x} · Y={y} · offset_x={offset_x} · offset_y={offset_y} ")
             print(f"   {'✅' if result == 'OK' else '❌'} ผลตัดสิน: {result}")
             for r in reasons:
                 print(f"      • {r}")
 
             # เทียบกับผลที่ TM-X ตัดสินมาเอง (j) — ได้ตัวเฝ้าระวัง config drift ฟรีๆ
-            j_x = tools[GM_IDX_X][2] if GM_IDX_X is not None and GM_IDX_X < len(tools) else None
+            '''j_x = tools[GM_IDX_X][2] if GM_IDX_X is not None and GM_IDX_X < len(tools) else None
             if j_x is not None and limits is not None:
                 tmx_says = "OK" if j_x == 0 else "NG"
                 if tmx_says != result:
                     print(f"   ⚠️ TM-X ตัดสินว่า {tmx_says} แต่เราคำนวณได้ {result} — "
-                          f"tolerance ในโปรแกรมวัดกับใน DB อาจเพี้ยนกันแล้ว")
-            return result, x, y, offset
+                          f"tolerance ในโปรแกรมวัดกับใน DB อาจเพี้ยนกันแล้ว")'''
+            return result, x, y, offset_x, offset_y
 
         time.sleep(GM_POLL_INTERVAL)
 
@@ -408,6 +422,7 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
           f"— TM-X วัดชิ้นนี้ไม่ติด")
     return "UNKNOWN", None, None, None
 
+#วนไปถามว่าพร้อมรับ result ยัง ให้ MCU set Flag เอา idle(ยังไม่มีชิ้นงาน) -> obj_is_ready(เมื่อวางชิ้นงานแล้ว) -> waiting_for_result(พร้อมรับ result) -> idle(เสร็จการวัด 1 ชิ้น)
 def send_result_to_mcu(result, mcu_timeout=MCU_TIMEOUT):
     """ส่งผลตัดสินให้ MCU — `result` เป็น "OK" / "NG" / "UNKNOWN"
 
@@ -507,7 +522,7 @@ def command_flow(session_id, groups, target_count):
                 continue
 
             # ── ③ วน GM จนได้ค่า แล้วตัดสิน OK/NG ───────────────────────────
-            result, x, y, offset = get_measurement_tmx(client_socket, groups[0].limits)
+            result, x, y, offset_x, offset_y = get_measurement_tmx(client_socket, groups[0].limits)
 
             # ── ④ ส่งผลให้ MCU ไปคัดแยก — ส่งทุกชิ้นรวมถึง UNKNOWN ─────────
             send_result_to_mcu(result)
@@ -522,6 +537,7 @@ def command_flow(session_id, groups, target_count):
                     print(f"   ✅ ชิ้นที่ {piece}/{target_count} บันทึกแล้ว")
                 continue
             print(f"\n⚠️ ชิ้นที่ {piece}/{target_count}: รอ {MEASURE_TIMEOUT:.0f} วิแล้วไม่ได้รับค่าการวัด")
+            break
 
     except Exception as exc:
         print(f"\n❌ session พังกลางทาง — {type(exc).__name__}: {exc}")
