@@ -64,14 +64,6 @@ async def get_image(filepath: str, request: Request):
     return FileResponse(file_path)
 
 
-@app.get("/generate-link")
-async def generate_link(filepath: str, request: Request):
-    check_subnet(request)
-    # ตรวจด้วยกฎเดียวกัน ไม่งั้นจะกลายเป็นตัวช่วยสร้าง URL โจมตีให้เสียเอง
-    _safe_path(filepath)
-    return {"url": f"{PUBLIC_BASE_URL}/images/{filepath}"}
-
-
 if __name__ == "__main__":
     print("=" * 66)
     print("TM-X Image Server (สำหรับ Power BI)")

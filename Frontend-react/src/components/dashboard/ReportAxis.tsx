@@ -89,12 +89,19 @@ export function ReportAxis({
 }
 
 /**
- * การ์ด Offset — ไม่มี nominal เทียบแค่เพดานตัวเดียว จึงมีแถบ **2 โซน** ไม่ใช่ 3
- * เพราะ offset ไม่มี "ต่ำกว่าสเปค" (ยิ่งน้อยยิ่งดี 0 คือดีที่สุด)
+ * ⚠ เลิกใช้แล้ว — แทนที่ด้วย `<OffsetMap>` (22 ส.ค. 2569)
+ *
+ * ตัวนี้รับ `offset` ตัวเดียวซึ่งเป็นชื่อฟิลด์สมัยก่อนแยกเป็น OP-X/OP-Y และ
+ * แสดงได้แค่ "ขนาด" บอกทิศไม่ได้เลย · `OffsetMap` วาดผังชิ้นงานจริงพร้อมทิศ
+ * ที่ backend คำนวณให้ (`offset_pos_op`) — ดูรายละเอียดในไฟล์นั้น
+ *
+ * เก็บไว้ก่อนเผื่ออยากย้อนกลับ ยังไม่มีใครเรียกใช้แล้ว
  */
 export function ReportOffset({
-  offset, offsetTol, measureType,
+  axis, offset, offsetTol, measureType,
 }: {
+  /** ป้ายกำกับแกน เช่น "OP-X" — เว้นว่างได้ถ้ามีการ์ดเดียว */
+  axis?: string;
   offset?: number | null;
   offsetTol?: number | null;
   measureType?: string | null;
@@ -106,12 +113,14 @@ export function ReportOffset({
   // ผล OK/NG ของแถวนั้นเลย — เหตุผลเดียวกับที่ซ่อนใน Live Telemetry
   if ((measureType ?? "").toUpperCase() === "IPM") return null;
 
+  const name = axis ? `Offset ${axis}` : "Offset";
+
   // มีค่าแต่ยังไม่ได้ตั้งเกณฑ์ → โชว์ค่าเฉย ๆ ไม่มีแถบ ไม่มีป้าย OK/NG
   // (วาดแถบให้ทั้งที่ไม่มีเกณฑ์จะชวนให้อ่านว่า "ผ่าน" ทั้งที่ไม่เคยตรวจ)
   if (offsetTol == null) {
     return (
       <div className="rax">
-        <div className="rax-head"><span className="rax-name">Offset</span></div>
+        <div className="rax-head"><span className="rax-name">{name}</span></div>
         <div className="rax-value">{fmt(offset)} <span className="unit">mm</span></div>
         <div className="rax-dev ok">ยังไม่ได้ตั้ง Offset Tol</div>
       </div>
@@ -128,7 +137,7 @@ export function ReportOffset({
   return (
     <div className="rax">
       <div className="rax-head">
-        <span className="rax-name">Offset</span>
+        <span className="rax-name">{name}</span>
         <span className={`rax-tag ${cls}`}>{ok ? "OK" : "NG"}</span>
       </div>
       <div className={`rax-value ${cls}`}>{fmt(offset)} <span className="unit">mm</span></div>

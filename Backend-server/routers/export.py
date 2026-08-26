@@ -167,6 +167,28 @@ def _template_payload(body: ExportTemplateBody):
     cols = _validate_template_body(body)
     return "csv", json.dumps(cols, ensure_ascii=False), None
 
+# ป้ายชื่อชนิดเทมเพลตที่ผู้ใช้เห็นบนหน้าจอ — ใช้ในข้อความ error ให้ตรงกับที่เห็น
+_KIND_LABEL = {"csv": "CSV", "pdf": "PDF", "excel": "Excel"}
+
+def _template_name_error(exc: Exception, kind: str, name: str, action: str) -> HTTPException:
+    """แปลง error ของ MySQL เป็นข้อความที่ผู้ใช้อ่านแล้วรู้ว่าต้องทำอะไรต่อ
+
+    ⚠ ของเดิมยัด `{exc}` ต่อท้ายทั้งดุ้น ผู้ใช้เลยเห็น
+          (1062, "Duplicate entry 'Default' for key 'export_template.name'")
+      โผล่บนหน้าเว็บ ซึ่งไม่ได้บอกเลยว่าไปชนกับอะไร ต้องไปไล่ดู schema เอง
+      1062 = ชื่อซ้ำ (ตอนนี้ซ้ำได้เฉพาะภายในชนิดเดียวกันแล้ว) — บอกให้ชัดไปเลย
+      ส่วน error อื่นยังแนบของดิบไว้ เพราะเดาแทนผู้ใช้ไม่ได้ว่าคืออะไร
+    """
+    code = exc.args[0] if getattr(exc, "args", None) else None
+    if code == 1062:
+        label = _KIND_LABEL.get(kind, kind)
+        return HTTPException(
+            409,
+            f'มีเทมเพลต {label} ชื่อ "{name}" อยู่แล้ว — ตั้งชื่ออื่น '
+            f'(ชื่อซ้ำกับเทมเพลตชนิดอื่นได้ แต่ซ้ำกันเองในชนิดเดียวกันไม่ได้)',
+        )
+    return HTTPException(409, f"{action}ไม่สำเร็จ: {exc}")
+
 @router.post("/api/export/templates", status_code=201)
 def create_export_template(body: ExportTemplateBody):
     kind, cols_json, layout_json = _template_payload(body)
@@ -180,7 +202,7 @@ def create_export_template(body: ExportTemplateBody):
                     (body.name.strip(), kind, cols_json, layout_json),
                 )
             except pymysql.MySQLError as exc:
-                raise HTTPException(409, f"สร้างเทมเพลตไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
+                raise _template_name_error(exc, kind, body.name.strip(), "สร้างเทมเพลต")
             return {"export_template_id": cur.lastrowid}
     finally:
         db.close()
@@ -202,7 +224,7 @@ def update_export_template(export_template_id: int, body: ExportTemplateBody):
                     (body.name.strip(), kind, cols_json, layout_json, export_template_id),
                 )
             except pymysql.MySQLError as exc:
-                raise HTTPException(409, f"บันทึกไม่สำเร็จ (ชื่อนี้อาจซ้ำกับเทมเพลตอื่น): {exc}")
+                raise _template_name_error(exc, kind, body.name.strip(), "บันทึก")
         return {"ok": True}
     finally:
         db.close()
@@ -384,8 +406,23 @@ def _export_filters(f: Dict[str, Any]):
         conditions.append("p.recieve_date <= %s"); params.append(_day_end(f["recv_to"]))
 
     # Description ค้นแบบมีคำนี้อยู่ข้างใน (ไม่ต้องพิมพ์ตรงเป๊ะ)
+    #
+    # ⚠ ต้อง escape อักขระพิเศษของ LIKE ก่อนเสมอ — `%` กับ `_` เป็น wildcard
+    #   ของ SQL ไม่ใช่ตัวอักษรธรรมดา ถ้าปล่อยผ่าน:
+    #     พิมพ์ "%" → ได้ `LIKE '%%%'` = ตรงกับทุกแถว (เหมือนไม่ได้กรอง)
+    #     พิมพ์ "_" → ได้ `LIKE '%_%'` = ตรงกับทุกแถวที่มีตัวอักษรอย่างน้อย 1 ตัว
+    #   และคนที่อยากค้นหา "_" หรือ "%" ที่อยู่ใน description จริงๆ จะหาไม่เจอเลย
+    #   (ไม่ใช่ช่องโหว่ SQL injection — ค่าถูก bind เป็นพารามิเตอร์อยู่แล้ว
+    #    แต่เป็นเรื่องความถูกต้องของผลลัพธ์)
+    #
+    #   ใช้ ESCAPE '!' แทนตัว `\` เริ่มต้นของ MySQL เพราะ backslash ยังต้องผ่าน
+    #   การตีความของ string literal อีกชั้น และพฤติกรรมเปลี่ยนไปถ้าเซิร์ฟเวอร์
+    #   เปิดโหมด NO_BACKSLASH_ESCAPES — ใช้ตัวที่ไม่มีความหมายพิเศษจบเรื่อง
     if f.get("description"):
-        conditions.append("p.description LIKE %s"); params.append(f"%{f['description']}%")
+        needle = (str(f["description"])
+                  .replace("!", "!!").replace("%", "!%").replace("_", "!_"))
+        conditions.append("p.description LIKE %s ESCAPE '!'")
+        params.append(f"%{needle}%")
 
     # ต้องต่อท้ายสุดเสมอ — เงื่อนไขนี้ห่อ WHERE ของ "ทุกข้อข้างบน" ไว้ข้างใน
     # ลำดับพารามิเตอร์จึงเป็น [ของข้อข้างบน..., ของข้อข้างบนซ้ำอีกรอบ...]

@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 780" width="1500" height="780" font-family="Segoe UI, Tahoma, Arial, sans-serif"><rect width="1500" height="780" fill="#fff"/>
+<defs><marker id="ah" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#1F6F8B"/></marker></defs>
+<rect x="60" y="150" width="220" height="54" fill="#111111"/>
+<text x="170.0" y="183.5" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">Raspberry Pi</text>
+<rect x="470" y="150" width="220" height="54" fill="#111111"/>
+<text x="580.0" y="183.5" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">Core Service</text>
+<rect x="880" y="150" width="250" height="54" fill="#111111"/>
+<text x="1005.0" y="183.5" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">Web Application</text>
+<rect x="470" y="42" width="220" height="50" fill="#111111"/>
+<text x="580.0" y="73.5" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">Database</text>
+<path d="M 280 168 H 462" fill="none" stroke="#1F6F8B" stroke-width="2.6" marker-end="url(#ah)"/>
+<path d="M 580 150 V 104" fill="none" stroke="#1F6F8B" stroke-width="2.6" marker-end="url(#ah)"/>
+<path d="M 690 168 H 872" fill="none" stroke="#1F6F8B" stroke-width="2.6" marker-end="url(#ah)"/>
+<path d="M 1005 204 V 268 H 170 V 212" fill="none" stroke="#1F6F8B" stroke-width="2.6" marker-end="url(#ah)"/>
+<circle cx="352" cy="140" r="14" fill="#1F6F8B"/>
+<text x="352" y="145" text-anchor="middle" font-size="13.5" font-weight="700" fill="#fff">1</text>
+<text x="371" y="110" text-anchor="middle" font-size="14" font-weight="700" fill="#333333">report what went wrong</text>
+<circle cx="580" cy="127" r="13" fill="#1F6F8B"/>
+<text x="580" y="132" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">2</text>
+<text x="580" y="28" text-anchor="middle" font-size="13.5" font-weight="400" fill="#5B6570">saved as the session&#x27;s last event + reason</text>
+<circle cx="762" cy="140" r="14" fill="#1F6F8B"/>
+<text x="762" y="145" text-anchor="middle" font-size="13.5" font-weight="700" fill="#fff">3</text>
+<text x="781" y="100" text-anchor="middle" font-size="14" font-weight="700" fill="#333333">pushed to the browser</text>
+<text x="781" y="120" text-anchor="middle" font-size="13.5" font-weight="400" fill="#5B6570">modal shows the reason</text>
+<circle cx="588" cy="268" r="15" fill="#1F6F8B"/>
+<text x="588" y="273" text-anchor="middle" font-size="13.5" font-weight="700" fill="#fff">4</text>
+<text x="640" y="296" text-anchor="middle" font-size="14.5" font-weight="700" fill="#333333">the operator chooses  ·  Retry / Accept / Stop  ·  and the answer is sent back to the Pi</text>
+<text x="640" y="318" text-anchor="middle" font-size="13.5" font-weight="400" fill="#5B6570">no answer within 70 seconds counts as Stop</text>
+<rect x="55" y="372" width="250" height="46" fill="#EEF2F6"/>
+<rect x="305" y="372" width="380" height="46" fill="#1F6F8B"/>
+<text x="495.0" y="402" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">T1 error</text>
+<rect x="685" y="372" width="380" height="46" fill="#1F6F8B"/>
+<text x="875.0" y="402" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">GM error</text>
+<rect x="1065" y="372" width="380" height="46" fill="#C1440E"/>
+<text x="1255.0" y="402" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">Receive error</text>
+<rect x="55" y="418" width="1390" height="54" fill="#FFFFFF"/>
+<rect x="55" y="418" width="250" height="54" fill="#F1F5F8"/>
+<text x="71" y="450.0" text-anchor="start" font-size="14.5" font-weight="700" fill="#333333">Detected when</text>
+<text x="495.0" y="440.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">TM-X rejects the</text>
+<text x="495.0" y="460.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">T1 trigger</text>
+<text x="875.0" y="440.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">No new value from GM</text>
+<text x="875.0" y="460.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">within 8 seconds</text>
+<text x="1255.0" y="440.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">Value never reached the</text>
+<text x="1255.0" y="460.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">database within 15 seconds</text>
+<rect x="55" y="472" width="1390" height="54" fill="#F7F9FB"/>
+<rect x="55" y="472" width="250" height="54" fill="#F1F5F8"/>
+<text x="71" y="504.0" text-anchor="start" font-size="14.5" font-weight="700" fill="#333333">Automatic retry first</text>
+<text x="495.0" y="494.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">Yes — 3 times</text>
+<text x="495.0" y="514.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">inside the Pi</text>
+<text x="875.0" y="494.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">Keeps polling</text>
+<text x="875.0" y="514.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">until the timeout</text>
+<text x="1255.0" y="504.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#333333">None</text>
+<rect x="55" y="526" width="1390" height="54" fill="#FFFFFF"/>
+<rect x="55" y="526" width="250" height="54" fill="#F1F5F8"/>
+<text x="71" y="558.0" text-anchor="start" font-size="14.5" font-weight="700" fill="#333333">State of the part</text>
+<text x="495.0" y="548.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">Still in place,</text>
+<text x="495.0" y="568.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">not measured yet</text>
+<text x="875.0" y="548.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">Still in place,</text>
+<text x="875.0" y="568.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">not measured yet</text>
+<text x="1255.0" y="548.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">Already measured</text>
+<text x="1255.0" y="568.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#5B6570">and sorted by the MCU</text>
+<rect x="55" y="580" width="1390" height="54" fill="#F7F9FB"/>
+<rect x="55" y="580" width="250" height="54" fill="#F1F5F8"/>
+<text x="71" y="612.0" text-anchor="start" font-size="14.5" font-weight="700" fill="#333333">What the modal offers</text>
+<text x="495.0" y="612.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#333333">Retry  /  Stop</text>
+<text x="875.0" y="612.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#333333">Retry  /  Stop</text>
+<text x="1255.0" y="612.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#333333">Accept without image  /  Stop</text>
+<rect x="55" y="634" width="1390" height="54" fill="#FFFFFF"/>
+<rect x="55" y="634" width="250" height="54" fill="#F1F5F8"/>
+<text x="71" y="666.0" text-anchor="start" font-size="14.5" font-weight="700" fill="#333333">Rounds allowed</text>
+<text x="495.0" y="666.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#333333">3, then stop</text>
+<text x="875.0" y="666.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#333333">3, then stop</text>
+<text x="1255.0" y="666.0" text-anchor="middle" font-size="14.5" font-weight="400" fill="#333333">One decision only</text>
+<rect x="55" y="372" width="1390" height="316" fill="none" stroke="#C9D3DC"/>
+<line x1="305" y1="372" x2="305" y2="688" stroke="#C9D3DC"/>
+<line x1="685" y1="372" x2="685" y2="688" stroke="#C9D3DC"/>
+<line x1="1065" y1="372" x2="1065" y2="688" stroke="#C9D3DC"/>
+<line x1="1445" y1="372" x2="1445" y2="688" stroke="#C9D3DC"/>
+<line x1="55" y1="418" x2="1445" y2="418" stroke="#E2E8ED"/>
+<line x1="55" y1="472" x2="1445" y2="472" stroke="#E2E8ED"/>
+<line x1="55" y1="526" x2="1445" y2="526" stroke="#E2E8ED"/>
+<line x1="55" y1="580" x2="1445" y2="580" stroke="#E2E8ED"/>
+<line x1="55" y1="634" x2="1445" y2="634" stroke="#E2E8ED"/>
+<line x1="55" y1="688" x2="1445" y2="688" stroke="#E2E8ED"/>
+<rect x="55" y="706" width="1390" height="64" rx="4" fill="#FDF3F2" stroke="#E8C4C0"/>
+<text x="75" y="730" text-anchor="start" font-size="15" font-weight="700" fill="#C1440E">Receive error is the only case that offers Accept</text>
+<text x="75" y="752" text-anchor="start" font-size="14.5" font-weight="400" fill="#5B6570">the part has already left the fixture, so there is nothing to re-measure — the Pi still holds the value, just not the image.</text>
+</svg>

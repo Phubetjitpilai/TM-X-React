@@ -40,7 +40,19 @@ interface TrashCardProps {
    *  ไม่งั้นแถวที่กู้มาจะยังไม่โผล่จนกว่าจะรีเฟรชหน้า แล้วผู้ใช้จะกดกู้ซ้ำ
    */
   onRestored?: () => void;
+  /** เรียกหลังลบถาวรสำเร็จ — การ์ด History ต้องรีเฟรชด้วย
+   *  (ไม่ใช้ onRestored ร่วมกันเพราะตัวนั้นสั่งโหลดตาราง Parts/Measurements ใหม่
+   *   ซึ่ง purge ไม่ได้แตะฐานข้อมูลเลย ไม่มีอะไรให้โหลด) */
+  onPurged?: () => void;
 }
+
+/** 10 แถวต่อหน้า — เท่ากับ Parts/Measurements/History ในหน้าเดียวกัน
+ *
+ *  ⚠ แบ่งหน้าฝั่ง client เพราะ `/api/deleted` ไม่มี limit/offset (มันไล่อ่าน
+ *    ไฟล์ JSON ในโฟลเดอร์ Deleted/ ไม่ใช่ query SQL) — ของถูกจำกัดด้วยอายุ
+ *    30 วันอยู่แล้ว จำนวนจึงไม่โตจนต้องแบ่งหน้าฝั่ง server
+ */
+const PAGE = 10;
 
 export function useTrash(reloadKey = 0) {
   return useQuery<TrashResponse>({
@@ -55,14 +67,25 @@ export function useTrash(reloadKey = 0) {
  *  วางไว้ท้ายสุดของหน้า Edit โดยตั้งใจ (ตามต้นฉบับ) — เป็นหน้าเดียวกับที่ผู้ใช้
  *  กดลบ เผลอลบแล้วเลื่อนลงมากู้ได้ทันที ไม่ต้องจำว่าต้องไปหน้าไหน
  */
-export default function TrashCard({ reloadKey = 0, onRestored }: TrashCardProps) {
+export default function TrashCard({ reloadKey = 0, onRestored, onPurged }: TrashCardProps) {
   const { data, isLoading, refetch } = useTrash(reloadKey);
   const qc = useQueryClient();
   const toast = useToast();
   const [confirmPurge, setConfirmPurge] = useState<TrashItem | null>(null);
+  const [page, setPage] = useState(1);
 
   const items = data?.items ?? [];
   const retentionDays = data?.retention_days ?? 30;
+
+  /* ⚠ ต้องหนีบหน้าให้อยู่ในช่วงที่มีจริงเสมอ — กู้คืน/ลบถาวรแถวสุดท้ายของหน้า
+     ท้าย ๆ แล้วจำนวนหดลง ถ้าไม่หนีบจะค้างอยู่หน้าที่ไม่มีข้อมูล เห็นตารางว่าง
+     ทั้งที่ถังขยะยังมีของอยู่ (ตาราง Parts/Measurements แก้ปัญหาเดียวกันนี้ด้วย
+     การถอยหน้าใน reloadPartsAfterMutation) */
+  const lastPage = Math.max(1, Math.ceil(items.length / PAGE));
+  const curPage = Math.min(page, lastPage);
+  const pageItems = items.slice((curPage - 1) * PAGE, curPage * PAGE);
+  const from = items.length === 0 ? 0 : (curPage - 1) * PAGE + 1;
+  const to = (curPage - 1) * PAGE + pageItems.length;
 
   const restore = useMutation({
     mutationFn: (id: string) => apiPost("/api/deleted/restore", { id }),
@@ -79,7 +102,7 @@ export default function TrashCard({ reloadKey = 0, onRestored }: TrashCardProps)
     mutationFn: (id: string) => apiPost("/api/deleted/remove", { id }),
     // ลบถาวรไม่ได้แตะฐานข้อมูลเลย (แถวถูกลบไปตั้งแต่ตอนกดลบครั้งแรกแล้ว
     // ตรงนี้แค่ทิ้งตัวสำรอง) จึงไม่ต้องบอกให้หน้าแม่โหลดตารางใหม่
-    onSuccess: () => { toast.show("ลบถาวรแล้ว"); refetch(); },
+    onSuccess: () => { toast.show("ลบถาวรแล้ว"); refetch(); onPurged?.(); },
     onError: (e: Error) => toast.show(`ลบไม่สำเร็จ — ${e.message}`),
   });
 
@@ -112,7 +135,7 @@ export default function TrashCard({ reloadKey = 0, onRestored }: TrashCardProps)
             ) : items.length === 0 ? (
               <tr className="empty-row"><td colSpan={5}>ถังขยะว่าง — ยังไม่มีข้อมูลที่ถูกลบ</td></tr>
             ) : (
-              items.map((it) => (
+              pageItems.map((it) => (
                 <tr key={it.id}>
                   {/* deleted_at เป็น "YYYY-MM-DD HH:MM:SS" อยู่แล้ว ตัดวินาทีออกให้อ่านง่าย */}
                   <td style={{ whiteSpace: "nowrap" }}>
@@ -148,6 +171,18 @@ export default function TrashCard({ reloadKey = 0, onRestored }: TrashCardProps)
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="pagination-bar">
+        <button type="button" className="btn-icon" disabled={curPage <= 1} onClick={() => setPage(curPage - 1)}>
+          ‹ Previous
+        </button>
+        <span style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+          {items.length === 0 ? "ไม่มีรายการ" : `แสดง ${from}–${to} จาก ${items.length} รายการ`}
+        </span>
+        <button type="button" className="btn-icon" disabled={to >= items.length} onClick={() => setPage(curPage + 1)}>
+          Next ›
+        </button>
       </div>
 
       {/* ลบถาวรกู้ไม่ได้อีก — ต้องถามก่อนเสมอ ต่างจากปุ่มลบปกติที่ยังมีถังขยะรับไว้ */}

@@ -21,8 +21,6 @@ def _offset_ok(offset: Optional[float], offset_tol: Optional[float]) -> bool:
 def _judge(
     value_x: float,
     value_y: float,
-    offset_ghx: Optional[float],
-    offset_ghy: Optional[float],
     offset_opx: Optional[float],
     offset_opy: Optional[float],
     crit,
@@ -37,13 +35,11 @@ def _judge(
 
     if offset_counts:
         # ตรวจเช็ค Offset ทั้ง 4 แกนเทียบกับ limit เดียวกัน
-        ok_ghx = _offset_ok(offset_ghx, limit)
-        ok_ghy = _offset_ok(offset_ghy, limit)
         ok_opx = _offset_ok(offset_opx, limit)
         ok_opy = _offset_ok(offset_opy, limit)
 
         # ถ้าผ่านหมดทั้ง 4 ตัวจะได้ True แต่ถ้ามีตัวใดตัวหนึ่งเป็น False จะได้ False ทันที
-        ok_offset = ok_ghx and ok_ghy and ok_opx and ok_opy
+        ok_offset = ok_opx and ok_opy
     else:
         # หากโหมดนี้ไม่ต้องตรวจ Offset ให้คืนค่าเป็น None
         ok_offset = None
@@ -116,15 +112,75 @@ def _update_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
     )
 
 
+# ระยะที่ถือว่า "สองมุมเท่ากัน" — ต่างกันน้อยกว่านี้ = เสมอ
+#
+# ⚠⚠ **ห้ามเทียบ `tr == tl` ตรง ๆ เด็ดขาด** แม้ TM-X จะส่งมาเป็นทศนิยม 3 ตำแหน่ง
+#   ก็ตาม เพราะค่าเดินทางผ่าน `float` ของ Python และคอลัมน์ `FLOAT` ของ MySQL
+#   ซึ่งเก็บเป็น binary — `0.012` อ่านกลับได้ `0.012000000104308128`
+#   สองมุมที่ "เท่ากัน" ในสายตาคนจึงแทบไม่มีทางเท่ากันด้วย `==`
+#   ผลคือเงื่อนไขขอบ (TOP/BOTTOM/LEFT/RIGHT) จะไม่มีวันทำงานเลยสักครั้ง
+#
+# ⚠ ค่านี้ใหญ่กว่า `_TOL_EPS` (1e-6) โดยตั้งใจ — ตัวนั้นแก้ปัญหาความคลาดเคลื่อน
+#   ของ float ล้วน ๆ ส่วนตัวนี้ต้องเผื่อ "ความไม่เท่ากันทางกายภาพที่เล็กจนไม่มี
+#   ความหมาย" ด้วย (0.012 กับ 0.0121 คือชิ้นงานเบียดขอบบนพอ ๆ กัน ไม่ใช่เบียดมุม)
+#   ปรับได้จาก .env ถ้าหน้างานพบว่าหยาบ/ละเอียดเกิน
+_POS_TIE_EPS = float(os.getenv("OFFSET_POS_TIE_EPS", 5e-4))
+
+# รหัสตำแหน่งที่เก็บลง DB — **เป็นรหัสสำหรับเครื่องอ่าน ไม่ใช่ข้อความให้คนอ่าน**
+# หน้าเว็บแปลเป็นภาษาไทยเอง ("TOP_RIGHT" → "บนขวา") จึงเปลี่ยนคำที่แสดงได้
+# โดยไม่ต้องแตะ DB และไม่ต้อง migrate ข้อมูลเก่า
+_POS_TR, _POS_TL, _POS_BR, _POS_BL = "TOP RIGHT", "TOP LEFT", "BOTTOM RIGHT", "BOTTOM LEFT"
+_POS_TOP, _POS_BOTTOM, _POS_LEFT, _POS_RIGHT = "TOP", "BOTTOM", "LEFT", "RIGHT"
+_POS_CENTER = "CENTER"
+
+
 def _get_min_position_label(tr: float, tl: float, br: float, bl: float) -> str:
-    """เปรียบเทียบค่า 4 มุมและคืนชื่อตำแหน่งที่มีค่าน้อยที่สุด"""
-    positions = {
-        "Top Right": tr,
-        "Top Left": tl,
-        "Bottom Right": br,
-        "Bottom Left": bl,
-    }
-    return min(positions, key=positions.get)
+    """หา "ชิ้นงานเบียดไปทางไหน" จากค่า 4 มุม — คืนรหัส 1 ใน 9 ค่า
+
+        TOP_LEFT     TOP        TOP_RIGHT
+        LEFT         CENTER     RIGHT
+        BOTTOM_LEFT  BOTTOM     BOTTOM_RIGHT
+
+    หลักการ: **มุมที่ค่าน้อยที่สุดคือมุมที่แคบที่สุด** = ด้านที่ชิ้นงานเบียดไป
+    ถ้ามีหลายมุมน้อยเท่า ๆ กัน แปลว่าเบียดไปทาง "ด้าน" ไม่ใช่ "มุม"
+
+        เบียดมุมบนขวา          เบียดขอบบน            อยู่กลาง
+        tr น้อยอยู่ตัวเดียว     tr = tl น้อยเท่ากัน     ทั้ง 4 เท่ากัน
+        → TOP_RIGHT           → TOP                 → CENTER
+
+    ⚠ กรณี "เสมอแบบทแยง" (tr = bl แต่ tl/br ใหญ่กว่า) เป็นไปไม่ได้ในทางกายภาพ
+      สำหรับชิ้นงานที่เลื่อนขนานกัน — ถ้าเจอแปลว่าชิ้นงาน **เอียง** (rotate)
+      ไม่ใช่เลื่อน ซึ่งเป็นคนละปัญหา · คืนมุมแรกไปก่อนแทนที่จะ raise เพราะ
+      หยุดสายการผลิตด้วยเรื่องที่ยังไม่มีใครออกแบบวิธีรับมือไว้ไม่คุ้ม
+      (เห็นได้จาก log ว่าเกิดบ่อยแค่ไหนก่อนค่อยตัดสินใจ)
+    """
+    corners = {_POS_TR: tr, _POS_TL: tl, _POS_BR: br, _POS_BL: bl}
+    lo = min(corners.values())
+
+    # มุมทั้งหมดที่ "น้อยที่สุดเท่ากัน" ภายในระยะ eps
+    tied = {name for name, v in corners.items() if v - lo <= _POS_TIE_EPS}
+
+    if len(tied) >= 4:
+        return _POS_CENTER                      # ไม่เบียดทางไหนเลย
+    if len(tied) == 1:
+        return next(iter(tied))                 # เบียดมุมเดียวชัดเจน
+
+    # เสมอ 2 มุม (หรือ 3 ซึ่งเกิดจาก eps กว้างไป) — ดูว่าคู่ไหนประกอบเป็นด้าน
+    for edge, pair in (
+        (_POS_TOP,    {_POS_TR, _POS_TL}),
+        (_POS_BOTTOM, {_POS_BR, _POS_BL}),
+        (_POS_RIGHT,  {_POS_TR, _POS_BR}),
+        (_POS_LEFT,   {_POS_TL, _POS_BL}),
+    ):
+        if pair <= tied:
+            return edge
+
+    # เหลือแต่คู่ทแยง — ดูหมายเหตุใน docstring
+    log.warning(
+        "offset_pos: มุมที่แคบสุดเสมอกันแบบทแยง (tr=%s tl=%s br=%s bl=%s) "
+        "— ชิ้นงานอาจเอียงไม่ใช่เลื่อน", tr, tl, br, bl,
+    )
+    return sorted(tied)[0]
 
 
 @router.get("/api/measurements")
@@ -164,6 +220,18 @@ def list_measurements(
     finally:
         db.close()
 
+
+# มุมมองของ Measurement ที่ใช้บันทึกลงประวัติ — เก็บเฉพาะฟิลด์ที่ "คนแก้ได้"
+# บวก result ที่ระบบคำนวณใหม่ให้ · join เอาชื่อ operator มาแทน operator_id ดิบ
+#
+# ⚠ ไม่เอา value_x/value_y/timestamp มาด้วย — เป็นผลวัดจริงจากเครื่องที่แก้
+#   ย้อนหลังไม่ได้อยู่แล้ว ใส่มาก็รกเปล่า ๆ (ตอนลบยังเก็บครบทุกฟิลด์เหมือนเดิม)
+_MEAS_HISTORY_SQL = """
+    SELECT m.number_alpl, op.operator_name AS operator, m.result, m.note
+    FROM measurements m
+    LEFT JOIN operator op ON m.operator_id = op.operator_id
+    WHERE m.measurement_id = %s
+"""
 
 @router.post("/api/measurements")
 async def create_measurement(req: MeasurementCreate):
@@ -244,16 +312,13 @@ async def create_measurement(req: MeasurementCreate):
 
             part = _load_criteria(cur, number_alpl, measure_type)
 
-            # ── คำนวณหาตำแหน่ง Offset ที่น้อยที่สุด (GH / OP) ─────────────────
-            offset_pos_gh = _get_min_position_label(req.tr_gh, req.tl_gh, req.br_gh, req.bl_gh)
+            # ── คำนวณหาตำแหน่ง Offset ที่น้อยที่สุด (OP) ─────────────────
             offset_pos_op = _get_min_position_label(req.tr_op, req.tl_op, req.br_op, req.bl_op)
 
             # ── [FIX 1] ส่ง Parameter ให้ครบทั้ง 8 ตัว ──────────────────────────
             verdict = _judge(
                 value_x=req.value_x,
                 value_y=req.value_y,
-                offset_ghx=req.offset_ghx,
-                offset_ghy=req.offset_ghy,
                 offset_opx=req.offset_opx,
                 offset_opy=req.offset_opy,
                 crit=part,
@@ -267,14 +332,14 @@ async def create_measurement(req: MeasurementCreate):
                 cur.execute(
                     "INSERT INTO measurements "
                     "(session_id, number_alpl, value_x, value_y, "
-                    " offset_ghx, offset_ghy, offset_opx, offset_opy, "
-                    " offset_pos_gh, offset_pos_op, result, "
+                    " offset_opx, offset_opy, "
+                    " offset_pos_op, result, "
                     " measure_type, operator_id, note, client_uuid) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         session_id, number_alpl, req.value_x, req.value_y,
-                        req.offset_ghx, req.offset_ghy, req.offset_opx, req.offset_opy,
-                        offset_pos_gh, offset_pos_op, result,
+                        req.offset_opx, req.offset_opy,
+                        offset_pos_op, result,
                         measure_type, operator_id, note, req.client_uuid
                     ),
                 )
@@ -329,11 +394,8 @@ async def create_measurement(req: MeasurementCreate):
                 "value_x":        req.value_x,
                 "value_y":        req.value_y,
                 "result":         result,
-                "offset_ghx":     req.offset_ghx,
-                "offset_ghy":     req.offset_ghy,
                 "offset_opx":     req.offset_opx,
                 "offset_opy":     req.offset_opy,
-                "offset_pos_gh":  offset_pos_gh,
                 "offset_pos_op":  offset_pos_op,
                 **{k: verdict[k] for k in ("ok_x", "ok_y", "ok_offset", "offset_counts", "offset_tol")},
                 "measure_type":   measure_type,
@@ -348,7 +410,6 @@ async def create_measurement(req: MeasurementCreate):
         return {
             "measurement_id": measurement_id,
             "result":        result,
-            "offset_pos_gh": offset_pos_gh,
             "offset_pos_op": offset_pos_op,
             "status":        status,
             "measured":      measured,
@@ -382,6 +443,8 @@ def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(...)):
 
             set_clause = ", ".join(set_parts)
             try:
+                # ค่าเดิมก่อนแก้ — join เอาชื่อ operator มาแทน operator_id ดิบ
+                _hist_before = _fetch_one(cur, _MEAS_HISTORY_SQL, (measurement_id,))
                 cur.execute(
                     f"UPDATE measurements SET {set_clause} WHERE measurement_id = %s",
                     (*values, measurement_id),
@@ -394,10 +457,19 @@ def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(...)):
             if cur.rowcount == 0:
                 raise HTTPException(404, "Measurement not found")
 
+            # ⚠ บันทึกประวัติ "ก่อน" ที่ result จะถูกคำนวณใหม่ด้านล่าง — ตรงนี้คือ
+            #   สิ่งที่ "คนแก้" จริง ๆ (ALPL / Operator) ส่วน result ที่เปลี่ยนตาม
+            #   เป็นผลจากระบบ ไม่ใช่การกระทำของผู้ใช้ ถ้าเอามารวมเป็นบรรทัดเดียวกัน
+            #   จะอ่านไม่ออกว่าใครเปลี่ยนอะไร
+            _hist_after = _fetch_one(cur, _MEAS_HISTORY_SQL, (measurement_id,))
+            if _hist_before is not None and _hist_after is not None:
+                log_edit("measurements", "edit", f"ID {measurement_id}",
+                         before=_hist_before, after=_hist_after)
+
             # ── [FIX 2] อ่าน คอลัมน์ Offset แยกแกนแทนคอลัมน์ `offset` เดิม ────────
             cur.execute(
                 "SELECT number_alpl, value_x, value_y, "
-                "offset_ghx, offset_ghy, offset_opx, offset_opy, measure_type "
+                "offset_opx, offset_opy, measure_type "
                 "FROM measurements WHERE measurement_id = %s",
                 (measurement_id,),
             )
@@ -411,8 +483,6 @@ def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(...)):
             new_result = _judge(
                 value_x=row["value_x"],
                 value_y=row["value_y"],
-                offset_ghx=row.get("offset_ghx"),
-                offset_ghy=row.get("offset_ghy"),
                 offset_opx=row.get("offset_opx"),
                 offset_opy=row.get("offset_opy"),
                 crit=crit,
@@ -534,6 +604,8 @@ def delete_measurement(measurement_id: int):
             )
             if cur.rowcount == 0:
                 raise HTTPException(404, "Measurement not found")
+            log_edit("measurements", "delete", f"ID {measurement_id}",
+                     before=row, trash_id=archived)
 
         if archived is None and _delete_image_file(image_path):
             log.info("ลบไฟล์รูปของ measurement %s แล้ว (%s)", measurement_id, image_path)

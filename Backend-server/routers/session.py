@@ -92,6 +92,13 @@ def get_session_state():
       หน้าเว็บได้ undefined → ชิปเพี้ยนแบบเงียบๆ
     """
     pi_status = read_pi_status()   # อ่านนอก try ของ sessions — ล้มเหลวได้โดยไม่ลากทั้ง endpoint
+    # ⚠ ต้องแนบไปทั้ง 3 ทางออกเหมือน pi_status ไม่งั้นทางที่ตกหล่นจะได้ undefined
+    #   แล้วปุ่มทริกเกอร์บนหน้าเว็บจะดับค้างแบบไม่มี error ให้เห็น
+    trigger_ready = read_trigger_ready()
+    # ค่าคงที่จาก .env — ส่งมากับเส้นนี้เพราะหน้าเว็บต้องรู้ว่าจะ "แสดงปุ่มไหม"
+    # ต่างจาก trigger_ready ที่บอกว่า "กดได้ไหม" · ปิดสวิตช์แล้วปุ่มต้องหายไปเลย
+    # ไม่ใช่โผล่มาแล้วกดไม่ได้ ซึ่งจะทำให้ operator สงสัยว่าระบบพัง
+    manual_trigger_on = ALLOW_MANUAL_TRIGGER
 
     # ── ต่อ MySQL ไม่ติด ──────────────────────────────────────────────────────
     # pi_status อยู่ใน memory ล้วน (_pi_last_seen) ไม่พึ่ง DB เลย — ตอน MySQL ดับ
@@ -123,6 +130,8 @@ def get_session_state():
                 # ค่าเก่าจึงเป็น "อดีต" ไปแล้ว ส่งไปจะทำให้ชิปขึ้น 🟢 ค้างทั้งที่
                 # Pi เงียบเกินเกณฑ์ไปเรียบร้อย · การอ่านฟรีอยู่แล้ว (ลบเวลา 2 ตัว)
                 "pi_status": read_pi_status(),
+                "trigger_ready": read_trigger_ready(),
+                "manual_trigger": ALLOW_MANUAL_TRIGGER,
             },
         )
 
@@ -139,8 +148,11 @@ def get_session_state():
             row = cur.fetchone()
         if row:
             row["pi_status"] = pi_status
+            row["trigger_ready"] = trigger_ready
+            row["manual_trigger"] = manual_trigger_on
             return row
-        return {"state": "idle", "pi_status": pi_status}
+        return {"state": "idle", "pi_status": pi_status,
+                "trigger_ready": trigger_ready, "manual_trigger": manual_trigger_on}
     finally:
         db.close()
 
@@ -310,13 +322,13 @@ async def _notify_agent_start(
     #   ข้อความจะบอกว่า "Pi ค้าง" ทั้งที่จริงคือ "หา Pi ไม่เจอ" — ชี้ผิดทางเลย
     except httpx.ConnectError:
         # ต่อไปถึงเครื่องแล้วแต่ไม่มีใครฟังพอร์ตนั้น (โดน RST กลับมาทันที)
-        _fail_start(session_id,
-                    f"ติดต่อโปรแกรมบนเครื่อง Pi ไม่ได้ ({AGENT_BASE_URL}) — "
-                    f"ตรวจว่า send_command.py รันอยู่ไหม · สาย LAN · IP ของ Pi เปลี่ยนหรือเปล่า")
+        await _fail_start(session_id,
+                          f"ติดต่อโปรแกรมบนเครื่อง Pi ไม่ได้ ({AGENT_BASE_URL}) — "
+                          f"ตรวจว่า send_command.py รันอยู่ไหม · สาย LAN · IP ของ Pi เปลี่ยนหรือเปล่า")
     except httpx.ConnectTimeout:
         # ไม่มีใครอยู่ที่ IP นั้นเลย (ไม่มีแม้แต่ RST) — IP ผิด/เครื่องดับ/สายหลุด
-        _fail_start(session_id,
-                    f"หาเครื่อง Pi ไม่เจอที่ {AGENT_BASE_URL} — ตรวจ IP หรือสาย LAN")
+        await _fail_start(session_id,
+                          f"หาเครื่อง Pi ไม่เจอที่ {AGENT_BASE_URL} — ตรวจ IP หรือสาย LAN")
     except httpx.TimeoutException:
         # ── ReadTimeout: อันตรายที่สุดในกลุ่มนี้ ──────────────────────────
         # ต่อติดแล้ว payload ส่งออกไปแล้ว แต่ Pi ไม่ตอบใน 10 วิ — **เป็นไปได้ว่า
@@ -327,35 +339,59 @@ async def _notify_agent_start(
         # ยังวัดต่อและยิงค่าเข้ามาเรื่อยๆ → create_measurement ปฏิเสธ → Pi รอ
         # measured_count ขยับจนครบ MEASURE_TIMEOUT → เด้ง modal ถามผู้ใช้ทั้งที่
         # หน้าเว็บบอกว่าไม่มี session แล้ว
-        await _notify_agent_action("stop", session_id)
-        _fail_start(session_id,
-                    "Pi ไม่ตอบภายใน 10 วินาที — อาจติดคำสั่งเดิมค้างอยู่ "
-                    "(สั่งหยุดกลับไปแล้ว) ลองรีสตาร์ท send_command.py")
+        #
+        # ⚠ ส่ง notify_stop=True ให้ _fail_start จัดลำดับให้ **ห้ามยิง stop เองตรงนี้**
+        #   ของเดิมยิง stop ก่อนอัปเดต DB → มีช่วงที่ "Pi รู้แล้วว่าต้องหยุด แต่ DB
+        #   ยังบอก running" → บล็อกเก็บกวาดฝั่ง Pi/mockup ถามความจริงกลับมาตอนนั้น
+        #   พอดี เห็น running เลยยิง POST /api/session/stop ซ้ำพร้อม reason กลาง ๆ
+        #   ไปเขียนทับ START_FAILED ที่บอกสาเหตุจริง → หน้าเว็บชี้ผิดสาเหตุ
+        #   (เกิดจริงแล้ว: last_event กลายเป็น PI_ERROR "ไม่ทราบสาเหตุแน่ชัด")
+        await _fail_start(session_id,
+                          "Pi ไม่ตอบภายใน 10 วินาที — อาจติดคำสั่งเดิมค้างอยู่ "
+                          "(สั่งหยุดกลับไปแล้ว) ลองรีสตาร์ท send_command.py",
+                          notify_stop=True)
     except Exception as exc:
         # กันไว้ไม่ให้ exception แปลกๆ หลุดออกไปเป็น 500 ที่ไม่มี CORS header
         # (browser จะเข้าใจผิดว่าเป็น CORS error ทั้งที่จริงคือ Agent ไม่ตอบ)
-        _fail_start(session_id, f"สั่งงาน Pi ไม่สำเร็จ: {exc}")
+        await _fail_start(session_id, f"สั่งงาน Pi ไม่สำเร็จ: {exc}")
 
     # ต่อติดและตอบกลับมาแล้ว — แต่ยังต้องดูว่า "ตอบว่าอะไร"
     # Pi ปฏิเสธด้วย 400 ได้ 2 กรณี: action ที่ไม่รู้จัก · payload ไม่สมเหตุสมผล
     # (เช่น len(groups) ไม่ตรงกับ target_count) ทั้งคู่แปลว่า **Pi ไม่ได้เริ่มวัด**
     # จึงไม่ต้องส่ง stop ตามไป ต่างจากเคส ReadTimeout ข้างบน
     if resp.status_code != 200:
-        _fail_start(session_id, f"Pi ปฏิเสธคำสั่ง (HTTP {resp.status_code}): {resp.text[:300]}")
+        await _fail_start(session_id, f"Pi ปฏิเสธคำสั่ง (HTTP {resp.status_code}): {resp.text[:300]}")
 
-def _fail_start(session_id: int, msg: str) -> None:
+async def _fail_start(session_id: int, msg: str, *, notify_stop: bool = False) -> None:
     """เคลียร์ session ที่เพิ่งสร้างแล้วโยน 502 ออกไป — ใช้ตอนสั่ง Pi ไม่สำเร็จ
 
-    ทำ 3 อย่างที่ลืมง่ายทั้งหมด:
+    ทำ 4 อย่างที่ลืมง่ายทั้งหมด:
 
     ① `session_queues.pop()` — เป็น dict ในหน่วยความจำล้วนๆ ไม่มีใครมาเก็บกวาดให้
        กด Start ไม่ติด 20 ครั้งก็ค้าง 20 คิว
     ② ปิด session ใน DB ทันที — อย่าทิ้ง `running` ไว้ให้ `heartbeat_checker`
        มาเก็บใน 15 วิ เพราะมันจะขึ้นเป็น `timeout` ซึ่งชี้ผิดสาเหตุ
-    ③ `raise HTTPException(502)` — ต้องเกิด **ก่อน** `push_event("session_started")`
+    ③ `notify_stop=True` — สั่ง Pi ให้หยุดด้วย ใช้เฉพาะเคส ReadTimeout ที่
+       **ไม่รู้ว่า Pi เริ่มวัดไปแล้วหรือยัง** (ConnectError / HTTP 400 ไม่ต้อง
+       เพราะรู้แน่ว่าไม่มีอะไรเริ่ม)
+    ④ `raise HTTPException(502)` — ต้องเกิด **ก่อน** `push_event("session_started")`
        ใน start_session ไม่งั้นหน้าเว็บทุกเครื่องเข้าโหมดวัดพร้อมกันทั้งที่ไม่มี
        อะไรเกิดขึ้น · การ raise ยังทำให้ fetch ฝั่งเว็บพัง → ขึ้น popup แทนที่จะ
        แสดงหน้าจอวัดงานปลอมๆ
+
+    ╔═══ ⚠⚠ ลำดับของ ② กับ ③ ห้ามสลับ — แก้ 22 ส.ค. 2569 ════════════════════╗
+    ต้องอัปเดต DB ให้เป็น `stopped` **ก่อน** บอก Pi เสมอ
+
+    ของเดิมยิง stop ที่ตัวเรียก (ก่อนเข้าฟังก์ชันนี้) จึงมีช่วงสั้น ๆ ที่ Pi รู้แล้ว
+    ว่าต้องหยุด **แต่ DB ยังบอก `running`** — บล็อกเก็บกวาดใน `finally` ของ
+    `Pi.py` / `mockup.py` ถาม `/api/session/state` กลับมาตอนนั้นพอดี เห็น
+    `running` เลยยิง `POST /api/session/stop` ซ้ำพร้อม reason กลาง ๆ
+    ("ไม่ทราบสาเหตุแน่ชัด") ไปเขียนทับ `START_FAILED` ที่บอกสาเหตุจริง
+    → หน้าเว็บชี้ผิดสาเหตุ หาต้นตอไม่เจอ
+
+    เกิดจริงแล้ว (session 57): `last_event` กลายเป็น `PI_ERROR`
+    กติกาเดียวกับ `stop_session` ที่ UPDATE ก่อน notify เสมออยู่แล้ว
+    ╚═══════════════════════════════════════════════════════════════════════════╝
 
     **ไม่ broadcast SSE `session_stopped`** ต่างจากปุ่ม Stop โดยตั้งใจ — เพราะยัง
     ไม่มีแท็บไหนเคยได้ `session_started` เลย (raise เกิดก่อน) จึงไม่มีใครอยู่ใน
@@ -378,6 +414,11 @@ def _fail_start(session_id: int, msg: str) -> None:
     except Exception as exc:
         # ปิด session ไม่สำเร็จก็ยังต้องแจ้งผู้ใช้ให้ได้ — ห้ามกลืน error ต้นทาง
         log.error("_fail_start: ปิด session %s ไม่สำเร็จ: %s", session_id, exc)
+
+    # ── บอก Pi "หลัง" DB เป็น stopped แล้วเท่านั้น (ดูกรอบเตือนใน docstring) ──
+    if notify_stop:
+        await _notify_agent_action("stop", session_id)
+
     log.warning("Start session %s ล้มเหลว — %s", session_id, msg)
     raise HTTPException(502, msg)
 
@@ -831,11 +872,13 @@ async def report_measure_timeout(req: MeasureTimeoutRequest):
     measure_timeouts[req.session_id] = {"piece": req.piece, "target": req.target}
 
     detail = None
+    event  = None
     db = get_db()
     try:
         with db.cursor() as cur:
             cur.execute(
-                "SELECT last_event_detail, last_event_at FROM sessions WHERE session_id = %s",
+                "SELECT last_event, last_event_detail, last_event_at "
+                "FROM sessions WHERE session_id = %s",
                 (req.session_id,),
             )
             row = cur.fetchone()
@@ -846,6 +889,12 @@ async def report_measure_timeout(req: MeasureTimeoutRequest):
         age = (datetime.now() - row["last_event_at"]).total_seconds()
         if age < LAST_EVENT_FRESH_SEC:
             detail = row["last_event_detail"]
+            # ⚠ ต้องส่ง `event` (รหัส) ไปด้วย ไม่ใช่แค่ `detail` (ข้อความ) —
+            #   หน้าเว็บใช้ตัวนี้เลือกว่าจะขึ้นปุ่มไหน:
+            #     T1_FAILED / GM_NO_VALUE → "ลองใหม่"      (ของยังอยู่ในเครื่อง)
+            #     NO_DB_ROW               → "รับค่าจาก Pi"  (วัดแล้ว แค่ค่าไม่ถึง DB)
+            #   ห้ามให้หน้าเว็บไปเดาจากข้อความใน detail เพราะข้อความเปลี่ยนได้ตลอด
+            event = row["last_event"]
 
     # ALPL ที่กำลังวัดอยู่ — มาจากคิวของ Backend เท่านั้น
     number_alpl = None
@@ -863,91 +912,139 @@ async def report_measure_timeout(req: MeasureTimeoutRequest):
             "piece":       req.piece,
             "target":      req.target,
             "number_alpl": number_alpl,
-            "detail":      detail,
+            "event":       event,      # รหัสสาเหตุ — หน้าเว็บใช้เลือกปุ่ม
+            "detail":      detail,     # ข้อความไทย — เอาไว้แสดงให้คนอ่าน
         },
     )
     log.warning(
-        "Measure timeout: session=%s piece=%s alpl=%s — รอผู้ใช้ตัดสินใจ (สาเหตุ: %s)",
-        req.session_id, req.piece, number_alpl, detail or "ไม่ทราบ",
+        "Measure timeout: session=%s piece=%s alpl=%s event=%s — รอผู้ใช้ตัดสินใจ (สาเหตุ: %s)",
+        req.session_id, req.piece, number_alpl, event or "-", detail or "ไม่ทราบ",
     )
     return {"ok": True}
 
-@router.post("/api/session/continue")
-async def continue_session(body: SessionContinueRequest):
-    """ผู้ใช้กด "วัดชิ้นถัดไป" ใน modal — ข้ามชิ้นที่ไม่ได้ค่าแล้ววัดต่อ
+@router.post("/api/session/retry")
+async def retry_session(body: SessionContinueRequest):
+    """ผู้ใช้กด "ลองใหม่" ใน modal — สั่ง Pi ให้ลอง **ชิ้นเดิม** อีกครั้ง
 
-    ╔═══ เปลี่ยนจากการ poll เป็นการ push — 7 ส.ค. 2569 ═══════════════════════╗
-    เดิม Pi วน GET /api/measure-timeout/{id} ทุก 0.4 วิรอคำตอบ ตอนนี้ Backend
-    ยิง POST /command {"action":"continue"} ไปปลุก Pi แทน — Pi ตื่นทันทีที่คำตอบ
-    มาถึง ไม่ต้องรอรอบ poll และคำสั่งจากข้างนอกเข้าทาง /command ทางเดียวหมด
-    (start / stop / continue) เหมือนกันทั้งระบบ
-    ╚═══════════════════════════════════════════════════════════════════════╝
+    ╔═══ ทำไมไม่มี "ข้ามชิ้นนี้" (action `continue`) แล้ว — 22 ส.ค. 2569 ═══════╗
+    ของเดิมมี `/api/session/continue` ที่ข้ามชิ้นแล้ว `position += 1` ให้ แต่
+    **`Pi.py` ไม่เคยรองรับ action `continue` เลย** (ตอบ 400 กลับมา) ผลคือกดปุ่ม
+    แล้ว backend ขยับคิวไปเรียบร้อยแต่สั่ง Pi ไม่ผ่าน → 502 → **คิวเหลื่อมไป
+    หนึ่งช่องถาวรโดยไม่มีใครรู้** เป็นบั๊กแบบเดียวกับ `pause` ที่เคยเจอ
+    (`mockup.py` รองรับ แต่ Pi ไม่รองรับ → เทสต์ผ่านหมดแต่เครื่องจริงพัง)
 
-    ⚠ ลำดับสำคัญ: ต้องขยับ position + sync ลง DB ให้เสร็จ "ก่อน" ปลุก Pi
-      ไม่งั้น Pi อาจวัดชิ้นถัดไปเสร็จก่อนที่ UPDATE จะลง แล้วผลถูกแปะ ALPL ผิด
+    ตัดสินใจถอดทิ้งแทนที่จะไปเติมให้ Pi เพราะเคส "ข้ามชิ้นนี้แต่วัดที่เหลือต่อ"
+    ไม่เกิดขึ้นจริงหน้างาน — ชิ้นที่วัดไม่ได้ต้องเอามาวัดใหม่อยู่ดี
+    modal จึงเหลือ 2 ทาง: **หยุดการวัด** กับ **ลองใหม่**
+    ╚═══════════════════════════════════════════════════════════════════════════╝
 
-    ส่วน "หยุดการวัด" ใน modal ไม่ผ่านที่นี่ — หน้าเว็บเรียก POST /api/session/stop
+    ⚠⚠ **ห้ามใส่ `position += 1` ที่นี่เด็ดขาด** — นี่คือชิ้นเดิม ไม่ใช่ชิ้นถัดไป
+       ถ้าขยับ ผลที่กำลังจะได้มาจะถูกแปะ ALPL ตัวถัดไปทันที แล้วเลื่อนผิดทั้งคิว
+       (`number_alpl` ไม่ได้มาจาก Pi แต่ backend เลือกเองจาก `queue[position]`
+        ดู `create_measurement` — และตำแหน่งนั้นขยับที่เดียวคือตอน INSERT สำเร็จ)
+
+    ส่วน "หยุดการวัด" ไม่ผ่านที่นี่ — หน้าเว็บเรียก `POST /api/session/stop`
     ตรงๆ เพื่อให้เส้นทางการหยุด session มีทางเดียวตลอดทั้งระบบ
     """
     session_id = body.session_id
+
+    # คำถามค้างต้องมีอยู่จริง — กันกดปุ่มรัว ๆ (ยิง retry ซ้ำจะ set _answer_event
+    # หลายครั้งแล้ววนเกินโควตา) และกันกดหลัง modal หมดอายุ (Pi เลิกรอไปแล้ว)
     if measure_timeouts.get(session_id) is None:
         raise HTTPException(404, "ไม่พบคำถามค้างของ session นี้ (อาจหมดอายุไปแล้ว)")
-    measure_timeouts.pop(session_id, None)
+    pending = measure_timeouts.pop(session_id)
 
-    # ╔═══ ขยับตำแหน่งคิวตอนข้ามชิ้น — เริ่มส่วนที่เพิ่ม ═════════════════════╗
-    #
-    # บั๊กที่แก้: number_alpl ของแต่ละ measurement ไม่ได้มาจาก Agent แต่ Backend
-    # เลือกเองจาก "ตำแหน่งในคิว" (ดู create_measurement: number_alpl = queue[pos])
-    # และตำแหน่งนั้นขยับที่เดียวในระบบคือตอน INSERT สำเร็จ
-    #
-    # ชิ้นที่ผู้ใช้เลือกข้าม (action="continue") ไม่มี INSERT → ตำแหน่งไม่ขยับ →
-    # ผลวัดของ "ทุกชิ้นที่เหลือ" ถูกแปะ ALPL เลื่อนไปหมด:
-    #
-    #   คิว [A, B, C, D]
-    #   ชิ้น 1 (ของจริง A) → บันทึกเป็น A ✓   pos 0→1
-    #   ชิ้น 2 (ของจริง B) → บันทึกเป็น B ✓   pos 1→2
-    #   ชิ้น 3 (ของจริง C) → ข้าม            pos ค้างที่ 2
-    #   ชิ้น 4 (ของจริง D) → บันทึกเป็น C ✗   ← ผิด
-    #
-    # อันตรายกว่า "ข้อมูลหาย" เพราะข้อมูลหายเห็นได้จาก measured_count ที่ไม่ครบ
-    # แต่ข้อมูลผิด ALPL หน้าตาปกติทุกอย่าง ไม่มีใครรู้จนกว่าจะไปเทียบของจริง
-    #
-    # ทำไมแก้ตรงนี้: นี่คือจุดเดียวในระบบที่รู้ว่า "ผู้ใช้ตัดสินใจข้ามชิ้นนี้"
-    # (Pi แค่รับคำตอบไปเดินต่อ ไม่ได้บอก Backend อีกที)
-    #
-    # ⚠ ข้อจำกัดที่ยังเหลือ: ถ้าค่าของชิ้นที่ถูกข้ามมาถึงทีหลัง (FTP ช้ากว่า
-    #   MEASURE_TIMEOUT) มันจะไปกินตำแหน่งของชิ้นถัดไปแทน ยังแปะผิดอยู่ดี —
-    #   แต่เป็นเคสที่แคบกว่าเดิมมาก (ต้องมาถึงในช่วงหลังผู้ใช้กดตอบ แต่ก่อนที่
-    #   ชิ้นถัดไปจะวัดเสร็จ) ต่างจากของเดิมที่ผิด "ทุกชิ้นที่เหลือ" แน่นอน 100%
-    #   ปิดช่องนี้ได้ด้วย client_uuid = ts_key + เลข 10 หลัก (ดู IMPROVEMENT_PLAN.md)
-    qstate = session_queues.get(session_id)
-    if qstate is not None:
-        qstate["position"] += 1
-        db = get_db()
-        try:
-            with db.cursor() as cur:
-                cur.execute(
-                    "UPDATE sessions SET queue_state = %s WHERE session_id = %s",
-                    (json.dumps(qstate), session_id),
-                )
-        finally:
-            db.close()
-        log.info(
-            "Session %s: ข้ามชิ้นงาน — ขยับตำแหน่งคิวเป็น %d/%d เพื่อไม่ให้ "
-            "ชิ้นที่เหลือถูกแปะ ALPL ผิด",
-            session_id, qstate["position"], len(qstate.get("queue", [])),
-        )
-    # ╚═══ ขยับตำแหน่งคิวตอนข้ามชิ้น — จบส่วนที่เพิ่ม ═══════════════════════╝
-
-    # ปลุก Pi "หลัง" ขยับคิวเสร็จแล้วเท่านั้น (ดู docstring)
-    #
-    # ⚠ ต่างจาก stop: continue สั่งไม่ถึง = **Pi ยังรออยู่เฉยๆ ไม่มีอะไรเดินหน้า**
-    #   ตำแหน่งคิวถูกขยับไปแล้วฝั่ง backend แต่ Pi ไม่รู้ตัว จึงต้องบอกผู้ใช้ให้
-    #   ชัดว่ากดแล้วไม่ผ่าน จะได้กดซ้ำหรือไปกด Stop — ถ้าเงียบไว้ผู้ใช้จะยืนรอ
-    #   เครื่องที่ไม่มีวันขยับ
-    agent_err = await _notify_agent_action("continue", session_id)
+    # ⚠ ต่างจาก stop: retry สั่งไม่ถึง = **Pi ยังบล็อกรอคำตอบอยู่เฉย ๆ**
+    #   ไม่มีอะไรเดินหน้า ต้องบอกผู้ใช้ให้ชัดว่ากดแล้วไม่ผ่าน จะได้กดซ้ำหรือไป
+    #   กด Stop — ถ้าเงียบไว้ผู้ใช้จะยืนรอเครื่องที่ไม่มีวันขยับ
+    agent_err = await _notify_agent_action("retry", session_id)
     if agent_err:
-        raise HTTPException(502, f"สั่งให้ Pi วัดชิ้นถัดไปไม่สำเร็จ — {agent_err}")
+        # คืนคำถามค้างกลับไป — ยังสั่งไม่สำเร็จ Pi ยังรออยู่จริง ถ้าไม่คืน
+        # ผู้ใช้จะกดปุ่มไหนก็ได้ 404 หมดทั้งที่เครื่องยังค้างรอคำตอบ
+        measure_timeouts[session_id] = pending
+        raise HTTPException(502, f"สั่งให้ Pi ลองใหม่ไม่สำเร็จ — {agent_err}")
+
+    log.info("Session %s: ผู้ใช้เลือกลองใหม่ — ชิ้นเดิม ตำแหน่งคิวไม่ขยับ", session_id)
+    return {"ok": True}
+
+
+@router.post("/api/session/trigger")
+async def manual_trigger(body: SessionContinueRequest):
+    """ปุ่มจำลองสัญญาณทริกเกอร์บนหน้าเว็บ — ใช้ระหว่างที่ยังไม่ได้ต่อ MCU
+
+    **ทำไมต้องผ่าน Backend ไม่ให้เบราว์เซอร์ยิงตรงไปที่ Pi**
+    ① หน้าเว็บไม่ต้องรู้ IP ของ Pi — `AGENT_HOST` อยู่ใน .env ของ Backend อยู่แล้ว
+       ถ้ายิงตรงต้องฝัง IP ไว้ในหน้าเว็บ พอ Pi ย้ายเครื่องต้อง build ใหม่
+    ② ไม่ต้องเปิด CORS ที่ Pi (ตอนนี้ไม่ได้ตั้งไว้ ยิงตรงจากเบราว์เซอร์จะโดนบล็อก)
+    ③ เครื่องของ operator อาจเข้าถึง Pi ไม่ได้ แต่เข้าถึง Backend ได้แน่นอน
+       เพราะกำลังเปิดหน้าเว็บอยู่
+    ④ คงหลัก "ทุกคำสั่งไป Pi ผ่าน Backend ที่เดียว" เหมือน start/stop/retry/accept
+
+    **ไม่เช็คว่า session running ไหมที่นี่** — ปล่อยให้ Pi ตัดสิน เพราะมันเป็นคน
+    เดียวที่รู้ว่าตอนนี้ยืนรออยู่จริงหรือกำลังทำอย่างอื่น การเช็คสองที่จะทำให้
+    กฎเรื่องจังหวะไปอยู่ 2 แห่งแล้วเพี้ยนกันเมื่อฝั่งใดฝั่งหนึ่งถูกแก้
+    """
+    if not ALLOW_MANUAL_TRIGGER:
+        raise HTTPException(
+            403,
+            "ปุ่มทริกเกอร์มือถูกปิดไว้ (ALLOW_MANUAL_TRIGGER=0) — "
+            "ระบบใช้สัญญาณจาก MCU แล้ว",
+        )
+
+    agent_err = await _notify_agent_action("trigger", body.session_id)
+    if agent_err:
+        # ดึงเฉพาะ `detail` ออกมาถ้า Pi ตอบเป็น JSON — ข้อความดิบจาก
+        # _notify_agent_action มี HTTP status กับ JSON ห่ออยู่ ซึ่งอ่านยากบน toast
+        m = re.search(r'"detail"\s*:\s*"([^"]+)"', agent_err)
+        raise HTTPException(502, m.group(1) if m else agent_err)
+
+    return {"ok": True}
+
+
+@router.post("/api/session/accept")
+async def accept_session(body: SessionContinueRequest):
+    """ผู้ใช้กด "รับค่าจาก Pi (ไม่มีรูป)" ใน modal
+
+    ใช้เฉพาะเคสที่ `wait_for_measurement` ฝั่ง Pi หมดเวลา = **TM-X วัดสำเร็จแล้ว
+    แต่ค่าไม่ถึง DB** (`Recieve_tm-x.py` ไม่ได้รัน · FTP ไม่ถึง · POST ล้มเหลว)
+
+    ╔═══ ทำไมเคสนี้ไม่มี "ลองใหม่" ═══════════════════════════════════════════╗
+    ชิ้นงานถูกวัดไปแล้ว ตัดสิน OK/NG ไปแล้ว และ **MCU คัดแยกออกจากเครื่องไปแล้ว**
+    — ไม่มีอะไรเหลือให้วัดใหม่ สิ่งที่ขาดคือ *แถวใน DB* ไม่ใช่ *การวัด*
+    ถ้าสั่ง retry จะกลายเป็นวัดชิ้นถัดไปที่เพิ่งไหลเข้ามาแล้วบันทึกเป็นชิ้นนี้
+
+    Pi ถือค่าจาก GM ครบอยู่ในมือ จึงให้มัน POST /api/measurements เองแทน
+    (ดู `post_measurement_from_pi` ใน Pi.py) แถวที่ได้จะไม่มีรูปถาวร — Pi ตาม
+    ด้วย PATCH `upload_failed=True` เพื่อแยกจาก "รูปยังไม่มา" ที่ปกติแปลว่า
+    กำลังจะมาในไม่กี่วินาที
+    ╚═════════════════════════════════════════════════════════════════════════╝
+
+    ⚠⚠ **ห้ามใส่ `position += 1` ที่นี่** เหมือน `/retry` — แต่คนละเหตุผล:
+       `create_measurement` เป็นคนขยับ `position` ให้เองตอน INSERT สำเร็จ
+       ถ้าขยับที่นี่ด้วยจะกลายเป็นขยับ 2 ครั้งต่อชิ้นเดียว → ข้ามคิวไป 1 ตัว
+       → ผลของชิ้นถัดไปแปะ ALPL ผิด และ ALPL ที่ถูกข้ามจะหายไปเงียบ ๆ
+    """
+    session_id = body.session_id
+
+    # คำถามค้างต้องมีอยู่จริง — กันกดปุ่มรัว ๆ (ยิงซ้ำจะ set _answer_event หลายครั้ง)
+    # และกันกดหลัง modal หมดอายุไปแล้ว (Pi เลิกรอ เดินหน้าไปแล้ว)
+    if measure_timeouts.get(session_id) is None:
+        raise HTTPException(404, "ไม่พบคำถามค้างของ session นี้ (อาจหมดอายุไปแล้ว)")
+    pending = measure_timeouts.pop(session_id)
+
+    # ⚠ สั่งไม่ถึง = Pi ยังบล็อกรอคำตอบอยู่เฉย ๆ ไม่มีอะไรเดินหน้า
+    #   ต้องบอกผู้ใช้ให้ชัดว่ากดแล้วไม่ผ่าน จะได้กดซ้ำหรือไปกด Stop
+    agent_err = await _notify_agent_action("accept", session_id)
+    if agent_err:
+        # คืนคำถามค้าง — ยังสั่งไม่สำเร็จ Pi ยังรออยู่จริง ถ้าไม่คืน ผู้ใช้จะกด
+        # ปุ่มไหนก็ได้ 404 หมดทั้งที่เครื่องยังค้างรอคำตอบ
+        measure_timeouts[session_id] = pending
+        raise HTTPException(502, f"สั่งให้ Pi บันทึกค่าไม่สำเร็จ — {agent_err}")
+
+    log.info(
+        "Session %s: ผู้ใช้เลือกรับค่าจาก Pi (ไม่มีรูป) — Pi จะ POST measurement เอง",
+        session_id,
+    )
     return {"ok": True}
 
 @router.post("/api/heartbeat")
@@ -979,7 +1076,7 @@ def heartbeat(req: HeartbeatRequest):
     # ── ① memory: ทำก่อนเสมอ และไม่มีทางพลาด ──────────────────────────────
     # เป็นแหล่งความจริงของชิป PI · เขียนฟรี ไม่แตะ DB จึงไม่มีทาง raise
     # ต้องอยู่บรรทัดแรกสุด: ต่อให้ DB ล่มทั้งก้อน ชิปก็ยังบอกได้ถูกว่า Pi ยังอยู่
-    mark_pi_seen()
+    mark_pi_seen(req.waiting_for_trigger)
 
     # ── ② DB: เฉพาะตอนมี session ที่กำลังวัดอยู่ ───────────────────────────
     # Pi ว่าง (session_id เป็น None) → ไม่ต้องแตะ DB เลยสักครั้ง ซึ่งเป็นสถานะ

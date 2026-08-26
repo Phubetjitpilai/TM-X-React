@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { apiGet, apiPost, ApiError } from "../api/client";
 import { useSSE } from "../hooks/useSSE";
-import { useSessionState } from "../hooks/useSessionState";
+import { useSessionState, sessionStateLabel } from "../hooks/useSessionState";
 import { useToast } from "../components/Toast";
 import { useDialog } from "../components/Dialog";
 import AlplIcon from "../components/AlplIcon";
-import { ReportAxis, ReportOffset } from "../components/dashboard/ReportAxis";
+import { ReportAxis } from "../components/dashboard/ReportAxis";
+import OffsetMap from "../components/dashboard/OffsetMap";
 import IpmSummaryModal, { type IpmSummaryRow } from "../components/dashboard/IpmSummaryModal";
 import PartEntryModal, { type EntryQueue } from "../components/dashboard/PartEntryModal";
 
@@ -63,7 +64,13 @@ interface Measurement {
   nominal_y?: number | null;
   upper_tol?: number | null;
   lower_tol?: number | null;
-  offset?: number | null;
+  // ⚠ ไม่มี `offset` ตัวเดียวแล้ว — แยกเป็น 2 แกนตั้งแต่ถอดฝั่ง GH ออก
+  //   `offset_pos_op` เป็นรหัส 9 ค่าจาก `_get_min_position_label` ฝั่ง backend
+  //   (TOP / BOTTOM / LEFT / RIGHT / TOP LEFT / … / CENTER) — บอก "ทิศ"
+  //   ส่วน offset_opx/opy เป็น "ขนาด" ไม่มีเครื่องหมาย
+  offset_opx?: number | null;
+  offset_opy?: number | null;
+  offset_pos_op?: string | null;
   offset_tol?: number | null;
   measure_type?: string | null;
 }
@@ -85,11 +92,11 @@ interface Telemetry {
   /** ธงจาก backend ว่า offset ถูกนับเป็นเกณฑ์ไหม — false = โหมด IPM */
   offset_counts?: boolean;
   measure_type?: string | null;
-  offset_ghx?: number | null;
-  offset_ghy?: number | null;
+  // ⚠ ไม่มี offset_ghx / offset_ghy / offset_pos_gh แล้ว — เลิกใช้เครื่องมือฝั่ง GH
+  //   (ถอดออกจาก MeasurementCreate และตาราง measurements ไปแล้ว) backend
+  //   ไม่ได้ส่งมาใน SSE `measurement` อีกต่อไป
   offset_opx?: number | null;
   offset_opy?: number | null;
-  offset_pos_gh?: string | null;
   offset_pos_op?: string | null;
   result: string;
   measurement_id?: number;
@@ -115,6 +122,55 @@ function axisInfo(
   return { ok, range };
 }
 
+/* ── หน้าตา modal "ไม่ได้รับค่าการวัด" แยกตามสาเหตุ ───────────────────────
+ *
+ * เลือกจาก `event` (รหัส) ที่ backend แนบมากับ SSE `measure_timeout`
+ * **ห้ามเดาจากข้อความใน `detail`** เพราะข้อความเปลี่ยนได้ตลอดโดยไม่มีใครรู้ว่า
+ * มีโค้ดฝั่งนี้พึ่งพาอยู่
+ *
+ * แยกเป็น 2 พฤติกรรม เพราะ "ของยังอยู่ในเครื่องไหม" ต่างกันสิ้นเชิง:
+ *
+ *   T1_FAILED / GM_NO_VALUE → ยังไม่ได้ค่า **ชิ้นงานยังอยู่ในเครื่อง**
+ *                             → "ลองใหม่" = สั่งวัดชิ้นเดิมซ้ำ ปลอดภัย
+ *
+ *   NO_DB_ROW               → วัดแล้ว ตัดสินแล้ว **MCU คัดแยกออกไปแล้ว**
+ *                             → ไม่มีอะไรให้วัดใหม่ · Pi ถือค่าจาก GM อยู่
+ *                             → "รับค่าจาก Pi" = ให้ Pi POST ค่านั้นแทน (ไม่มีรูป)
+ *                             ⚠ ถ้าเผลอขึ้นปุ่ม "ลองใหม่" ในเคสนี้ จะกลายเป็นวัด
+ *                               ชิ้นถัดไปที่เพิ่งไหลเข้ามาแล้วบันทึกเป็นชิ้นนี้
+ *
+ * event ที่ไม่รู้จัก / เป็น null (Recieve ไม่เคยรายงาน เช่นไม่ได้รันอยู่เลย)
+ * → ตกมาที่ค่าเริ่มต้น "ลองใหม่" ซึ่งเป็นตัวเลือกที่ปลอดภัยกว่า
+ */
+type MtAction = "retry" | "accept";
+interface MtView {
+  title: string; body: string; question: string; hint: React.ReactNode;
+  action: MtAction; actionLabel: string;
+}
+
+const MT_RETRY: MtView = {
+  title: "⚠ ไม่ได้รับค่าการวัด",
+  body: "ไม่ได้รับค่าการวัดกลับมาภายในเวลาที่กำหนด",
+  question: "ต้องการให้ลองวัดชิ้นเดิมอีกครั้งหรือไม่?",
+  hint: <>สาเหตุที่พบบ่อย — TM-X วัดไม่ติด (ชิ้นงานวางไม่เข้าที่ / เลนส์สกปรก)
+        หรือ TM-X ยังไม่พร้อมรับคำสั่งวัด</>,
+  action: "retry",
+  actionLabel: "ลองใหม่",
+};
+
+const MT_ACCEPT: MtView = {
+  title: "⚠ ค่าไม่ถึงฐานข้อมูล",
+  body: "วัดสำเร็จแล้ว แต่ค่าไม่ถูกบันทึกลงฐานข้อมูลภายในเวลาที่กำหนด",
+  question: "ต้องการรับค่าที่ Pi อ่านไว้แทนหรือไม่? (จะไม่มีรูปของชิ้นนี้)",
+  hint: <>ชิ้นงานถูกวัดและคัดแยกไปแล้ว จึงวัดใหม่ไม่ได้ — Pi ยังถือค่าไว้ครบ
+        <br />สาเหตุที่พบบ่อย — <strong>Recieve_tm-x.py</strong> ไม่ได้รันอยู่
+        หรือ TM-X ส่งไฟล์มาไม่ถึงเครื่อง PC</>,
+  action: "accept",
+  actionLabel: "รับค่าจาก Pi",
+};
+
+const mtView = (event?: string | null): MtView =>
+  event === "NO_DB_ROW" ? MT_ACCEPT : MT_RETRY;
 
 
 export default function DashboardPage() {
@@ -171,9 +227,15 @@ export default function DashboardPage() {
    *  มีนับถอยหลัง — ไม่ตอบภายในเวลาจะหยุดให้อัตโนมัติ ดีกว่าปล่อยเครื่องค้าง
    *  ข้ามคืนเพราะคนเดินออกจากหน้าจอไปแล้ว
    */
+  // เวลาที่ให้คนตัดสินใจก่อนหยุดให้อัตโนมัติ (วินาที) — ปรับตรงนี้ที่เดียว
+  //
+  // ⚠ ต้อง **น้อยกว่า** `ASK_USER_TIMEOUT` ของ Pi/mockup (ตั้งไว้ 90 วิใน .env)
+  //   เพราะฝั่งนั้นคือตาข่ายกันค้างตอนไม่มีใครเปิดหน้าเว็บอยู่เลย ถ้าตัวนี้ยาว
+  //   กว่า Pi จะยอมแพ้ไปก่อนแล้วปุ่มในโมดัลจะกดไม่ติด (backend ตอบ 404
+  //   "ไม่พบคำถามค้าง") ทั้งที่หน้าจอยังนับถอยหลังอยู่
   const MT_ANSWER_TIMEOUT = 60;
   const [mtModal, setMtModal] = useState<
-    { session_id: number; piece?: number; target?: number; number_alpl?: number; detail?: string } | null
+    { session_id: number; piece?: number; target?: number; number_alpl?: number; detail?: string; event?: string} | null
   >(null);
   const [mtLeft, setMtLeft] = useState(MT_ANSWER_TIMEOUT);
   const mtTimerRef = useRef<number | null>(null);
@@ -251,6 +313,7 @@ export default function DashboardPage() {
     session_timeout: () => onSessionTimeout(),
     image_updated: (d) => onImageUpdated(d),
     measure_timeout: (d) => onMeasureTimeout(d),
+    station_event: (d) => onStationEvent(d),
   });
   const stationStatusRef = useRef(stationStatus);
   stationStatusRef.current = stationStatus;
@@ -258,9 +321,25 @@ export default function DashboardPage() {
   // ── สถานะ Pi + DB ────────────────────────────────────────────────────────
   // มาจาก /api/session/state ที่ poll อยู่แล้วทุก 4 วิ — ไม่ได้เพิ่ม request ใหม่
   // (useSessionState dedupe ให้ตาม queryKey แม้ Layout จะเรียกซ้ำอีกที)
-  const { piStatus, dbOffline: dbDown } = useSessionState();
+  const { piStatus, dbOffline: dbDown, triggerReady, manualTrigger } = useSessionState();
   const piOnline = piStatus === true;
   const dbOffline = !!dbDown;
+
+  /* ── ปุ่มจำลองสัญญาณทริกเกอร์ — ใช้ระหว่างที่ยังไม่ได้ต่อ MCU ──────────────
+     ยิงไปที่ Backend ไม่ใช่ที่ Pi โดยตรง (ดูเหตุผลใน manual_trigger ฝั่ง backend)
+
+     ⚠ ปุ่มยังกดพลาดจังหวะได้ถึงแม้จะสว่างอยู่ — heartbeat มาทุก 2 วิ แล้วหน้าเว็บ
+       poll ทุก 4 วิ ค่าที่เห็นจึงเก่าได้ถึง ~6 วินาที จังหวะอาจเปลี่ยนไปแล้ว
+       ตอนที่กด **จึงต้องมี toast บอกเหตุผลเสมอ** ห้ามให้ปุ่มเงียบ ไม่งั้น
+       operator จะกดรัวแล้วคิดว่าระบบพัง                                      */
+  async function sendManualTrigger() {
+    try {
+      await apiPost("/api/session/trigger", { session_id: session?.session_id });
+      showToast("⚡ ส่งสัญญาณแล้ว");
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : "ส่งสัญญาณไม่สำเร็จ");
+    }
+  }
 
   // ── localStorage persistence (ipmQueue/newQueue/reworkQueue/telemetry) ──
   function savePartEntryState() {
@@ -487,6 +566,25 @@ export default function DashboardPage() {
   async function onNewMeasurement(d: any) {
     // มีของใหม่จริงแล้ว → ปลดธง "ล้างจอไว้" ให้จอกลับมาแสดงตามปกติเอง
     clearedSidRef.current = null;
+
+    // ⚠ ค่ามาถึงระหว่างที่ modal เปิดรอคำตอบอยู่ (FTP ส่งช้ากว่า MEASURE_TIMEOUT
+    //   แต่มาถึงจริง) → ปิด modal ทิ้งเงียบ ๆ เพราะคำถามหมดความหมายแล้ว
+    //   ถ้าไม่ปิด ผู้ใช้อาจกด "รับค่าจาก Pi" ทั้งที่ค่าลง DB ไปแล้ว → 2 แถวต่อ
+    //   ชิ้นเดียว → position ขยับ 2 → ALPL เลื่อนทั้งคิว
+    //   (Pi เช็ค measured_count ซ้ำก่อน POST อยู่แล้ว — ตัวนี้เป็นชั้นกันที่สอง
+    //    และทำให้ผู้ใช้ไม่ต้องมานั่งงงว่าจะกดอะไรดี)
+    // ⚠ ห้ามเรียก showToast() ข้างใน updater ของ setMtModal — updater ต้องเป็น
+    //   ฟังก์ชันบริสุทธิ์ StrictMode เรียกมัน **2 ครั้ง** ตอน dev (toast เด้ง 2 อัน)
+    //   และการ setState ของ ToastProvider ระหว่างที่ DashboardPage กำลัง render
+    //   ทำให้ React โยน "Cannot update a component while rendering a different one"
+    //   อ่านค่าปัจจุบันจาก closure ได้อยู่แล้ว เพราะ useSSE เก็บ handler ล่าสุด
+    //   ไว้ใน ref (อัปเดตทุก render)
+    if (mtTimerRef.current) { window.clearInterval(mtTimerRef.current); mtTimerRef.current = null; }
+    if (mtModal) {
+      showToast("ค่ามาถึงแล้ว — ปิดคำถามอัตโนมัติ");
+      setMtModal(null);
+    }
+
     updateSession({ measured_count: d.measured, target_count: d.target });
     applyTelemetry(d);
     // เก็บผลรายชิ้นไว้ระบายสีชิปในแถบคิว — d.measured คือลำดับที่ 1..n
@@ -510,31 +608,62 @@ export default function DashboardPage() {
     setMtModal(d);
     setMtLeft(MT_ANSWER_TIMEOUT);
     if (mtTimerRef.current) window.clearInterval(mtTimerRef.current);
+
+    // ⚠ นับถอยหลังด้วยตัวแปรใน closure ไม่ใช่ค่าใน updater ของ setMtLeft —
+    //   ของเดิมเรียก resolveMeasureTimeout() (ซึ่ง setState หลายตัว + ยิง fetch)
+    //   อยู่ข้างใน updater ที่ต้องเป็นฟังก์ชันบริสุทธิ์ StrictMode เรียก updater
+    //   2 ครั้งตอน dev → หยุด session ซ้อนกัน 2 ครั้ง
+    let left = MT_ANSWER_TIMEOUT;
     mtTimerRef.current = window.setInterval(() => {
-      setMtLeft((v) => {
-        if (v <= 1) { resolveMeasureTimeout("stop"); return 0; }
-        return v - 1;
-      });
+      left -= 1;
+      setMtLeft(left);
+      if (left <= 0) {
+        if (mtTimerRef.current) { window.clearInterval(mtTimerRef.current); mtTimerRef.current = null; }
+        resolveMeasureTimeout("stop");
+      }
     }, 1000);
   }
 
-  async function resolveMeasureTimeout(action: "stop" | "continue") {
+  /** เครื่องหน้างานรายงานว่าเกิดอะไรขึ้น (Pi หรือ Recieve_tm-x.py)
+   *
+   *  ⚠ **ไม่ใช่ตัวที่เด้ง modal** — modal มาจาก `measure_timeout` เท่านั้น
+   *    ตัวนี้คือการ "แจ้งให้รู้" เฉย ๆ บางเรื่องแจ้งแล้วจบ ไม่มีใครต้องตอบ
+   *    (เช่น IMAGE_UPLOAD_FAILED ที่ค่าลง DB ไปแล้ว แค่รูปไม่ขึ้น)
+   *
+   *  ก่อนหน้านี้ backend ยิง event นี้ออกมาตลอดแต่ **ไม่มีใครรับ** — สาเหตุ
+   *  ของปัญหาเดินทางไปถึงเบราว์เซอร์แล้วตกพื้นเงียบ ๆ ทุกครั้ง
+   */
+  function onStationEvent(d: any) {
+    const detail = d?.detail ? `: ${d.detail}` : "";
+    showToast(`⚠ ${d?.event ?? "STATION_EVENT"}${detail}`);
+  }
+
+  // ⚠ ถอด "ข้ามชิ้นนี้" (action `continue`) ออกแล้ว — 22 ส.ค. 2569
+  //   `Pi.py` ไม่เคยรองรับ action นั้นเลย (ตอบ 400) กดแล้ว backend ขยับตำแหน่ง
+  //   คิวไปเรียบร้อยแต่สั่ง Pi ไม่ผ่าน → คิวเหลื่อมหนึ่งช่องถาวรโดยไม่มีใครรู้
+  async function resolveMeasureTimeout(action: "stop" | "retry" | "accept") {
     if (mtTimerRef.current) { window.clearInterval(mtTimerRef.current); mtTimerRef.current = null; }
     const sid = mtModal?.session_id ?? null;
     setMtModal(null);
     if (sid == null) return;
 
-    // เลือกหยุด (หรือหมดเวลา) → เดินเส้นทางเดียวกับปุ่ม Stop ทุกประการ
-    // ตั้งใจไม่ให้มีทางที่สองที่ปิด session ได้
-    if (action === "stop") { await stopSession(); return; }
+    // เลือกหยุด (หรือหมดเวลา) → วิ่งเข้า POST /api/session/stop เส้นเดียวกับ
+    // ปุ่ม Stop ทุกประการ ตั้งใจไม่ให้มีทางที่สองที่ปิด session ได้
+    //
+    // ⚠ เรียก `doStopSession` ไม่ใช่ `stopSession` — ตัวหลังมี dialog ถามยืนยัน
+    //   ซึ่งผิดทั้ง 2 กรณีที่มาถึงตรงนี้: หมดเวลา 60 วิ (ไม่มีคนอยู่ให้กด → ค้าง
+    //   ตลอดกาล ไม่มีอะไรหยุดเลย) และกด "หยุดการวัด" ในโมดัล (เพิ่งเลือกไปหมาด ๆ)
+    //   ⚠ ส่ง sid ของโมดัลไปด้วย ไม่ใช้ `session.session_id` จาก state เพราะ
+    //     closure อาจถือค่าเก่าอยู่ ณ จังหวะที่ timer ยิง
+    if (action === "stop") { await doStopSession(sid); return; }
 
     try {
-      await apiPost("/api/session/continue", { session_id: sid });
+      await apiPost(`/api/session/${action}`, { session_id: sid });
     } catch (e: any) {
-      // 502 = backend ยิง /command continue ไปแล้วแต่ Pi ไม่รับ — ตำแหน่งคิวถูก
-      // ขยับไปแล้วฝั่ง backend แต่ Pi ไม่รู้ตัว มันจะรออยู่เฉย ๆ
-      // ถ้าเงียบไว้ผู้ใช้จะยืนรอเครื่องที่ไม่มีวันขยับ
-      showToast(`ส่งคำตอบไม่สำเร็จ: ${e?.message ?? ""} — กด Stop เพื่อหยุดการวัด`);
+      // 502 = backend ยิง /command ไปแล้วแต่ Pi ไม่รับ — Pi ยังบล็อกรอคำตอบอยู่
+      // เฉย ๆ ไม่มีอะไรเดินหน้า ถ้าเงียบไว้ผู้ใช้จะยืนรอเครื่องที่ไม่มีวันขยับ
+      // (backend คืนคำถามค้างให้แล้ว กดซ้ำได้)
+      showToast(`ส่งคำตอบไม่สำเร็จ: ${e?.message ?? ""} — กดใหม่อีกครั้ง หรือกด Stop`);
     }
   }
 
@@ -672,26 +801,47 @@ export default function DashboardPage() {
   const barNgPct = barTotal ? (stats.ng / barTotal) * 100 : 0;
 
   const hasQueue = !!entryQueue;
+
+  /* ── ทำไมเช็ค `!== "offline"` ไม่ใช่ `=== "online"` ──────────────────────
+     `stationStatus` เริ่มต้นเป็น "connecting" เสมอ และเปลี่ยนเป็น "online"
+     ก็ต่อเมื่อ `es.onopen` ทำงาน — แต่ตอนเปิดหน้าครั้งแรก แอปยิงคำขอพรวดเดียว
+     เป็นสิบตัว (parts · measurements · lookup 5 ตัว · session/state) เบราว์เซอร์
+     จำกัดการเชื่อมต่อต่อโดเมนไว้ราว 6 ช่อง **สาย SSE จึงต้องต่อคิว** กว่าจะเปิด
+
+     ของเดิมใช้ `=== "online"` ผลคือปุ่ม Start ถูกล็อกค้างอยู่หลายวินาทีตอนเปิด
+     หน้าครั้งแรก แล้วพอกด Save รอบต่อไปกลับปลดล็อกทันที (เพราะสายเปิดค้างแล้ว)
+     — อาการที่หาสาเหตุยากมากเพราะดูเหมือนเกี่ยวกับปุ่ม Save ทั้งที่ไม่ใช่
+
+     **"connecting" ไม่ใช่สถานะล้มเหลว** จึงไม่ควรบล็อก ปลอดภัยเพราะ `piOnline`
+     แข็งแรงกว่าอยู่แล้ว — เป็น true ได้ก็ต่อเมื่อ poll สำเร็จ *และ* backend ตอบ
+     ว่า Pi ยังมีชีวิต ซึ่งพิสูจน์ว่า backend ติดต่อได้แน่นอน ไม่ต้องรอสายที่สอง
+     มายืนยันซ้ำ (กติกาเดียวกับป้ายสถานะใน Layout.tsx ที่แก้ไปแล้ว)          */
   const canStart =
-    session.state !== "running" && stationStatus === "online" && !dbOffline && piOnline && hasQueue;
+    session.state !== "running" && stationStatus !== "offline" && !dbOffline && piOnline && hasQueue;
 
   // ปุ่มต้องบอก "ติดอะไรอยู่" ไม่ใช่แค่กดไม่ได้เฉยๆ — ไม่งั้นผู้ใช้จะนึกว่าระบบพัง
   // แล้วไปไล่หาที่ฟอร์ม Part Entry ทั้งที่ปัญหาอยู่ที่เครื่อง
   // เรียง DB ก่อน Pi เพราะ DB ล่มแล้วกด Start ไม่ได้แน่นอนไม่ว่า Pi จะเป็นยังไง
   // (start_session ต้องเขียน session ลง DB ก่อน) และเป็นอย่างเดียวที่ผู้ใช้แก้เองได้
+  // ⚠ ทุกเงื่อนไขใน canStart ต้องมีสาขาของตัวเองที่นี่ ไม่งั้นปุ่มจะถูกล็อก
+  //   โดยที่ป้ายยังขึ้นว่าพร้อมใช้งาน — ของเดิม stationStatus ไม่มีสาขาเลย
+  //   ปุ่มเลยขึ้น "▶ Start (IPM ×3)" ดูปกติทุกอย่างแต่กดไม่ได้ tooltip ก็ว่าง
   const startLabel =
-    session.state === "running" ? "▶ Start"
-    : dbOffline                 ? "▶ Start (DB Offline)"
-    : piStatus === false        ? "▶ Start (Pi Offline)"
-    : !piOnline                 ? "▶ Start (Waiting for Pi)"
-    : entryQueue                ? `▶ Start (${entryQueue.mode} ×${entryQueue.list.length})`
-    :                             "▶ Start (กด Save ก่อน)";
+    session.state === "running"   ? "▶ Start"
+    : dbOffline                   ? "▶ Start (DB Offline)"
+    : stationStatus === "offline" ? "▶ Start (Server Offline)"
+    : piStatus === false          ? "▶ Start (Pi Offline)"
+    : !piOnline                   ? "▶ Start (Waiting for Pi)"
+    : entryQueue                  ? `▶ Start (${entryQueue.mode} ×${entryQueue.list.length})`
+    :                               "▶ Start (กด Save ก่อน)";
 
   const startTitle =
-    dbOffline            ? "Backend ต่อฐานข้อมูลไม่ได้ — เริ่มการวัดไม่ได้เพราะต้องเขียน session ลง DB ก่อน · ตรวจว่า MySQL ทำงานอยู่ไหม"
-    : piStatus === false ? "ไม่ได้รับสัญญาณจาก Pi เกินเวลาที่กำหนด — ตรวจว่า Pi.py รันอยู่ไหม · สาย LAN"
-    : !piOnline          ? "ยังไม่เคยได้รับ heartbeat จาก Pi ตั้งแต่ Backend เริ่มทำงาน — รอสักครู่ ถ้าไม่หายให้ตรวจว่า Pi.py รันอยู่ไหม"
-    :                      "";
+    dbOffline                     ? "Backend ต่อฐานข้อมูลไม่ได้ — เริ่มการวัดไม่ได้เพราะต้องเขียน session ลง DB ก่อน · ตรวจว่า MySQL ทำงานอยู่ไหม"
+    : stationStatus === "offline" ? "ขาดการเชื่อมต่อกับ Backend — ตรวจว่า uvicorn ยังรันอยู่ไหม · ลองรีเฟรชหน้าเว็บ"
+    : piStatus === false          ? "ไม่ได้รับสัญญาณจาก Pi เกินเวลาที่กำหนด — ตรวจว่า Pi.py รันอยู่ไหม · สาย LAN"
+    : !piOnline                   ? "ยังไม่เคยได้รับ heartbeat จาก Pi ตั้งแต่ Backend เริ่มทำงาน — รอสักครู่ ถ้าไม่หายให้ตรวจว่า Pi.py รันอยู่ไหม"
+    : !hasQueue                   ? "ยังไม่มีคิวที่จะวัด — กรอกฟอร์ม Part Entry แล้วกด Save ก่อน"
+    :                               "";
 
   // Operator / Measure Type ของ session ที่กำลังวัด — แกะจาก queue_state ที่
   // backend แนบมากับ /api/session/state (ไม่ได้เก็บเป็นคอลัมน์แยกในตาราง sessions)
@@ -755,14 +905,26 @@ export default function DashboardPage() {
   }
 
 
-  async function stopSession() {
-    if (!await dialog.confirm("หยุด session ที่กำลังวัดอยู่ตอนนี้",
-                              { title: "หยุดการวัด", okLabel: "■ หยุด", danger: true })) return;
+  /** หยุด session จริง ๆ — **ไม่ถามยืนยัน**
+   *
+   *  ⚠ แยกออกจาก `stopSession()` เพราะบางเส้นทาง "ตัดสินใจไปแล้ว" ห้ามถามซ้ำ:
+   *    • โมดัลนับถอยหลังครบ 60 วิ → มีไว้สำหรับตอน **ไม่มีคนอยู่** ถ้าเด้ง
+   *      confirm ขึ้นมามันจะค้างรอคนกดตลอดกาล = ไม่มีอะไรหยุดเลย
+   *    • ผู้ใช้กด "หยุดการวัด" ในโมดัล → เพิ่งเลือกไปหมาด ๆ ถามซ้ำไม่มีประโยชน์
+   */
+  async function doStopSession(sid?: number | null) {
     try {
-      await apiPost("/api/session/stop", { session_id: session.session_id });
+      await apiPost("/api/session/stop", { session_id: sid ?? session.session_id });
     } catch (e) {
       dialog.alert(e instanceof ApiError ? e.message : "หยุด session ไม่สำเร็จ", { title: "หยุดการวัดไม่สำเร็จ" });
     }
+  }
+
+  /** ปุ่ม Stop บน Session Control — ถามยืนยันก่อน เพราะกดโดนง่ายระหว่างวัดอยู่ */
+  async function stopSession() {
+    if (!await dialog.confirm("หยุด session ที่กำลังวัดอยู่ตอนนี้",
+                              { title: "หยุดการวัด", okLabel: "■ หยุด", danger: true })) return;
+    await doStopSession();
   }
 
 
@@ -814,7 +976,8 @@ export default function DashboardPage() {
             <div className="session-row">
               <div className="session-chip">
                 <span className="sc-label">Status</span>
-                <span className={`session-state-badge ${session.state}`}>{session.state.toUpperCase()}</span>
+                {/* คลาสยังใช้ค่าดิบ (`timeout`) — เปลี่ยนเฉพาะข้อความ ดู sessionStateLabel */}
+                <span className={`session-state-badge ${session.state}`}>{sessionStateLabel(session.state)}</span>
               </div>
               {sessionOperator && (
                 <div className="session-chip">
@@ -846,6 +1009,20 @@ export default function DashboardPage() {
                 <button className="btn-start" disabled={!canStart} title={startTitle} onClick={startFromQueue}>
                   {startLabel}
                 </button>
+                {isRunning && manualTrigger && (
+                  <button
+                    className="btn-trigger"
+                    disabled={!triggerReady}
+                    title={
+                      triggerReady
+                        ? "ส่งสัญญาณให้เริ่มวัดชิ้นนี้ (แทน MCU ชั่วคราว)"
+                        : "ยังไม่ถึงจังหวะ — ระบบกำลังโหลดโปรแกรมวัด หรือกำลังรอผลของชิ้นก่อนหน้าอยู่"
+                    }
+                    onClick={sendManualTrigger}
+                  >
+                    ⚡ Trigger
+                  </button>
+                )}
                 {isRunning && (
                   <button className="btn-stop" onClick={stopSession}>
                     ■ Stop
@@ -906,48 +1083,42 @@ export default function DashboardPage() {
                     </div>
                     <div className="tc-range">{telemetry ? axY.range : ""}</div>
                   </div>
-                  {/* Offset 4 แกน — แสดงทุกโหมด */}
-                  <div className="telemetry-cell offset">
-                    <div className="tc-head">
-                      <span className="tc-label">Offset GH-X</span>
-                    </div>
-                    <div className="tc-value">
-                      {telemetry?.offset_ghx != null ? Number(telemetry.offset_ghx).toFixed(3) : "—"}
-                      <span> mm</span>
-                    </div>
-                  </div>
-                  <div className="telemetry-cell offset">
-                    <div className="tc-head">
-                      <span className="tc-label">Offset GH-Y</span>
-                    </div>
-                    <div className="tc-value">
-                      {telemetry?.offset_ghy != null ? Number(telemetry.offset_ghy).toFixed(3) : "—"}
-                      <span> mm</span>
-                    </div>
-                  </div>
-                  <div className="telemetry-cell offset">
-                    <div className="tc-head">
-                      <span className="tc-label">Offset OP-X</span>
-                    </div>
-                    <div className="tc-value">
-                      {telemetry?.offset_opx != null ? Number(telemetry.offset_opx).toFixed(3) : "—"}
-                      <span> mm</span>
-                    </div>
-                  </div>
-                  <div className="telemetry-cell offset">
-                    <div className="tc-head">
-                      <span className="tc-label">Offset OP-Y</span>
-                    </div>
-                    <div className="tc-value">
-                      {telemetry?.offset_opy != null ? Number(telemetry.offset_opy).toFixed(3) : "—"}
-                      <span> mm</span>
-                    </div>
-                  </div>
+                  {/* ── Offset 2 แกน — ซ่อนทั้งคู่ในโหมด IPM ─────────────────
+                      IPM ใช้เกณฑ์จากตาราง `package_size` ซึ่ง **ไม่เอา offset
+                      มาตัดสิน OK/NG เลย** (ดู `_offset_limit` ฝั่ง backend)
+                      ค่ายังถูกบันทึกลง DB ครบ ดูได้จาก Export/Power BI แค่ไม่เอา
+                      มารกหน้าจอที่คนหน้าเครื่องใช้ตัดสินใจ — เหตุผลเดียวกับที่
+                      `ReportAxis` ซ่อนการ์ด Offset ในโหมดนี้อยู่แล้ว
+
+                      ⚠ ใช้ `offset_counts` จาก backend เป็นหลัก (มันคือคำตอบของ
+                        `_offset_limit` ตัวจริง) แล้วค่อย fallback ไปดูโหมดของ
+                        session — ห้ามเทียบ `sessionMode === "IPM"` อย่างเดียว
+                        เพราะกฎว่าโหมดไหนนับ offset อยู่ที่ backend ที่เดียว
+                        ถ้าวันหลังกฎเปลี่ยน หน้าเว็บจะตามเองโดยไม่ต้องแก้
+
+                      ⚠ ถอดช่อง GH-X / GH-Y ออกแล้ว — เลิกใช้เครื่องมือฝั่ง GH
+                        (ถอดออกจาก MeasurementCreate + ตาราง measurements) */}
                 </div>
                 <div className={`telemetry-result-col${telemetry ? (telemetry.result === "OK" ? " ok" : " ng") : ""}`}>
                   <div className="telemetry-result-label">Result</div>
                   <div className={`telemetry-result-value${telemetry ? (telemetry.result === "OK" ? " ok" : " ng") : ""}`}>{telemetry?.result ?? "—"}</div>
                 </div>
+                {/* ⚠ ต้องเป็นลูกโดยตรงของ `.telemetry-grid` — ถ้าไปอยู่ใน
+                    `.telemetry-xy-col` (ซึ่งเป็น flex column) `grid-column` จะ
+                    ไม่มีผลเลย การ์ดจะแคบอยู่ในคอลัมน์ซ้ายเหมือนเดิม */}
+                {(telemetry?.offset_counts ??
+                  (sessionMode ?? "").toUpperCase() !== "IPM") && (
+                  <div className="telemetry-cell offset telemetry-offset-cell">
+                    <OffsetMap
+                      title="Offset Opening"
+                      offsetX={telemetry?.offset_opx}
+                      offsetY={telemetry?.offset_opy}
+                      posCode={telemetry?.offset_pos_op}
+                      offsetTol={telemetry?.offset_tol}
+                      measureType={telemetry?.measure_type}
+                    />
+                  </div>
+                )}
               </div>
               {/* แถบคิว ALPL — **ซ่อนเฉพาะตอนไม่มีคิวเลย** เท่านั้น
                   ⚠ เดิม vanilla ซ่อนเมื่อคิว ≤ 1 ด้วยเหตุผลว่า "ตัวเดียวไม่มีอะไร
@@ -1128,7 +1299,7 @@ export default function DashboardPage() {
                     <th className="th-spec">Offset Tol</th>
                     <th>Value X</th>
                     <th>Value Y</th>
-                    <th>Offset</th>
+                    <th>Offset X/Y</th>
                     <th>Result</th>
                     <th>Note</th>
                     <th>Operator</th>
@@ -1147,6 +1318,9 @@ export default function DashboardPage() {
                       const ts = m.timestamp ? new Date(m.timestamp).toLocaleString() : "—";
                       const res = m.result || "—";
                       const cls = res === "OK" ? "ok" : res === "NG" ? "ng" : "";
+                      // โหมดของ "แถวนี้" ไม่ใช่โหมดของ session ปัจจุบัน — ตารางนี้
+                      // แสดงข้อมูลย้อนหลังที่ปนกันทุกโหมด
+                      const isIpm = (m.measure_type ?? "").toUpperCase() === "IPM";
                       return (
                         <tr key={m.measurement_id} data-clickable className={highlightId === m.measurement_id ? "highlight-new" : ""} onClick={() => openReportModal(m.measurement_id)}>
                           <td>{m.measurement_id}</td>
@@ -1162,15 +1336,31 @@ export default function DashboardPage() {
                               ? `+${Number(m.upper_tol).toFixed(3)} / -${Number(m.lower_tol).toFixed(3)}`
                               : "—"}
                           </td>
-                          {/* offset_tol เป็น null = โหมด IPM ที่ไม่เอา offset มาตัดสิน
-                              เขียน "ไม่ใช้" ให้ชัด ดีกว่าขีดกลางที่อ่านได้ว่า
-                              "ไม่มีข้อมูล" ซึ่งคนละความหมายกัน */}
+                          {/* ── โหมด IPM ไม่เอา offset มาตัดสิน → 2 คอลัมน์นี้เป็น "—"
+                              ค่ายังอยู่ใน DB ครบ (ดูได้จาก Export/Power BI) แค่ไม่
+                              เอามาแสดงในตารางที่คนหน้าเครื่องใช้ตัดสินใจ เพราะมัน
+                              ไม่มีส่วนร่วมกับผล OK/NG ของแถวนั้นเลย — กติกาเดียวกับ
+                              ที่ Live Telemetry กับ ReportModal ซ่อนการ์ด Offset
+
+                              ⚠ ดูจาก `measure_type` ของ **แถวนั้น** ไม่ใช่โหมดของ
+                                session ปัจจุบัน — ตารางแสดงข้อมูลย้อนหลังปนกันทุกโหมด */}
                           <td className="td-spec">
-                            {m.offset_tol != null ? Number(m.offset_tol).toFixed(3) : "ไม่ใช้"}
+                            {isIpm ? "—"
+                              : m.offset_tol != null ? Number(m.offset_tol).toFixed(3)
+                              : "ยังไม่ตั้ง"}
                           </td>
                           <td>{m.value_x != null ? Number(m.value_x).toFixed(3) : "—"}</td>
                           <td>{m.value_y != null ? Number(m.value_y).toFixed(3) : "—"}</td>
-                          <td>{m.offset != null ? Number(m.offset).toFixed(3) : "—"}</td>
+                          {/* ⚠ ตั้งใจไม่ใส่ผัง <OffsetMap compact> ตรงนี้ — ตารางนี้มี
+                              13 คอลัมน์อยู่แล้ว รูปเล็ก ๆ ซ้ำทุกแถวทำให้แถวสูงขึ้น
+                              และเบียดคอลัมน์อื่นโดยได้ข้อมูลเพิ่มน้อย · ทิศทางดูได้
+                              จากรายงานที่กดเปิดทีละแถวอยู่แล้ว */}
+                          <td>
+                            {isIpm ? "—"
+                              : m.offset_opx != null && m.offset_opy != null
+                                ? `${Number(m.offset_opx).toFixed(3)} / ${Number(m.offset_opy).toFixed(3)}`
+                                : "—"}
+                          </td>
                           <td>
                             <span className={`result-badge ${cls}`}>{res}</span>
                           </td>
@@ -1227,23 +1417,25 @@ export default function DashboardPage() {
       )}
 
       {/* ── Measure timeout ────────────────────────────────────────────────
-          Pi ยิง T1 แล้วไม่ได้รับค่ากลับมาภายในเวลาที่กำหนด
           ⚠ ตั้งใจ **ไม่มีปุ่มปิด (✕) และคลิกพื้นหลังปิดไม่ได้** เพราะเครื่องฝั่ง Pi
-            กำลังค้างรอคำตอบอยู่จริง ๆ ถ้าปิดทิ้งเฉย ๆ session จะค้างโดยไม่มีใครรู้ */}
-      {mtModal && (
+            กำลังค้างรอคำตอบอยู่จริง ๆ ถ้าปิดทิ้งเฉย ๆ session จะค้างโดยไม่มีใครรู้
+          หน้าตา/ปุ่มเปลี่ยนตาม `event` ที่ backend แนบมา — ดู MT_VIEW */}
+      {mtModal && (() => {
+        const v = mtView(mtModal.event);
+        return (
         <div className="modal-overlay open">
           <div className="pe-modal-box" style={{ maxWidth: 480 }}>
             <div className="pe-modal-header">
-              <div className="card-title">⚠ ไม่ได้รับค่าการวัด</div>
+              <div className="card-title">{v.title}</div>
             </div>
             <div style={{ fontSize: "0.9rem", lineHeight: 1.7, marginBottom: "0.75rem" }}>
               {mtModal.number_alpl != null && <>ALPL <strong>{mtModal.number_alpl}</strong> </>}
               (ชิ้นที่ <strong>{mtModal.piece ?? "—"}/{mtModal.target ?? "—"}</strong>)
-              {" "}ไม่ได้รับค่าการวัดกลับมาภายในเวลาที่กำหนด
+              {" "}{v.body}
               {mtModal.detail && (
                 <><br /><span style={{ color: "var(--warn)" }}>สาเหตุ: {mtModal.detail}</span></>
               )}
-              <br />ต้องการวัดชิ้นถัดไปต่อหรือไม่?
+              <br />{v.question}
               <br />
               <span style={{ color: "var(--muted)", fontSize: "0.8rem" }}>
                 จะหยุดการวัดอัตโนมัติใน {mtLeft} วินาที
@@ -1254,20 +1446,20 @@ export default function DashboardPage() {
               background: "var(--surface2)", border: "1px solid var(--border)",
               borderRadius: "var(--radius)", padding: "0.6rem 0.75rem", marginBottom: "1.25rem",
             }}>
-              สาเหตุที่พบบ่อย — TM-X วัดไม่ติด (ชิ้นงานวางไม่เข้าที่ / เลนส์สกปรก)
-              หรือ <strong>Recieve_tm-x.py</strong> ไม่ได้รันอยู่
+              {v.hint}
             </div>
             <div className="entry-actions" style={{ justifyContent: "flex-end" }}>
               <button type="button" className="btn-edit-entry" onClick={() => resolveMeasureTimeout("stop")}>
                 หยุดการวัด
               </button>
-              <button type="button" className="btn-submit-entry" onClick={() => resolveMeasureTimeout("continue")}>
-                วัดชิ้นถัดไป
+              <button type="button" className="btn-submit-entry" onClick={() => resolveMeasureTimeout(v.action)}>
+                {v.actionLabel}
               </button>
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ── Measurement report ──────────────────────────────────────────────
           แถวบน: รูป (ซ้าย) + การ์ดผลรายแกนพร้อมแถบเทียบสเปค (ขวา)
@@ -1324,7 +1516,13 @@ export default function DashboardPage() {
                   <div className="report-axes">
                     <ReportAxis axis="X" value={m.value_x} nominal={nomX} upperTol={upTol} lowerTol={loTol} />
                     <ReportAxis axis="Y" value={m.value_y} nominal={nomY} upperTol={upTol} lowerTol={loTol} />
-                    <ReportOffset offset={m.offset} offsetTol={m.offset_tol} measureType={m.measure_type} />
+                    <OffsetMap
+                      offsetX={m.offset_opx}
+                      offsetY={m.offset_opy}
+                      posCode={m.offset_pos_op}
+                      offsetTol={m.offset_tol}
+                      measureType={m.measure_type}
+                    />
                   </div>
                 </div>
 

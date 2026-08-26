@@ -11,6 +11,20 @@ from shared import *  # noqa: F401,F403
 router = APIRouter()
 
 
+# มุมมองของ Part ที่ใช้บันทึกลงประวัติ — join เอา "ชื่อ" มาแทนคอลัมน์ FK ดิบ
+# เพราะประวัติต้องอ่านรู้เรื่องด้วยตาเปล่าโดยไม่ต้องไปเปิดตาราง lookup เทียบ id
+_PART_HISTORY_SQL = """
+    SELECT p.number_alpl, pn.part_number_name AS part_number, ps.package_size,
+           v.vendor_name AS vendor, o.owner_name AS owner,
+           p.po_number, p.description, p.recieve_date
+    FROM parts_specifications p
+    LEFT JOIN part_number  pn ON p.part_number_id  = pn.part_number_id
+    LEFT JOIN package_size ps ON p.package_size_id = ps.package_size_id
+    LEFT JOIN vendor       v  ON p.vendor_id       = v.vendor_id
+    LEFT JOIN owner        o  ON p.owner_id        = o.owner_id
+    WHERE p.number_alpl = %s
+"""
+
 @router.post("/api/parts/check")
 def check_parts(body: PartsCheckRequest):
     """ถามทีเดียวว่า ALPL ชุดนี้ตัวไหน "มีอยู่แล้ว" / "ยังไม่มี" ในตาราง Parts
@@ -221,6 +235,7 @@ def create_part(part: PartCreate):
     try:
         with db.cursor() as cur:
             _insert_part_row(cur, part.number_alpl, part.dict())
+            log_edit("parts", "add", f"ALPL {part.number_alpl}", after=part.dict())
         return {"number_alpl": part.number_alpl}
     finally:
         db.close()
@@ -267,6 +282,9 @@ def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
             if not set_parts:
                 raise HTTPException(400, "No valid fields provided")
             set_clause = ", ".join(set_parts)
+            # อ่านค่าเดิมก่อน UPDATE — join เอา "ชื่อ" มาแทน id ดิบ เพื่อให้ประวัติ
+            # อ่านรู้เรื่อง (vendor "B" ไม่ใช่ vendor_id 2)
+            old = _fetch_one(cur, _PART_HISTORY_SQL, (part_id,))
             try:
                 cur.execute(
                     f"UPDATE parts_specifications SET {set_clause} WHERE number_alpl = %s",
@@ -280,6 +298,11 @@ def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
                 )
             if cur.rowcount == 0:
                 raise HTTPException(404, "Part not found")
+            # ALPL อาจเพิ่งถูกเปลี่ยนไปเอง — อ่านค่าใหม่ด้วยเลขล่าสุดเสมอ
+            new_alpl = data.get("number_alpl", part_id)
+            after = _fetch_one(cur, _PART_HISTORY_SQL, (new_alpl,))
+            if old is not None and after is not None:
+                log_edit("parts", "edit", f"ALPL {new_alpl}", before=old, after=after)
         return {"ok": True}
     finally:
         db.close()
@@ -340,10 +363,12 @@ def delete_part(part_id: int):
             if part_row is None:
                 db.rollback()
                 raise HTTPException(404, "Part not found")
-            _archive_before_delete(
+            trash_id = _archive_before_delete(
                 kind="part", table="parts_specifications",
                 pk={"number_alpl": part_id}, row=part_row,
             )
+            log_edit("parts", "delete", f"ALPL {part_id}",
+                     before=part_row, trash_id=trash_id)
 
             try:
                 cur.execute("DELETE FROM parts_specifications WHERE number_alpl = %s", (part_id,))

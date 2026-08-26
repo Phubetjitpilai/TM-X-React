@@ -3,6 +3,7 @@ import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "../api/client";
 import { useToast } from "../components/Toast";
 import TrashCard from "../components/TrashCard";
 import LookupTables from "../components/LookupTables";
+import HistoryCard from "../components/HistoryCard";
 
 // EditPage — พอร์ตจาก Frontend/edit.html (Database Editor) แบบยึดโครงสร้าง/
 // field/คอลัมน์/ข้อความ ตามต้นฉบับเป็นหลัก
@@ -160,7 +161,12 @@ export default function EditPage() {
   //   อัปเดตเฉพาะปุ่มนั้น อาการจะสับสนมากเพราะที่อื่นทำงานปกติดี
   //   (ต้นฉบับใช้ afterDelete() เป็นตัวกลางกันลืมด้วยเหตุผลเดียวกัน)
   const [trashReload, setTrashReload] = useState(0);
-  const bumpTrash = () => setTrashReload((v) => v + 1);
+  /** ⚠ ประวัติต้องรีเฟรชทุกครั้งที่มีการเขียน DB ไม่ใช่เฉพาะตอนลบเหมือนถังขยะ —
+   *  bumpTrash() เดิมถูกเรียกเฉพาะจุดที่ลบ ถ้าใช้ตัวเดียวกัน การ "เพิ่ม/แก้ไข"
+   *  จะไม่โผล่ในประวัติจนกว่าจะรีเฟรชหน้า */
+  const [historyReload, setHistoryReload] = useState(0);
+  const bumpHistory = () => setHistoryReload((v) => v + 1);
+  const bumpTrash = () => { setTrashReload((v) => v + 1); bumpHistory(); };
   const formRef = useRef<HTMLFormElement>(null);
 
   // ── Parts state (server-side pagination + search) ──────────────────
@@ -495,6 +501,7 @@ export default function EditPage() {
       if (isAdd) await apiPost("/api/parts", record);
       else await apiPatch(`/api/parts/${editContext.key}`, record);
       toast.show(isAdd ? `เพิ่ม ALPL ${nAlpl} สำเร็จ` : `บันทึก ALPL ${nAlpl} สำเร็จ`);
+      bumpHistory();
       await reloadPartsAfterMutation(nAlpl);
       closeEditModal();
     } catch (err) {
@@ -596,6 +603,7 @@ export default function EditPage() {
         : await apiPost<{ result?: string }>("/api/measurements", payload);
       const resultNote = res?.result ? ` (Result: ${res.result})` : "";
       toast.show(isEdit ? `บันทึก Measurement ID ${editContext.key} เรียบร้อยแล้ว${resultNote}` : `เพิ่ม Measurement เรียบร้อยแล้ว${resultNote}`);
+      bumpHistory();
       await reloadMeasAfterMutation((editContext.key as number) ?? undefined);
       closeEditModal();
     } catch (err) {
@@ -882,7 +890,7 @@ export default function EditPage() {
           Parts → Measurements → Lookup Tables → Trash */}
       <LookupTables
         onDeleted={bumpTrash}
-        onChanged={() => { loadDropdownData(); }}
+        onChanged={() => { loadDropdownData(); bumpHistory(); }}
         onAlert={setAlertText}
         // ใช้ confirm modal ตัวเดียวกับ Parts/Measurements — ปุ่มลบทุกจุดในหน้านี้
         // จะได้ถามยืนยันหน้าตาเหมือนกันหมด ไม่มีจุดไหนลบทันทีโดยไม่ถาม
@@ -891,12 +899,19 @@ export default function EditPage() {
         onConfirm={(message, action) => setConfirmState({ message, onConfirm: () => { setConfirmState(null); action(); } })}
       />
 
+      {/* ── ประวัติการแก้ไข ─────────────────────────────────────────────
+          วางก่อนถังขยะ — เป็นของที่เปิดดูบ่อยกว่า ส่วนถังขยะยังอยู่ท้ายสุด
+          ตามต้นฉบับ (เผลอลบแล้วเลื่อนลงมากู้ได้ทันที) */}
+      <HistoryCard reloadKey={historyReload} />
+
       {/* ── ถังขยะ ────────────────────────────────────────────────────────
           วางไว้ท้ายสุดของหน้าโดยตั้งใจ (ตามต้นฉบับ) — เป็นหน้าเดียวกับที่ผู้ใช้
           กดลบ เผลอลบแล้วเลื่อนลงมากู้ได้ทันที ไม่ต้องจำว่าต้องไปหน้าไหน */}
       <TrashCard
         reloadKey={trashReload}
+        onPurged={bumpHistory}
         onRestored={async () => {
+          bumpHistory();
           // กู้คืนแล้วของกลับเข้าตารางไหนก็ไม่รู้ (Part / Measurement / Lookup)
           // โหลดใหม่ทั้งหมดง่ายกว่าและถูกเสมอ — หน้านี้โหลดทีละหน้าอยู่แล้ว
           // ไม่ได้แพงอะไร

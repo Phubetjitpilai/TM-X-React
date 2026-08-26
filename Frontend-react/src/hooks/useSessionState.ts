@@ -18,7 +18,44 @@ export interface SessionState {
    *    "รู้ว่าตาย" อีกอันคือ "เราไม่รู้" ตอนไล่หาสาเหตุต่างกันมาก
    */
   pi_status?: boolean | null;
+  /** Pi กำลังยืนรอสัญญาณทริกเกอร์อยู่ไหม ณ heartbeat ล่าสุด
+   *
+   *  มีแค่ 2 ค่าไม่เหมือน `pi_status` — ปุ่มกดได้หรือกดไม่ได้เท่านั้น
+   *  "ไม่รู้" ต้องแปลว่ากดไม่ได้ ฝั่ง backend จึงยุบให้เหลือ boolean มาแล้ว
+   */
+  trigger_ready?: boolean;
+  /** เปิดปุ่มจำลองทริกเกอร์ไว้ไหม (ALLOW_MANUAL_TRIGGER ฝั่ง backend)
+   *  ต่างจาก `trigger_ready` — ตัวนี้บอกว่า "แสดงปุ่มไหม" ไม่ใช่ "กดได้ไหม"
+   */
+  manual_trigger?: boolean;
 }
+
+/**
+ * ข้อความบนป้ายสถานะ — **แยกจากค่าใน DB โดยตั้งใจ**
+ *
+ * ค่าที่เก็บจริงยังเป็น `timeout` เหมือนเดิมทุกจุด (`heartbeat_checker` เขียน,
+ * query กรองด้วยค่านี้, CSS ใช้เป็นชื่อคลาส) เปลี่ยนเฉพาะสิ่งที่ตาเห็น
+ * ⚠ ห้ามเปลี่ยนค่าใน DB ตาม — จะต้องไล่แก้ทั้ง `shared.py`, ข้อมูลเก่าใน
+ *   ตาราง `sessions` และคลาส CSS พร้อมกัน แลกกับสิ่งที่ได้แค่คำบนจอ
+ *
+ * ทำไม `timeout` → **INTERRUPTED**: "TIMEOUT" บอกแค่ *กลไก* ที่ตรวจเจอ
+ * (นับเวลาแล้วครบ) ไม่ได้บอกว่าเกิดอะไรกับงานที่กำลังทำอยู่ — ผู้ใช้หน้างาน
+ * อ่านแล้วนึกว่า "วัดนานเกินไป" ทั้งที่ความจริงคือ **การวัดถูกตัดกลางคัน
+ * และข้อมูลอาจไม่ครบ** ส่วน *สาเหตุ* ไม่ต้องยัดลงป้ายนี้ เพราะชิป
+ * "Raspberry Pi 🔴 Offline" อยู่ถัดไปอีก 2 ช่องบนแถวเดียวกันอยู่แล้ว
+ * (ถ้าใช้คำว่า DISCONNECTED จะกลายเป็นบอกเรื่องเดียวกันซ้ำสองที่
+ *  แล้วไม่มีใครบอกว่า session ตายไปแล้ว)
+ */
+const STATE_LABEL: Record<string, string> = {
+  idle: "IDLE",
+  running: "RUNNING",
+  stopped: "STOPPED",
+  timeout: "INTERRUPTED",
+};
+
+/** ค่าที่ไม่รู้จัก (backend เวอร์ชันใหม่กว่า) ให้โชว์ตัวมันเองตัวใหญ่ ดีกว่าว่างเปล่า */
+export const sessionStateLabel = (s: string): string =>
+  STATE_LABEL[s] ?? s.toUpperCase();
 
 // useSessionState: poll GET /api/session/state ทุก 4 วิ — TanStack Query dedupe
 // ให้ตาม queryKey อยู่แล้ว เรียกจากหลาย component ก็ยิงจริงแค่ request เดียว
@@ -48,12 +85,24 @@ export function useSessionState() {
   //             memory ไม่พึ่ง DB จึงยังถูกต้องอยู่)
   // ต้องแยก "ไม่มีคีย์" ออกจาก "คีย์เป็น null" ให้ขาด — response ที่ไม่มีคีย์นี้
   // เลย (backend เวอร์ชันเก่า / 502 จาก proxy) ต้องได้ undefined → ไม่ทราบ
-  const errBody = q.error?.body as { pi_status?: boolean | null } | undefined;
+  const errBody = q.error?.body as
+    | { pi_status?: boolean | null; trigger_ready?: boolean; manual_trigger?: boolean }
+    | undefined;
   const piStatus: boolean | null | undefined = dbOffline
     ? errBody && "pi_status" in errBody
       ? errBody.pi_status
       : undefined
     : q.data?.pi_status;
 
-  return { ...q, dbOffline, piStatus };
+  // trigger_ready เดินทางมาทางเดียวกับ pi_status แต่ยุบ undefined เป็น false
+  // ตั้งแต่ตรงนี้ — ปุ่มมีแค่ "กดได้" กับ "กดไม่ได้" และ "ไม่รู้" ต้องเป็นกดไม่ได้
+  // เสมอ ไม่งั้น backend เวอร์ชันเก่าที่ไม่มีคีย์นี้จะทำให้ปุ่มสว่างค้าง
+  const triggerReady: boolean =
+    (dbOffline ? errBody?.trigger_ready : q.data?.trigger_ready) ?? false;
+
+  // default false เหมือนกัน — backend ที่ยังไม่มีคีย์นี้ = ไม่ต้องแสดงปุ่ม
+  const manualTrigger: boolean =
+    (dbOffline ? errBody?.manual_trigger : q.data?.manual_trigger) ?? false;
+
+  return { ...q, dbOffline, piStatus, triggerReady, manualTrigger };
 }

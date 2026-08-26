@@ -96,6 +96,13 @@ select:focus, input:focus, textarea:focus {
   position: sticky;
   top: 0;
   z-index: 100;
+  /* ⚠ ทั้งแถบเป็น "ส่วนควบคุม" ไม่ใช่เนื้อหาให้อ่าน/คัดลอก — ชื่อระบบ · เมนู ·
+     ป้ายสถานะ ไม่มีอันไหนที่ผู้ใช้ต้องลากคลุมไปวางที่อื่น
+     ถ้าปล่อยให้เลือกได้ เบราว์เซอร์จะวางเคอร์เซอร์ข้อความ (คาเร็ต) ลงไปกลางคำ
+     ตอนคลิก ทำให้ดูเหมือนช่องพิมพ์ข้อความ และลากคลุมทีก็ติดแถบไฮไลต์ทับ
+     (ตารางข้อมูลด้านล่างยังคัดลอกได้ตามปกติ — กฎนี้จำกัดอยู่แค่ .topbar) */
+  user-select: none;
+  -webkit-user-select: none;
 }
 /* แถบบนแบ่ง 3 โซน: โลโก้ซ้าย · เมนูกึ่งกลาง · ป้ายสถานะขวา
    ⚠ ซ้าย/ขวาต้อง flex:1 เท่ากัน และเมนูกลางต้อง flex:0 0 auto — ทำแบบนี้เมนู
@@ -151,6 +158,19 @@ select:focus, input:focus, textarea:focus {
 .topbar-menu { position: relative; display: flex; align-items: center; }
 .topbar-menu > .topbar-link {
   cursor: pointer; display: inline-flex; align-items: center; gap: 0.3rem;
+}
+/* ล้าง chrome ของ <button> ให้เหลือหน้าตาเหมือนลิงก์ตัวอื่นบนแถบ
+   (ไม่แตะ color/padding เพราะ .topbar-link ตั้งไว้แล้ว)
+
+   ⚠⚠ ต้องเป็น `button.topbar-link` (แท็ก+คลาส = 0,1,1) **ห้าม** ไปรวมไว้ใน
+   `.topbar-menu > .topbar-link` (2 คลาส = 0,2,0) เด็ดขาด
+   เพราะน้ำหนักจะ **เท่ากับ** `.topbar-link:hover` (0,2,0) พอดี แล้วตัวที่อยู่
+   หลังในไฟล์ชนะ — `background: none` เลยไปทับพื้นหลังตอน hover ทิ้ง
+   ผลคือปุ่ม Export ไม่มีกล่องขึ้นตอนเอาเมาส์ชี้ ต่างจาก Home/Edit
+   (เจอจริงหลังเปลี่ยน <span> เป็น <button>)
+   แบบนี้ (0,1,1) ต่ำกว่า :hover (0,2,0) และ .active (0,2,0) ทั้งคู่จึงชนะตามเดิม */
+button.topbar-link {
+  background: none; border: 0; font-family: inherit; line-height: inherit;
 }
 .topbar-caret { font-size: 0.55rem; line-height: 1; transition: transform .15s; display: inline-block; }
 .topbar-menu.open > .topbar-link { background: rgba(55,138,222,.12); color: var(--accent); }
@@ -364,32 +384,50 @@ select:focus, input:focus, textarea:focus {
    ผังฉบับเต็ม (full=1) ถูกวาดลง #print-root ในหน้าเดิม แล้วสั่ง window.print()
    — ไม่เปิดหน้าต่างใหม่ จะได้ไม่โดน pop-up blocker */
 #print-root { display: none; }
+/* ⚠⚠ ทุกกฎในนี้ต้องขึ้นต้นด้วย `body.printing-report` เสมอ
+   ไฟล์นี้ถูกโหลดทุกหน้า แต่ `#print-root` มีเฉพาะหน้า Export — ถ้าไม่ล็อกไว้
+   ผู้ใช้กด Ctrl+P ที่หน้า Home/Edit จะได้ **กระดาษเปล่า** เพราะทุกอย่างถูกซ่อน
+   แล้วไม่มี #print-root ให้แสดงแทน (เป็นบั๊กที่เจอจริง)
+   คลาสนี้ถูกใส่/ถอดโดย printReport() ใน ExportPage เฉพาะตอนสั่งพิมพ์รายงาน
+   เท่านั้น หน้าอื่นจึงพิมพ์ได้ตามปกติของเบราว์เซอร์ */
 @media print {
   @page { size: landscape; margin: 12mm; }
+
+  body.printing-report { background: #fff !important; margin: 0 !important; padding: 0 !important; }
+
+  /* ซ่อนด้วย `visibility` ไม่ใช่ `display: none`
+     #print-root ฝังลึก 3 ชั้น (body > #root > fieldset.page-lock > .main-edit)
+     display เป็น "ตัดทั้งกิ่ง" ลูกเขียนทับกลับมาไม่ได้ ถ้าซ่อน fieldset ตัว
+     #print-root ที่อยู่ข้างในหายตามไปด้วย → กระดาษเปล่าเหมือนกัน
+     visibility ถ่ายทอดลงลูกแต่ลูกตั้ง visible ทับได้ จึงเปิดเฉพาะกิ่งที่ต้องการ
+     ได้โดยไม่ต้องรู้ว่าอยู่ลึกกี่ชั้น */
+  body.printing-report * { visibility: hidden !important; }
+  body.printing-report #print-root,
+  body.printing-report #print-root * { visibility: visible !important; }
+
   /* บังคับพิมพ์สีพื้นออกมาด้วย — ปกติเบราว์เซอร์ตัดสีพื้นทิ้งเพื่อประหยัดหมึก
-     ทำให้เซลล์ที่ลงสีไว้กลายเป็นขาวหมดในไฟล์ PDF
-     ⚠ ใส่เฉพาะใน #print-root ห้ามใส่ที่ html/body — ไม่งั้นพื้นสีเทาอมครีมของ
-       หน้าเว็บจะถูกพิมพ์เป็นพื้นเทาเต็มหน้ากระดาษด้วย */
-  #print-root, #print-root * {
+     ทำให้เซลล์ที่ลงสีไว้กลายเป็นขาวหมดในไฟล์ PDF */
+  body.printing-report #print-root,
+  body.printing-report #print-root * {
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
-  html, body { background: #fff !important; margin: 0 !important; padding: 0 !important; }
-  body > *:not(#print-root) { display: none !important; }
-  /* React แขวนทุกอย่างไว้ใต้ #root — ตัวเลือกด้านบนจึงยังไม่พอ ต้องซ่อนพี่น้อง
-     ของ #print-root ที่อยู่ข้างในอีกชั้นด้วย (ต่างจาก vanilla ที่ #print-root
-     เป็นลูกตรงของ body) */
-  #root > *:not(#print-root) { display: none !important; }
-  #root { display: block !important; }
-  #print-root { display: block !important; background: #fff !important; }
-  #print-root table { border-collapse: collapse; margin: 0 auto; }
+
+  body.printing-report #print-root {
+    display: block !important;
+    background: #fff !important;
+    /* ดึงออกจาก flow ของ .main-edit (max-width/padding/flex ของหน้าเว็บ)
+       ไม่งั้นตารางถูกบีบตามความกว้าง layout หน้าจอแทนความกว้างกระดาษ */
+    position: absolute; left: 0; top: 0; width: 100%;
+  }
+  body.printing-report #print-root table { border-collapse: collapse; margin: 0 auto; }
   /* border: 0 กับทุกช่อง แล้วใส่คืนเฉพาะช่องที่มีเนื้อหา (.bx) —
      กันเส้นจางๆ ของช่องเปล่าโผล่มาในไฟล์ */
-  #print-root td {
+  body.printing-report #print-root td {
     padding: 4px 10px; white-space: nowrap; border: 0;
     font-family: Tahoma, sans-serif; color: #000;
   }
-  #print-root td.bx { border: 2px solid #000; }
+  body.printing-report #print-root td.bx { border: 2px solid #000; }
 }
 
 /* ข้อความ error ใต้ช่องกรอง (เช่น ALPL ผิดรูปแบบ) */
@@ -517,10 +555,20 @@ select:focus, input:focus, textarea:focus {
 .tc-range { font-size: 0.68rem; color: var(--muted); margin-top: 0.25rem; min-height: 1em; }
 .telemetry-cell.offset .tc-value { color: var(--muted); }
 
+/* ── การ์ด Offset ใน Live Telemetry — กินเต็มความกว้างใต้ X/Y กับ Result ────
+   ⚠ ต้องเป็นลูกโดยตรงของ `.telemetry-grid` เท่านั้น `grid-column` ถึงจะทำงาน
+   พื้นหลัง/มุม/padding รับมาจาก `.telemetry-cell` อยู่แล้ว ที่นี่แค่บอกว่าให้
+   กินกี่คอลัมน์ + คุมความสูงให้ใกล้เคียงการ์ด X/Y (สองใบรวมกัน = ~124px)   */
+.telemetry-offset-cell {
+  grid-column: 1 / -1;
+  padding: 0.75rem 1rem;
+}
+.telemetry-offset-cell .rax { padding: 0; background: none; border: none; }
+.telemetry-offset-cell .rax-name { font-size: 0.7rem; color: var(--muted); }
+
 /* คอลัมน์ "เกณฑ์" ในตาราง Measurements — เป็นค่าอ้างอิงที่แก้ไม่ได้
-   🔒 มาจาก ::after ห้ามพิมพ์ซ้ำใน JSX */
+   ⚠ เอา `content: ' 🔒'` ออกแล้ว ด้วยเหตุผลเดียวกับ .th-derived (ดูข้างล่าง) */
 .th-spec, .td-spec { color: var(--muted); white-space: nowrap; }
-.th-spec::after { content: ' 🔒'; font-size: 0.85em; opacity: .6; }
 
 /* ── Live Telemetry: ปุ่ม Clear · แถบคิว · แถบสัดส่วน (ยกจาก index.html) ── */
 .btn-clear {
@@ -598,9 +646,12 @@ select:focus, input:focus, textarea:focus {
    คอลัมน์ที่ระบบ derive มาให้ (Handler ← Part Number · Template ← Package Size)
    หรือแก้ย้อนหลังไม่ได้ (ผลการวัด) — ทำให้ดู "จางกว่า" คอลัมน์ที่แก้ได้จริง
    เพื่อสื่อว่าเป็นข้อมูลอ้างอิงให้ดูเฉยๆ
-   ⚠ 🔒 มาจาก ::after ของ CSS ไม่ใช่จาก markup — ห้ามพิมพ์ซ้ำใน JSX ไม่งั้นได้ 2 อัน */
+
+   ⚠ เดิมมี `::after { content: ' 🔒' }` ต่อท้ายทุกหัวคอลัมน์ — ถอดออกแล้ว
+     เพราะทำให้แถวหัวตารางรกและกว้างขึ้นโดยไม่ได้ข้อมูลเพิ่ม (พื้นหลังเทาสื่อ
+     อยู่แล้ว) แถม screen reader อ่านออกเสียงซ้ำทุกคอลัมน์
+     คำอธิบายว่า "เทา = แก้ไม่ได้" อยู่ที่ `.derived-legend` เหนือตารางแล้ว */
 .th-derived, .td-derived { background: var(--surface2); color: var(--muted); }
-.th-derived::after { content: ' 🔒'; font-size: 0.85em; opacity: .6; }
 .derived-legend {
   background: var(--surface2); color: var(--muted);
   border: 1px solid var(--border); border-radius: 4px;
@@ -847,6 +898,16 @@ select:focus, input:focus, textarea:focus {
 .session-btns { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
 .btn-start   { background: var(--accent); color: #fff; }
 .btn-stop    { background: var(--ng);     color: #fff; }
+
+/* ปุ่มจำลองสัญญาณทริกเกอร์ — ใช้ชั่วคราวจนกว่าจะต่อ MCU จริง
+   ใช้สีเตือน (เหลืองอำพัน) ไม่ใช่สีหลัก เพื่อให้เห็นชัดว่า **ไม่ใช่ปุ่มถาวร**
+   ของระบบ ต่างจาก Start/Stop ที่จะอยู่ตลอดไป */
+.btn-trigger { background: var(--warn);   color: #fff; }
+.btn-trigger:disabled {
+  background: var(--surface2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
 
 .form-group { display: flex; flex-direction: column; gap: 0.3rem; }
 .form-group label { font-size: 0.75rem; color: var(--muted); font-weight: 600; }
@@ -1208,6 +1269,37 @@ td {
   vertical-align: middle;
 }
 .main-edit td { white-space: nowrap; }
+/* ── ตารางข้อมูล = "ที่ไว้ดู/ไว้กด" ไม่ใช่ข้อความให้ลากคลุม ───────────────
+   กันคาเร็ตโผล่กลางคำตอนคลิก และกันแถบไฮไลต์ทับค่าที่วัดได้
+   (เรื่องเดียวกับแถบเมนูบน) — ครอบทั้งหัวตารางและตัวค่าในเซลล์
+   .layout = หน้า Home · .main-edit = หน้า Edit/Export                      */
+th,
+.layout td,
+.main-edit td { user-select: none; -webkit-user-select: none; }
+
+/* ⚠⚠ ข้อยกเว้น — ต้องอยู่ "หลัง" กฎข้างบนเสมอ (น้ำหนักเท่ากัน ตัวหลังชนะ)
+   1. ตารางสรุปผล IPM — มีปุ่มคัดลอกก็จริง แต่ข้อความสำรองตอนคัดลอกไม่สำเร็จ
+      บอกให้ "ลากเลือกข้อความในตารางแล้วกด Ctrl+C แทน" ถ้าเลือกไม่ได้ ทางหนีทีไล่
+      ทางสุดท้ายจะตายไปด้วย (clipboard API ใช้ไม่ได้ถ้าเปิดผ่าน http จากเครื่องอื่น
+      ซึ่งเป็นกรณีปกติของระบบนี้)
+   2. ตัวอย่างข้อมูลหน้า Export — ผู้ใช้อาจก๊อปบางส่วนไปเช็คก่อนดาวน์โหลดจริง
+   3. ช่องกรอกในตาราง Lookup — ต้องเลือกข้อความข้างในเพื่อแก้ได้ตามปกติ     */
+.ipm-summary-table td,
+.pv-wrap td,
+.rpt-wrap td,
+#print-root td,
+input, select, textarea { user-select: text; -webkit-user-select: text; }
+
+/* ── ป้ายกำกับรอบตาราง = ส่วนของหน้าจอ ไม่ใช่ข้อมูล ────────────────────
+   ชื่อการ์ด + ตัวนับ (PARTS (29)) · คำอธิบายใต้แถบกรอง · แถบเลื่อนหน้า
+   (ปุ่ม ‹ Previous / Next › และข้อความ "แสดง 1–10 จาก 29 รายการ")
+   ⚠ จงใจไม่ใส่ที่ .card-header / .filter-bar ทั้งก้อน เพราะข้างในมี
+     <select>/<input> อยู่ด้วย แล้วกฎคลาส (0,1,0) จะชนะข้อยกเว้น
+     `input, select, textarea` (0,0,1) ข้างบน ทำให้แก้ค่าในช่องไม่ได้     */
+.card-title,
+.filter-result-note,
+.pagination-bar,
+button { user-select: none; -webkit-user-select: none; }
 tr:last-child td { border-bottom: none; }
 tr:hover td { background: var(--surface2); }
 tr[data-clickable] { cursor: pointer; }
@@ -1566,3 +1658,34 @@ tr[data-clickable] { cursor: pointer; }
   flex-shrink: 0; cursor: pointer;
 }
 .report-close:hover { color: var(--text); }
+
+/* ── การ์ด History หน้า Edit ──────────────────────────────────────────────
+   ป้ายสีสื่อความรุนแรงของการกระทำ: เพิ่ม = เขียว · แก้ไข = เหลือง · ลบ = แดง
+   (โทนเดียวกับ result-badge ในตาราง Measurements เพื่อไม่ให้เป็นภาษาสีคนละชุด) */
+.hist-badge {
+  display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px;
+  font-size: 0.72rem; font-weight: 600; white-space: nowrap;
+}
+.hist-badge.add    { background: var(--ok-bg);   color: var(--ok); }
+.hist-badge.edit   { background: var(--warn-bg); color: var(--warn); }
+.hist-badge.delete { background: var(--ng-bg);   color: var(--ng); }
+/* Restore = ฟ้า (คนละความหมายกับ Add ที่เป็นเขียว — ของเดิมกลับมา ไม่ใช่ของใหม่)
+   Purge  = แดงทึบ ตัวหนังสือขาว เพราะเป็นการกระทำเดียวในระบบที่ "กู้คืนไม่ได้อีก"
+            ต้องเด่นกว่า delete ธรรมดาที่ยังมีถังขยะรับไว้ */
+.hist-badge.restore { background: rgba(55,138,222,.12); color: var(--accent); }
+.hist-badge.purge   { background: var(--ng); color: #fff; }
+
+.hist-field  { color: var(--muted); }
+.hist-before { color: var(--ng); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.hist-after  { color: var(--ok); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.hist-arrow  { color: var(--muted); }
+.hist-more   { color: var(--muted); font-size: 0.72rem; margin-left: 0.4rem; }
+.hist-trash {
+  background: rgba(55,138,222,.12); color: var(--accent);
+  font-size: 0.68rem; padding: 0.1rem 0.5rem; border-radius: 999px; margin-left: 0.4rem;
+}
+/* แถวที่กางออกมาดู diff เต็ม — เส้นซ้ายโยงสายตาว่าเป็นของแถวด้านบน */
+.hist-detail {
+  border-left: 2px solid var(--border); padding: 0.3rem 0 0.3rem 0.8rem;
+  margin: 0.2rem 0 0.2rem 0.4rem; font-size: 0.78rem; line-height: 1.9;
+}

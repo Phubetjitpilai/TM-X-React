@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 790" width="1500" height="790" font-family="Segoe UI, Tahoma, Arial, sans-serif"><rect width="1500" height="790" fill="#fff"/>
+<defs><marker id="ah" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#1F6F8B"/></marker><marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#C0392B"/></marker></defs>
+<rect x="560" y="60" width="230" height="56" fill="#111111"/>
+<text x="675.0" y="94.5" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">Database</text>
+<rect x="90" y="300" width="230" height="56" fill="#111111"/>
+<text x="205.0" y="334.5" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">Web Application</text>
+<rect x="560" y="300" width="230" height="56" fill="#111111"/>
+<text x="675.0" y="334.5" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">Core Services</text>
+<rect x="1050" y="300" width="230" height="56" fill="#111111"/>
+<text x="1165.0" y="334.5" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">Raspberry Pi</text>
+<rect x="560" y="520" width="230" height="56" fill="#111111"/>
+<text x="675.0" y="554.5" text-anchor="middle" font-size="18" font-weight="700" fill="#fff">Data Receiver</text>
+<path d="M 1050 318 H 798" fill="none" stroke="#C0392B" stroke-width="2.6" marker-end="url(#ar)"/>
+<path d="M 790 346 H 1042" fill="none" stroke="#1F6F8B" stroke-width="2.6" marker-end="url(#ah)"/>
+<path d="M 560 318 H 328" fill="none" stroke="#1F6F8B" stroke-width="2.6" marker-end="url(#ah)"/>
+<path d="M 320 346 H 552" fill="none" stroke="#1F6F8B" stroke-width="2.6" marker-end="url(#ah)"/>
+<path d="M 675 300 V 124" fill="none" stroke="#1F6F8B" stroke-width="2.6" marker-end="url(#ah)"/>
+<path d="M 675 520 V 364" fill="none" stroke="#C0392B" stroke-width="2.6" marker-end="url(#ar)"/>
+<text x="924" y="304" text-anchor="middle" font-size="14" font-weight="700" fill="#C0392B">report the event + reason</text>
+<text x="916" y="372" text-anchor="middle" font-size="14" font-weight="700" fill="#333333">Retry  /  Accept  /  Stop</text>
+<text x="444" y="304" text-anchor="middle" font-size="14" font-weight="700" fill="#333333">modal shows what failed</text>
+<text x="436" y="372" text-anchor="middle" font-size="14" font-weight="700" fill="#333333">the operator&#x27;s choice</text>
+<text x="700" y="178" text-anchor="start" font-size="13.5" font-weight="400" fill="#5B6570">save as the session&#x27;s</text>
+<text x="700" y="198" text-anchor="start" font-size="13.5" font-weight="400" fill="#5B6570">last event + reason</text>
+<text x="700" y="432" text-anchor="start" font-size="13.5" font-weight="700" fill="#C0392B">report the event</text>
+<text x="700" y="452" text-anchor="start" font-size="13.5" font-weight="400" fill="#5B6570">+ reason</text>
+<rect x="962" y="150" width="420" height="92" rx="5" fill="#FDF3F2" stroke="#E8C4C0"/>
+<circle cx="988" cy="182" r="13" fill="#C0392B"/>
+<text x="988" y="187" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">1</text>
+<text x="1010" y="187" text-anchor="start" font-size="15" font-weight="700" fill="#C0392B">T1 error</text>
+<text x="1090" y="187" text-anchor="start" font-size="14" font-weight="400" fill="#5B6570">— TM-X rejects the trigger</text>
+<circle cx="988" cy="218" r="13" fill="#C0392B"/>
+<text x="988" y="223" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">2</text>
+<text x="1010" y="223" text-anchor="start" font-size="15" font-weight="700" fill="#C0392B">GM error</text>
+<text x="1098" y="223" text-anchor="start" font-size="14" font-weight="400" fill="#5B6570">— no measured value comes back</text>
+<path d="M 1172 242 V 292" stroke="#C0392B" stroke-width="2" stroke-dasharray="5 4" fill="none"/>
+<rect x="850" y="512" width="470" height="72" rx="5" fill="#FDF3F2" stroke="#E8C4C0"/>
+<circle cx="876" cy="548" r="13" fill="#C0392B"/>
+<text x="876" y="553" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">3</text>
+<text x="898" y="536" text-anchor="start" font-size="15" font-weight="700" fill="#C0392B">Receive error</text>
+<text x="898" y="566" text-anchor="start" font-size="14" font-weight="400" fill="#5B6570">the value never reaches the Core Service</text>
+<path d="M 842 548 H 798" stroke="#C0392B" stroke-width="2" stroke-dasharray="5 4" fill="none"/>
+<rect x="90" y="626" width="440" height="120" rx="5" fill="#FBFCFD" stroke="#D6DEE7"/>
+<rect x="90" y="626" width="440" height="34" rx="5" fill="#1F6F8B"/>
+<rect x="90" y="650" width="440" height="10" fill="#1F6F8B"/>
+<text x="310.0" y="649" text-anchor="middle" font-size="15.5" font-weight="700" fill="#fff">T1 error</text>
+<text x="108" y="688" text-anchor="start" font-size="13.8" font-weight="400" fill="#333333">3 automatic retries inside the Pi first.</text>
+<text x="108" y="712" text-anchor="start" font-size="13.8" font-weight="400" fill="#333333">Then the modal offers  Retry / Stop.</text>
+<text x="108" y="736" text-anchor="start" font-size="13.8" font-weight="400" fill="#333333">Up to 3 rounds, then the session stops.</text>
+<rect x="560" y="626" width="440" height="120" rx="5" fill="#FBFCFD" stroke="#D6DEE7"/>
+<rect x="560" y="626" width="440" height="34" rx="5" fill="#1F6F8B"/>
+<rect x="560" y="650" width="440" height="10" fill="#1F6F8B"/>
+<text x="780.0" y="649" text-anchor="middle" font-size="15.5" font-weight="700" fill="#fff">GM error</text>
+<text x="578" y="688" text-anchor="start" font-size="13.8" font-weight="400" fill="#333333">The Pi keeps polling until the timeout.</text>
+<text x="578" y="712" text-anchor="start" font-size="13.8" font-weight="400" fill="#333333">Then the modal offers  Retry / Stop.</text>
+<text x="578" y="736" text-anchor="start" font-size="13.8" font-weight="400" fill="#333333">The part is still in place — it can be re-measured.</text>
+<rect x="1030" y="626" width="440" height="120" rx="5" fill="#FBFCFD" stroke="#D6DEE7"/>
+<rect x="1030" y="626" width="440" height="34" rx="5" fill="#C1440E"/>
+<rect x="1030" y="650" width="440" height="10" fill="#C1440E"/>
+<text x="1250.0" y="649" text-anchor="middle" font-size="15.5" font-weight="700" fill="#fff">Receive error</text>
+<text x="1048" y="688" text-anchor="start" font-size="13.8" font-weight="400" fill="#333333">The part is already measured and sorted.</text>
+<text x="1048" y="712" text-anchor="start" font-size="13.8" font-weight="400" fill="#333333">The modal offers  Accept without image / Stop.</text>
+<text x="1048" y="736" text-anchor="start" font-size="13.8" font-weight="400" fill="#333333">Nothing left to re-measure — one decision only.</text>
+</svg>

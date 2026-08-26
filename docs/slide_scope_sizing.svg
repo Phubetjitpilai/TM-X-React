@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720" font-family="Helvetica, Segoe UI, Arial, sans-serif"><rect width="1280" height="720" fill="#fff"/>
+<text x="64" y="58" text-anchor="start" font-size="30" font-weight="700" fill="#002060">Scope</text>
+<text x="88" y="92" text-anchor="start" font-size="19" font-weight="700" fill="#002060">ALPL Inspection Lifecycle</text>
+<text x="118" y="138" text-anchor="start" font-size="18" font-weight="700" fill="#002060">New coming</text>
+<text x="182" y="176" text-anchor="start" font-size="23" font-weight="400" fill="#002060">16 – 20</text>
+<text x="182" y="202" text-anchor="start" font-size="17" font-weight="400" fill="#E01B24">parts per batch</text>
+<text x="530" y="176" text-anchor="start" font-size="23" font-weight="400" fill="#002060">Low freq.</text>
+<text x="530" y="202" text-anchor="start" font-size="17" font-weight="400" fill="#E01B24">per procurement cycle</text>
+<line x1="88" y1="238" x2="1150" y2="238" stroke="#D6DEE7"/>
+<text x="118" y="274" text-anchor="start" font-size="18" font-weight="700" fill="#002060">IPM</text>
+<text x="182" y="312" text-anchor="start" font-size="23" font-weight="400" fill="#002060">8 – 16</text>
+<text x="182" y="338" text-anchor="start" font-size="17" font-weight="400" fill="#E01B24">parts per day</text>
+<text x="530" y="312" text-anchor="start" font-size="23" font-weight="400" fill="#002060">Daily</text>
+<text x="530" y="338" text-anchor="start" font-size="17" font-weight="400" fill="#E01B24">ongoing frequency</text>
+<text x="64" y="434" font-size="30" fill="#1F6F8B">↓</text>
+<text x="96" y="430" text-anchor="start" font-size="15" font-weight="400" fill="#8A94A0">which means</text>
+<rect x="64" y="452" width="1086" height="86" rx="4" fill="#F4F8FA" stroke="#1F6F8B"/>
+<text x="245.0" y="492" text-anchor="middle" font-size="25" font-weight="700" fill="#002060">2,000 – 4,000</text>
+<text x="245.0" y="518" text-anchor="middle" font-size="15" font-weight="400" fill="#5B6570">parts per year</text>
+<text x="607.0" y="492" text-anchor="middle" font-size="25" font-weight="700" fill="#002060">1</text>
+<text x="607.0" y="518" text-anchor="middle" font-size="15" font-weight="400" fill="#5B6570">part measured at a time</text>
+<text x="969.0" y="492" text-anchor="middle" font-size="25" font-weight="700" fill="#002060">~1 every 30 min</text>
+<text x="969.0" y="518" text-anchor="middle" font-size="15" font-weight="400" fill="#5B6570">at the busiest</text>
+<line x1="426.0" y1="462" x2="426.0" y2="528" stroke="#D6DEE7"/>
+<line x1="788.0" y1="462" x2="788.0" y2="528" stroke="#D6DEE7"/>
+<rect x="64" y="568" width="1086" height="96" rx="4" fill="#FDF6F2" stroke="#E8C4C0"/>
+<text x="88" y="602" text-anchor="start" font-size="19" font-weight="700" fill="#C1440E">Sized for one PC in the PM Kit room — no company server required</text>
+<text x="88" y="636" text-anchor="start" font-size="14.5" font-weight="400" fill="#5B6570">•  Images stored on local disk, no object storage</text>
+<text x="448" y="636" text-anchor="start" font-size="14.5" font-weight="400" fill="#5B6570">•  MySQL installed directly, no container</text>
+<text x="808" y="636" text-anchor="start" font-size="14.5" font-weight="400" fill="#5B6570">•  One connection per request, no pool</text>
+</svg>

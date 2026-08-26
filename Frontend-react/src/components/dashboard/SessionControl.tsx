@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiPost, ApiError } from "../../api/client";
 import { useToast } from "../Toast";
-import type { SessionState } from "../../hooks/useSessionState";
+import { sessionStateLabel, type SessionState } from "../../hooks/useSessionState";
 
 // SessionControl: การ์ดบนสุดของ Dashboard
 //
@@ -76,7 +76,8 @@ export default function SessionControl({
       <div className="session-row">
         <div className="session-chip">
           <span className="sc-label">Status</span>
-          <span className={`session-state-badge ${state}`}>{state.toUpperCase()}</span>
+          {/* คลาสยังใช้ค่าดิบ (`timeout`) — เปลี่ยนเฉพาะข้อความ ดู sessionStateLabel */}
+          <span className={`session-state-badge ${state}`}>{sessionStateLabel(state)}</span>
         </div>
 
         {qs?.operator && (

@@ -208,6 +208,113 @@ def _json_safe(value):
         return str(value)
     return value
 
+# ══════════════════════════════════════════════════════════════════════════════
+# ประวัติการแก้ไข (edit_history) — หน้า Edit
+# ══════════════════════════════════════════════════════════════════════════════
+# ฟิลด์ที่ไม่ต้องบันทึกลงประวัติ — เป็นค่าที่ระบบตั้งเอง ไม่ใช่สิ่งที่คนแก้
+# (id ที่ auto increment · เวลาที่สร้าง · คอลัมน์ FK ดิบที่หน้าเว็บไม่เคยเห็น)
+_HISTORY_SKIP_FIELDS = {
+    "part_id", "measurement_id", "history_id", "created_at", "edited_at",
+    "operator_id", "vendor_id", "owner_id", "handler_id",
+    "package_size_id", "part_number_id", "template_id",
+}
+
+def _history_value(v: Any) -> Any:
+    """แปลงค่าให้อยู่ในรูปที่ json.dumps รับได้ (Decimal/datetime/timedelta)"""
+    return _json_safe(v)
+
+def _history_changes(before: Optional[Dict[str, Any]],
+                     after: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """สรุปว่าอะไรเปลี่ยนไปบ้าง — คืน [{field, before?, after?}]
+
+    add    → มีแต่ after   · delete → มีแต่ before
+    edit   → เอาเฉพาะฟิลด์ที่ค่าต่างกันจริง ๆ
+
+    ⚠ เทียบด้วย str() ไม่ใช่ != ตรง ๆ — ค่าจาก DB กับค่าที่ผู้ใช้ส่งมามักคนละ
+      ชนิดทั้งที่ค่าเท่ากัน (Decimal('3.03') vs 3.03 · 5 vs '5' · None vs '')
+      ถ้าเทียบตรง ๆ จะได้ประวัติปลอมว่า "แก้" ทุกครั้งที่กด Save แม้ไม่ได้แตะอะไร
+    """
+    out: List[Dict[str, Any]] = []
+    keys = list((after or before or {}).keys())
+    for k in keys:
+        if k in _HISTORY_SKIP_FIELDS:
+            continue
+        b = (before or {}).get(k)
+        a = (after or {}).get(k)
+        if before is not None and after is not None:
+            if str(b if b is not None else "") == str(a if a is not None else ""):
+                continue
+        rec: Dict[str, Any] = {"field": k}
+        if before is not None:
+            rec["before"] = _history_value(b)
+        if after is not None:
+            rec["after"] = _history_value(a)
+        out.append(rec)
+    return out
+
+def _db_identity() -> str:
+    """host:port/dbname ที่ backend ต่ออยู่จริง ๆ ตอนนี้
+
+    ⚠ ใช้ในข้อความ error ของประวัติเสมอ — บั๊กที่เสียเวลาที่สุดของฟีเจอร์นี้คือ
+      "รัน migrate ไปคนละฐานกับที่ backend ต่ออยู่" ซึ่งอาการเหมือนโค้ดพังทุกอย่าง
+      (เครื่อง dev มักมี MySQL 2 ตัว: ของ Docker ที่ 3307 กับที่ลงเครื่องตรงที่ 3306
+       แล้ว .env ชี้ตัวไหนก็ได้) ถ้า error ไม่บอกว่าเป็นฐานไหน ไล่หาสาเหตุยากมาก
+    """
+    return f"{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
+
+def log_edit(
+    table_name: str,
+    action: str,
+    ref: str,
+    before: Optional[Dict[str, Any]] = None,
+    after: Optional[Dict[str, Any]] = None,
+    trash_id: Optional[str] = None,
+) -> None:
+    """บันทึก 1 บรรทัดลง edit_history — **ตัวเดียวที่เขียนตารางนี้**
+
+    action: 'add' | 'edit' | 'delete'
+    ref   : ป้ายบอกว่าแถวไหน อ่านรู้เรื่องโดยไม่ต้อง join — "ALPL 602" / "ID 21"
+
+    ⚠⚠ ห้ามโยน exception ออกไปเด็ดขาด (เหตุผลเดียวกับ _archive_before_delete)
+       ประวัติเป็นของ "ดีถ้ามี" ไม่ใช่ของที่ขาดไม่ได้ — ถ้าตารางยังไม่ถูกสร้าง
+       (DB หน้างานที่ยังไม่ได้รัน sql-tools/add_edit_history.sql) หรือเขียนไม่ผ่าน
+       ด้วยเหตุใดก็ตาม การลบ/แก้ที่ผู้ใช้สั่งต้องสำเร็จต่อไปตามปกติ
+       ไม่ใช่พังทั้ง request เพราะเขียน log ไม่ได้
+
+    ⚠ ต้องเรียก "หลัง" คำสั่งเขียน DB สำเร็จแล้วเท่านั้น — ไม่งั้นจะมีประวัติของ
+      สิ่งที่ไม่เคยเกิดขึ้นจริง (เช่นโดน FK ปฏิเสธทีหลัง)
+    """
+    if action not in ("add", "edit", "delete", "restore", "purge"):
+        log.warning("log_edit: action ไม่ถูกต้อง (%s) — ข้ามการบันทึก", action)
+        return
+    changes = _history_changes(before, after)
+    # แก้แล้วไม่มีอะไรเปลี่ยนจริง = ไม่ต้องมีบรรทัดในประวัติ
+    # (หน้าเว็บกด Save ทั้งที่ไม่ได้แตะอะไรก็ยิง PATCH มาอยู่ดี)
+    if action == "edit" and not changes:
+        return
+    try:
+        db = get_db()
+    except Exception as exc:
+        log.warning("log_edit: ต่อ DB ไม่ได้ ข้ามการบันทึกประวัติ (%s)", exc)
+        return
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "INSERT INTO edit_history (table_name, action, ref, changes_json, trash_id) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (table_name, action, ref[:120],
+                 json.dumps(changes, ensure_ascii=False), trash_id),
+            )
+    except Exception as exc:
+        log.warning("log_edit: บันทึกประวัติไม่สำเร็จ ที่ %s — %s "
+                    "(ถ้าเป็น 1146 Table doesn't exist ให้รัน sql-tools/add_edit_history.sql "
+                    "กับฐานนี้ ไม่ใช่ฐานอื่น) — ปล่อยผ่าน", _db_identity(), exc)
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
 def _archive_before_delete(
     kind: str,
     table: str,
@@ -308,6 +415,13 @@ PI_ONLINE_TIMEOUT = float(os.getenv("PI_ONLINE_TIMEOUT", 5))
 #   ชิปอ่านอีกตัวหนึ่ง แล้วชิปจะขึ้น "ไม่ทราบ" ตลอดกาล (ปัญหาเดียวกับ
 #   session_queues ที่เตือนไว้ตอนแยกไฟล์)
 _pi_last_seen = None
+
+# Pi กำลังยืนรอสัญญาณทริกเกอร์อยู่ไหม ณ heartbeat ล่าสุด
+# ใช้ให้ปุ่มจำลองทริกเกอร์บนหน้าเว็บสว่างเฉพาะตอนกดได้จริง
+#
+# เก็บใน memory คู่กับ _pi_last_seen เพราะเป็นข้อมูลชนิดเดียวกัน — บอกสภาพ
+# "ณ วินาทีนี้" ที่หมดอายุเองตามธรรมชาติ ไม่ใช่ของที่หายไม่ได้
+_pi_waiting_trigger = False
 
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", 5))
 
@@ -507,8 +621,12 @@ async def lifespan(app: FastAPI):
 
 
 
-def mark_pi_seen():
+def mark_pi_seen(waiting_for_trigger: bool = False):
     """บันทึกว่า "เพิ่งเห็น Pi เดี๋ยวนี้" — เรียกจาก POST /api/heartbeat ทุกครั้ง
+
+    `waiting_for_trigger` มาจาก heartbeat โดยตรง บอกว่า Pi กำลังยืนรอสัญญาณอยู่
+    ไหม ณ วินาทีนั้น · default เป็น False เพื่อให้ Pi รุ่นเก่าที่ยังไม่ส่งฟิลด์นี้
+    มาไม่พัง — ผลคือปุ่มทริกเกอร์จะไม่สว่าง ซึ่งปลอดภัยกว่าสว่างค้าง
 
     เก็บใน memory ล้วน **ไม่แตะ DB เลย** ทั้งฝั่งเขียน (ตรงนี้) และฝั่งอ่าน
     (read_pi_status)
@@ -529,8 +647,9 @@ def mark_pi_seen():
     ผลพลอยได้: หมดปัญหานาฬิกา MySQL vs Python เพราะทั้งเขียนและอ่านอยู่ฝั่ง
     Python ทั้งคู่ (เดิมต้องระวังว่า MySQL ใน Docker คนละโซนกับ host)
     """
-    global _pi_last_seen
+    global _pi_last_seen, _pi_waiting_trigger
     _pi_last_seen = datetime.now()
+    _pi_waiting_trigger = bool(waiting_for_trigger)
 
 
 def read_pi_status():
@@ -553,6 +672,23 @@ def read_pi_status():
     if _pi_last_seen is None:
         return None
     return (datetime.now() - _pi_last_seen).total_seconds() <= PI_ONLINE_TIMEOUT
+
+
+def read_trigger_ready() -> bool:
+    """ตอนนี้ยิงทริกเกอร์เข้า Pi ได้ไหม — ใช้เปิด/ปิดปุ่มจำลองทริกเกอร์บนหน้าเว็บ
+
+    ⚠ ต้องผ่าน read_pi_status() ก่อนเสมอ ห้ามอ่าน _pi_waiting_trigger ตรงๆ
+      เพราะถ้า Pi ตายตอนที่ค่านั้นเป็น True มันจะค้างเป็น True ตลอดกาล
+      (ไม่มีใครมาเขียนทับให้อีกแล้ว) ปุ่มจะสว่างค้างทั้งที่ไม่มีใครรับสัญญาณ
+      → operator กดแล้วไม่เกิดอะไรขึ้น แล้วจะนึกว่าระบบพัง
+
+    คืน False ทั้งกรณี "Pi ตาย" และ "ไม่รู้ว่า Pi เป็นยังไง" — ต่างจาก
+    read_pi_status() ที่ต้องแยก None ออกจาก False เพราะชิปต้องแสดงต่างกัน
+    ส่วนปุ่มมีแค่ 2 สถานะ กดได้กับกดไม่ได้ และ "ไม่รู้" ต้องแปลว่ากดไม่ได้
+    """
+    if read_pi_status() is not True:
+        return False
+    return _pi_waiting_trigger
 
 
 
@@ -669,6 +805,9 @@ LAST_EVENT_FRESH_SEC = 30
 
 class HeartbeatRequest(BaseModel):
     session_id: Optional[int] = None
+    # Pi รุ่นก่อนหน้านี้ไม่ส่งฟิลด์นี้มา — default False ทำให้ deploy ทีละฝั่งได้
+    # โดยไม่พัง (ผลคือปุ่มทริกเกอร์ไม่สว่าง จนกว่าจะอัปเดต Pi ตาม)
+    waiting_for_trigger: bool = False
 
 _TABLE_DISPLAY_NAME = {
     "parts_specifications": "Part",
@@ -704,6 +843,10 @@ class PackageSizeUpdate(BaseModel):
     template_name: Optional[str] = None
 
 _PKG_NUM_FIELDS = ("nominal_x", "nominal_y", "upper_tol", "lower_tol", "offset_tol")
+# part_number มีฟิลด์ตัวเลขชุดเดียวกับ package_size — ประกาศชื่อของตัวเองไว้
+# เพื่อให้โค้ดฝั่ง part_number อ่านแล้วรู้ว่าหมายถึงอะไร และแยกทางกันได้ทีหลัง
+# ถ้าวันหนึ่งสองตารางนี้มีฟิลด์ไม่เหมือนกัน (อย่าเผลอใช้ตัวของอีกตารางข้ามกัน)
+_PN_NUM_FIELDS = _PKG_NUM_FIELDS
 
 class PartNumberCreate(BaseModel):
     part_number_name: str
@@ -920,22 +1063,14 @@ class MeasurementCreate(BaseModel):
     value_y:     float
 
     # ── ค่า Offset แต่ละแกน ──────────────────────────
-    offset_ghx:  float = 0.0
-    offset_ghy:  float = 0.0
-    offset_opx:  float = 0.0
-    offset_opy:  float = 0.0
-
-    # ── ค่า Offset 4 มุมของ GH ───────────────────────
-    tr_gh:       float = 0.0
-    tl_gh:       float = 0.0
-    br_gh:       float = 0.0
-    bl_gh:       float = 0.0
+    offset_opx:  float 
+    offset_opy:  float 
 
     # ── ค่า Offset 4 มุมของ OP ───────────────────────
-    tr_op:       float = 0.0
-    tl_op:       float = 0.0
-    br_op:       float = 0.0
-    bl_op:       float = 0.0
+    tr_op:       float 
+    tl_op:       float 
+    br_op:       float 
+    bl_op:       float 
 
     note:        Optional[str] = None
     client_uuid: Optional[str] = None
@@ -1214,6 +1349,13 @@ REPORT_PREVIEW_LIMIT = 300
 
 REPORT_MAX_ROWS = int(os.getenv("REPORT_MAX_ROWS", 20000))
 
+# ปุ่มจำลองสัญญาณทริกเกอร์บนหน้าเว็บ — ใช้ชั่วคราวระหว่างที่ยังไม่ได้ต่อ MCU
+#
+# ⚠ ต้องตั้งเป็น 0 ทันทีที่ต่อ MCU จริงแล้ว เพราะสัญญาณจาก MCU แปลว่า
+#   "ชิ้นงานเข้าที่และเซนเซอร์ยืนยันแล้ว" ส่วนปุ่มแปลแค่ว่า "คนกดบอกว่าพร้อม"
+#   ปล่อยเปิดไว้ = เปิดช่องให้ข้ามการตรวจของเซนเซอร์ แล้ววัดชิ้นที่ยังวางไม่เข้าที่
+ALLOW_MANUAL_TRIGGER = os.getenv("ALLOW_MANUAL_TRIGGER", "1") == "1"
+
 # ชื่อที่โชว์ในคอลัมน์ "ประเภท" ของถังขยะ — **ใช้ชื่อตารางตามที่ผู้ใช้เห็นในหน้า Edit**
 #
 # ตั้งใจให้ตรงกับ dropdown "Lookup Tables" และหัวการ์ดในหน้า Edit เป๊ะ ๆ
@@ -1317,6 +1459,7 @@ __all__ = [
     "Query",
     "REPORT_GROUP_BY",
     "REPORT_MAX_ROWS",
+    "ALLOW_MANUAL_TRIGGER",
     "REPORT_PREVIEW_LIMIT",
     "Request",
     "SessionContinueRequest",
@@ -1332,12 +1475,15 @@ __all__ = [
     "_GROUP_MATCH_FIELDS",
     "_LEGACY_COLUMN_ALIASES",
     "_PKG_NUM_FIELDS",
+    "_PN_NUM_FIELDS",
     "_PROJECT_ROOT",
     "_RANGE_PART_RE",
     "_TABLE_DISPLAY_NAME",
     "_TIME_FORMATS",
     "_TOL_EPS",
     "_archive_before_delete",
+    "log_edit",
+    "_db_identity",
     "_axis_state",
     "_block_if_session_running",
     "_day_end",
@@ -1375,6 +1521,7 @@ __all__ = [
     "pd",
     "push_event",
     "read_pi_status",
+    "read_trigger_ready",
     "mark_pi_seen",
     "PI_ONLINE_TIMEOUT",
     "pymysql",

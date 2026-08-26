@@ -103,6 +103,28 @@ def _deleted_path(item_id: str) -> str:
         raise HTTPException(404, "ไม่พบรายการนี้ในถังขยะ")
     return target
 
+# ถังขยะเก็บ kind/table ตามชื่อทางเทคนิค ส่วนประวัติใช้ชื่อที่ผู้ใช้เห็นในหน้า Edit
+# — แปลงตรงนี้ที่เดียว ทั้ง restore และ purge ใช้ร่วมกัน
+_KIND_TO_HISTORY = {"part": "parts", "measurement": "measurements"}
+
+def _history_ref(payload: Dict[str, Any]) -> tuple:
+    """คืน (table_name, ref) สำหรับบันทึกลง edit_history
+
+    ref ต้องอ่านรู้เรื่องด้วยตาเปล่าโดยไม่ต้องไปเปิดตารางอื่นเทียบ — ใช้รูปแบบ
+    เดียวกับตอนลบ ("ALPL 602" / "ID 21" / ชื่อของแถว lookup) ประวัติของของ
+    ชิ้นเดียวกันจะได้ต่อกันเป็นเรื่องเดียว ไม่ใช่คนละชื่อในแต่ละเหตุการณ์
+    """
+    kind = payload.get("kind", "?")
+    row  = payload.get("row") or {}
+    table_name = _KIND_TO_HISTORY.get(kind, kind)
+    if kind == "part":
+        return table_name, f"ALPL {row.get('number_alpl', '?')}"
+    if kind == "measurement":
+        return table_name, f"ID {row.get('measurement_id', '?')}"
+    # lookup — ชื่อคือคอลัมน์แรกที่ไม่ใช่ id
+    name = next((v for k, v in row.items() if not k.endswith("_id")), None)
+    return table_name, str(name if name is not None else "?")
+
 @router.post("/api/deleted/restore")
 def restore_deleted(body: Dict[str, str] = Body(...)):
     """กู้คืน 1 รายการจากถังขยะ — insert แถวกลับ + ย้ายไฟล์รูปกลับที่เดิม
@@ -168,6 +190,10 @@ def restore_deleted(body: Dict[str, str] = Body(...)):
 
         db.commit()
         os.remove(path)   # ออกจากถังขยะแล้ว
+        # ⚠ บันทึกหลัง commit + ลบไฟล์สำเร็จแล้วเท่านั้น — ถ้าบันทึกก่อนแล้วขั้นใด
+        #   ขั้นหนึ่งพัง จะมีประวัติของการกู้คืนที่ไม่เคยเกิดขึ้นจริง
+        _h_table, _h_ref = _history_ref(payload)
+        log_edit(_h_table, "restore", _h_ref, after=row, trash_id=item_id)
         log.info("กู้คืนจากถังขยะ: %s", item_id)
         return {"ok": True, "kind": payload.get("kind"), "table": table}
     finally:
@@ -181,12 +207,15 @@ def remove_deleted(body: Dict[str, str] = Body(...)):
     ลบทั้งไฟล์ .json และไฟล์รูปที่เก็บคู่กัน ไม่แตะฐานข้อมูลเลย (แถวนั้นถูกลบ
     ไปตั้งแต่ตอนกดลบครั้งแรกแล้ว ตรงนี้แค่ทิ้งตัวสำรอง)
     """
-    path = _deleted_path((body or {}).get("id", ""))
+    item_id = (body or {}).get("id", "")
+    path = _deleted_path(item_id)
+    # อ่าน payload ทั้งก้อนไว้ก่อนลบไฟล์ — หลังลบแล้วไม่มีทางรู้ว่าทิ้งอะไรไป
     try:
         with open(path, encoding="utf-8") as f:
-            image_file = json.load(f).get("image_file")
+            payload = json.load(f)
     except Exception:
-        image_file = None
+        payload = {}
+    image_file = payload.get("image_file")
 
     if image_file:
         # ยึด "โฟลเดอร์ของไฟล์ json" เป็นฐานเสมอ + เอาเฉพาะชื่อไฟล์ กัน image_file
@@ -198,7 +227,10 @@ def remove_deleted(body: Dict[str, str] = Body(...)):
             pass
 
     os.remove(path)
-    log.info("ลบถาวรจากถังขยะ: %s", (body or {}).get("id"))
+    if payload:
+        _h_table, _h_ref = _history_ref(payload)
+        log_edit(_h_table, "purge", _h_ref, before=payload.get("row") or {}, trash_id=item_id)
+    log.info("ลบถาวรจากถังขยะ: %s", item_id)
     return {"ok": True}
 
 @router.delete("/api/deleted")

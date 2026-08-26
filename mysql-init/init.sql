@@ -161,11 +161,8 @@ CREATE TABLE measurements (
   number_alpl    INT          NOT NULL,
   value_x        FLOAT        NOT NULL,
   value_y        FLOAT        NOT NULL,
-  offset_ghx     FLOAT        NOT NULL,
-  offset_ghy     FLOAT        NOT NULL,
   offset_opx     FLOAT        NOT NULL,
   offset_opy     FLOAT        NOT NULL,
-  offset_pos_gh  VARCHAR(20)  NOT NULL,
   offset_pos_op  VARCHAR(20)  NOT NULL, 
   result         VARCHAR(10)  NOT NULL,
   note           TEXT,
@@ -217,10 +214,64 @@ CREATE TABLE measurements (
 --              ที่ผู้ใช้ปรับได้อิสระ ไม่เหมาะกับการแตกเป็นคอลัมน์ตายตัวใน SQL
 CREATE TABLE export_template (
   export_template_id INT AUTO_INCREMENT PRIMARY KEY,
-  name         VARCHAR(100) NOT NULL UNIQUE,
+  name         VARCHAR(100) NOT NULL,
   kind         VARCHAR(10)  NOT NULL DEFAULT 'csv',
   columns_json JSON         NULL,
   layout_json  JSON         NULL,
   is_default   TINYINT(1)   NOT NULL DEFAULT 0,
-  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  -- ชื่อห้ามซ้ำ "ภายในชนิดเดียวกัน" เท่านั้น ไม่ใช่ทั้งตาราง
+  --
+  -- ⚠ เดิมเป็น `name VARCHAR(100) NOT NULL UNIQUE` ซึ่งตกค้างจากตอนที่ระบบมีแต่
+  --   CSV อย่างเดียว (ร่องรอยคือ kind ที่มี DEFAULT 'csv') พอแยกเป็น 3 ชนิด
+  --   ทีหลังก็ไม่ได้กลับมาแก้ ผลคือมีเทมเพลต PDF ชื่อ "Default" อยู่แล้วจะสร้าง
+  --   ของ Excel ชื่อเดียวกันไม่ได้ ทั้งที่หน้าเว็บแสดงเป็นคนละลิสต์กัน ผู้ใช้จึง
+  --   ไม่มีทางรู้ว่าชนกับอะไร (เจอจริง — error 1062 ดิบ ๆ เด้งขึ้นหน้าจอ)
+  --
+  -- ⚠⚠ ห้ามถอด unique ทิ้งไปเฉย ๆ — การ์ดในขั้นที่ 1 ของหน้า Export โชว์แค่ชื่อ
+  --    กับจำนวนคอลัมน์ ถ้ามีเทมเพลต Excel ชื่อ "Default" 2 ใบ จะดูเหมือนกันเป๊ะ
+  --    กด Edit/Delete แล้วเดาไม่ออกว่าโดนใบไหน และบรรทัดสรุปตอน preview ที่เขียน
+  --    ว่า "Template Default · พบ 7 รายการ" ก็ไม่บอกว่าใบไหนเช่นกัน
+  UNIQUE KEY uq_tpl_name_kind (name, kind)
+);
+
+-- ══════════════════════════════════════════════════════════════════════════
+-- edit_history — ประวัติการแก้ไขข้อมูลจากหน้า Edit
+-- ══════════════════════════════════════════════════════════════════════════
+-- บันทึกทุกครั้งที่มีคน เพิ่ม/แก้ไข/ลบ ข้อมูลผ่านหน้าเว็บ เพื่อให้ย้อนดูได้ว่า
+-- ค่าที่เห็นอยู่ตอนนี้มาจากไหน โดยเฉพาะ package_size/part_number ที่เป็นตัว
+-- กำหนดเกณฑ์ OK/NG ของ "ทุกการวัด" — แก้ทีเดียวกระทบผลย้อนหลังทั้งระบบ
+--
+-- ⚠ ไม่มีคอลัมน์ "ใครแก้" โดยตั้งใจ — ระบบยังไม่มี auth (ดู Known Issues ใน
+--   CLAUDE.md) ใส่ไปก็ว่างทุกแถวจนดูเหมือนระบบพัง ค่อยเพิ่มตอนทำ auth
+--
+-- ⚠ ไม่ผูก FK กับตารางต้นทางเลย — ประวัติต้องอยู่ต่อได้หลังแถวต้นทางถูกลบ
+--   (ซึ่งเป็นกรณีที่อยากดูประวัติมากที่สุด) ถ้าผูก FK แถวประวัติจะโดนลบตาม
+--   หรือ DELETE จะถูกปฏิเสธ ทั้งสองทางผิดวัตถุประสงค์
+--
+-- ต่างจาก Deleted/ (ถังขยะ) ตรงที่ถังขยะเก็บ "ตัวข้อมูลไว้กู้คืน" อายุ 30 วัน
+-- ส่วนตารางนี้เก็บ "บันทึกว่าเกิดอะไรขึ้น" ไม่ใช้กู้คืน จึงเก็บได้ยาวกว่า
+CREATE TABLE edit_history (
+  history_id  INT AUTO_INCREMENT PRIMARY KEY,
+  edited_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- ชื่อตารางตามที่ผู้ใช้เห็นในหน้า Edit (parts / measurements / package_size ...)
+  table_name  VARCHAR(48)  NOT NULL,
+  action      ENUM('add','edit','delete','restore','purge') NOT NULL,
+  -- restore = กู้คืนจากถังขยะ · purge = ลบถาวรออกจากถังขยะ
+  -- แยกจาก add/delete เพราะเป็นคนละเหตุการณ์ — ถ้ายัดรวมกัน การกู้คืนจะดู
+  -- เหมือนมีคนสร้างข้อมูลขึ้นมาใหม่เอง ซึ่งทำให้ audit log โกหก
+  -- ป้ายบอกว่าเป็นแถวไหน อ่านรู้เรื่องโดยไม่ต้อง join — "ALPL 602", "ID 21", "Boss"
+  ref         VARCHAR(120) NOT NULL,
+  -- edit   → [{"field":"package_size","before":"3x4","after":"4x4"}, ...]
+  -- add    → [{"field":"...","after":"..."}, ...]  (ไม่มี before)
+  -- delete → [{"field":"...","before":"..."}, ...] (ไม่มี after)
+  changes_json JSON        NULL,
+  -- ชื่อไฟล์ในถังขยะ (ถ้าการลบครั้งนั้นมีตัวสำรองไว้กู้) — ใช้โยงกับ Trash
+  trash_id    VARCHAR(200) NULL,
+
+  -- หน้าเว็บเรียงจากใหม่ไปเก่าเสมอ และกรองตามตาราง/การกระทำ/ช่วงวันที่
+  INDEX idx_hist_time (edited_at),
+  INDEX idx_hist_table_time (table_name, edited_at),
+  INDEX idx_hist_action_time (action, edited_at)
 );

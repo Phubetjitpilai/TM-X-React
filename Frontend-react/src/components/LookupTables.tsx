@@ -83,6 +83,14 @@ function lookupToApiBody(kind: string, values: Record<string, string>): Record<s
   return { name: values[cfg.fields[0].key] };
 }
 
+/** 10 แถวต่อหน้า — เท่ากับ Parts/Measurements/History/Trash ในหน้าเดียวกัน
+ *
+ *  ⚠ แบ่งฝั่ง client เพราะ endpoint ของ lookup ทุกตัวคืนมาทั้งก้อน ไม่มี
+ *    limit/offset (เป็นตารางอ้างอิงที่ปกติมีไม่กี่สิบแถว) — ยกเว้น part_number
+ *    ที่โตได้เรื่อย ๆ ตาม catalog จริง ตรงนั้นแหละที่ต้องมีแบ่งหน้าจริง ๆ
+ */
+const PAGE = 10;
+
 interface Props {
   /** เรียกหลังลบสำเร็จ — ให้หน้าแม่ไปโหลดถังขยะใหม่ */
   onDeleted?: () => void;
@@ -109,6 +117,7 @@ export default function LookupTables({ onDeleted, onChanged, onAlert, onConfirm 
   const [draft, setDraft] = useState<Record<string, string>>({});   // แถวใหม่ที่ยังไม่บันทึก
   const [edited, setEdited] = useState<Record<string, Record<string, string>>>({});
   const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState(1);
 
   // ตัวเลือกของช่องแบบ FK — โหลดครั้งเดียวใช้ทุกตาราง
   const [opts, setOpts] = useState({ handler: [] as string[], packageSize: [] as string[], template: [] as string[] });
@@ -141,7 +150,8 @@ export default function LookupTables({ onDeleted, onChanged, onAlert, onConfirm 
     setDraft({});
   }
 
-  useEffect(() => { load(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [kind]);
+  // สลับตารางแล้วต้องกลับหน้า 1 — ไม่งั้นค้างอยู่หน้า 4 ของตารางที่มี 3 แถว
+  useEffect(() => { setPage(1); load(); /* eslint-disable-line react-hooks/exhaustive-deps */ }, [kind]);
 
   const valueOf = (row: Record<string, any>, key: string) => {
     const id = String(row[cfg.idField]);
@@ -166,6 +176,14 @@ export default function LookupTables({ onDeleted, onChanged, onAlert, onConfirm 
     });
   }
   const dirtyCount = rows.filter(isDirty).length;
+
+  /* ⚠ หนีบเลขหน้าให้อยู่ในช่วงที่มีจริงเสมอ — ลบแถวสุดท้ายของหน้าท้าย ๆ แล้ว
+     จำนวนหดลง ถ้าไม่หนีบจะค้างอยู่หน้าที่ไม่มีข้อมูล เห็นตารางว่างทั้งที่ยังมีของ */
+  const lastPage = Math.max(1, Math.ceil(rows.length / PAGE));
+  const curPage = Math.min(page, lastPage);
+  const pageRows = rows.slice((curPage - 1) * PAGE, curPage * PAGE);
+  const from = rows.length === 0 ? 0 : (curPage - 1) * PAGE + 1;
+  const to = (curPage - 1) * PAGE + pageRows.length;
 
   function optionsFor(type?: FieldType): string[] | null {
     if (type === "select-template") return opts.template;
@@ -334,7 +352,7 @@ export default function LookupTables({ onDeleted, onChanged, onAlert, onConfirm 
             {rows.length === 0 ? (
               <tr className="empty-row"><td colSpan={cfg.fields.length + 3}>ยังไม่มีข้อมูล</td></tr>
             ) : (
-              rows.map((row) => {
+              pageRows.map((row) => {
                 const id = row[cfg.idField];
                 return (
                   <tr key={id}>
@@ -366,6 +384,26 @@ export default function LookupTables({ onDeleted, onChanged, onAlert, onConfirm 
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className="pagination-bar">
+        <button type="button" className="btn-icon" disabled={curPage <= 1} onClick={() => setPage(curPage - 1)}>
+          ‹ Previous
+        </button>
+        <span style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+          {rows.length === 0 ? "ไม่มีรายการ" : `แสดง ${from}–${to} จาก ${rows.length} รายการ`}
+          {/* ⚠ เตือนไว้ตรงนี้เพราะแถวที่แก้ค้างไว้อาจอยู่คนละหน้ากับที่กำลังดู
+              มองไม่เห็นแล้วนึกว่าบันทึกไปแล้ว — ตารางนี้ไม่มีปุ่ม "Save ทั้งหมด"
+              ต้องกด Save ของแต่ละแถวเอง */}
+          {dirtyCount > 0 && (
+            <span style={{ color: "var(--warn)", fontWeight: 600 }}>
+              {" "}· มี {dirtyCount} แถวที่แก้ไว้ยังไม่ได้กด Save
+            </span>
+          )}
+        </span>
+        <button type="button" className="btn-icon" disabled={to >= rows.length} onClick={() => setPage(curPage + 1)}>
+          Next ›
+        </button>
       </div>
     </section>
   );

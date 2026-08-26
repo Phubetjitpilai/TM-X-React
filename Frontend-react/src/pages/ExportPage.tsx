@@ -140,12 +140,39 @@ export default function ExportPage() {
     queryFn: () => apiGet<Template[]>("/api/export/templates", { kind: format }),
   });
 
-  // เลือกตัว default ให้อัตโนมัติตอนเปิดหน้าครั้งแรก
+  /* เลือกตัว default ให้อัตโนมัติ + กัน "เทมเพลตค้างข้ามรูปแบบ"
+   *
+   * ⚠⚠ CSV / PDF / Excel เป็น **route เดียวกัน** (`/export`) ต่างกันแค่ query
+   *    string — React Router จึงไม่ remount component เวลาสลับรูปแบบ
+   *    state ทุกตัวรวมถึง selectedTplId ค้างข้ามไปด้วย
+   *
+   *    ของเดิมเช็คแค่ `selectedTplId != null` แล้ว return ผลคือพอสลับ
+   *    CSV → PDF ค่า id ของเทมเพลต CSV ยังค้างอยู่:
+   *      · หน้าจอไม่มีใบไหนถูกไฮไลต์ (id นั้นไม่อยู่ในลิสต์ของ PDF)
+   *      · แต่ปุ่ม Next/ดาวน์โหลดยังกดได้ เพราะ `selectedTplId != null`
+   *      · แล้ว preview/export ยิง `export_template_id` ของ **คนละชนิด** ไป
+   *        (ยืนยันด้วยเทสต์แล้ว: เลือก CSV id 2 → สลับไป PDF → ยังส่ง 2
+   *         ทั้งที่เทมเพลต PDF คือ id 7)
+   *
+   *    ตอนนี้เช็คว่า id ที่เลือกไว้ "ยังอยู่ในลิสต์ปัจจุบัน" ไหม ถ้าไม่ก็เลือก
+   *    ตัว default ของลิสต์ใหม่ให้ — ครอบคลุมกรณีเทมเพลตถูกลบไปด้วย
+   *
+   *    (ไม่ต้องกลัวว่าจะไปหยิบผิดตอนกำลังโหลด: queryKey มี format อยู่ด้วย
+   *     พอสลับรูปแบบ `data` จะเป็น undefined ระหว่างโหลด effect จึงข้ามไปเอง) */
   useEffect(() => {
     const list = templatesQ.data;
-    if (!list?.length || selectedTplId != null) return;
+    if (!list) return;                                   // ยังโหลดไม่เสร็จ
+    if (!list.length) { setSelectedTplId(null); return; } // รูปแบบนี้ยังไม่มีเทมเพลตเลย
+    if (list.some((t) => t.export_template_id === selectedTplId)) return;
     setSelectedTplId((list.find((t) => t.is_default) ?? list[0]).export_template_id);
   }, [templatesQ.data, selectedTplId]);
+
+  /* สลับรูปแบบแล้วต้องกลับมาขั้นที่ 1 เสมอ
+   * ฝั่ง vanilla แยกเป็นคนละไฟล์ (export.html?format=...) เปลี่ยนรูปแบบ = โหลด
+   * หน้าใหม่ จึงเริ่มที่ขั้น 1 อยู่แล้ว · ฝั่ง React เป็น component เดิม ถ้าไม่สั่ง
+   * เอง ผู้ใช้จะถูกโยนไปอยู่หน้ากรอง/ตัวอย่างของอีกรูปแบบทันทีโดยยังไม่ได้เลือก
+   * เทมเพลตของรูปแบบนั้น */
+  useEffect(() => { setStep(1); }, [format]);
 
   // ตัวเลือกของ multi-select — ดึงจาก lookup table จริงใน DB
   // ถ้าดึงตัวไหนไม่ได้ ก็แค่ช่องนั้นว่าง ช่องอื่นยังใช้ได้ปกติ (เหมือนต้นฉบับ)
@@ -196,8 +223,18 @@ export default function ExportPage() {
     // เบราว์เซอร์เอา document.title ไปเป็นชื่อไฟล์ที่เสนอในหน้าต่างพิมพ์ —
     // สั่งชื่อไฟล์ PDF ตรงๆ จากโค้ดไม่ได้ ต้องผ่านทางนี้ทางเดียว
     document.title = cleanName || printData.template_name || "report";
-    window.print();
-    document.title = restore;
+    // ⚠ คลาสนี้เป็นตัวเปิดกฎ @media print ทั้งชุด (ดู index.css) — ต้องใส่เฉพาะ
+    //   ตอนสั่งพิมพ์รายงานเท่านั้น ถ้าปล่อยไว้ตลอด ผู้ใช้กด Ctrl+P ที่หน้าไหนก็ตาม
+    //   จะได้กระดาษเปล่า เพราะกฎนั้นซ่อนทุกอย่างยกเว้น #print-root ที่มีแค่หน้านี้
+    document.body.classList.add("printing-report");
+    try {
+      window.print();
+    } finally {
+      // finally เสมอ — ถ้า print() โยน exception (บาง環境/เบราว์เซอร์บล็อก)
+      // แล้วคลาสค้างไว้ หน้าเว็บจะพิมพ์อะไรไม่ได้อีกเลยจนกว่าจะรีเฟรช
+      document.body.classList.remove("printing-report");
+      document.title = restore;
+    }
     setPrintData(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [printData]);

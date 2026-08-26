@@ -34,13 +34,36 @@ const EXPORT_FORMATS = [
 
 export default function Layout() {
   const sse = useSSE();
-  const { dbOffline } = useSessionState();
+  const { dbOffline, isSuccess, isError } = useSessionState();
   const location = useLocation();
   const [params] = useSearchParams();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLSpanElement>(null);
 
-  const status = sse !== "online" ? sse : dbOffline ? "db-offline" : "online";
+  /* ── ป้ายสถานะ: ตัดสินจาก 2 แหล่ง ไม่ใช่ SSE อย่างเดียว ────────────────────
+     ของเดิม `sse !== "online" ? sse : ...` มีปัญหา 2 ข้อที่เจอจริง:
+
+     1. **ขึ้น "Server Connecting" นาน** — ป้ายรอ `EventSource.onopen` อย่างเดียว
+        แต่ตอนเปิดหน้า แอปยิง request พรวดเดียวเป็นสิบตัว (parts ทีละหน้า ·
+        measurements · lookup 5 ตัว · session/state) เบราว์เซอร์จำกัด 6
+        connection ต่อโดเมน สาย SSE เลยต้อง **ต่อคิว** รอช่องว่าง ทั้งที่
+        backend ตอบ /api/session/state ได้ตั้งแต่วินาทีแรกแล้ว
+        → ถ้า poll สำเร็จ ก็คือ backend ตอบได้จริง ไม่ต้องรอ SSE
+
+     2. **กะพริบ 🟡 DB Offline ↔ 🟢 Server Online ตอน DB ล่ม** — เดิมอ่านว่า
+        "ไม่ใช่ 503 = ปกติ" ซึ่งผิด เพราะ error ที่ไม่มี HTTP status (fetch
+        ล้มระดับเครือข่าย / proxy ตัด / 500 ตอน DB ตายกลาง query) จะได้
+        `dbOffline === false` แล้วป้ายเด้งกลับเป็นเขียวทั้งที่ยังใช้งานไม่ได้
+        → ตอนนี้ "เขียว" ต้องมาจาก **poll สำเร็จจริง** เท่านั้น
+          ห้ามอนุมานจาก "ไม่มี error"
+
+     ลำดับความสำคัญ: SSE หลุด = หนักสุดเสมอ (backend ไม่ตอบทั้งตัว)          */
+  const status =
+    sse === "offline" ? "offline"
+    : isError ? (sse === "online" || dbOffline ? "db-offline" : "offline")
+    : isSuccess ? "online"
+    : sse === "online" ? "online"
+    : "connecting";
 
   // report-template ถือเป็นส่วนหนึ่งของ Export (เปิดต่อจากขั้นที่ 1)
   const isExport =
@@ -102,19 +125,26 @@ export default function Layout() {
 
           {/* Export เป็นเมนูย่อย ไม่ใช่ลิงก์ตรง — กดแล้วเลือกรูปแบบก่อน */}
           <span className={`topbar-menu${menuOpen ? " open" : ""}`} ref={menuRef}>
-            <span
+            {/* ⚠ ต้องเป็น <button> จริง ห้ามใช้ <span role="button"> (ต้นฉบับ vanilla
+                เขียนแบบนั้น เพราะสมัยนั้นสร้าง markup ด้วย innerHTML)
+
+                <span> คือ "ข้อความธรรมดา" — ลากคลุมได้ ดับเบิลคลิกเลือกคำได้
+                และพอใส่ tabIndex ให้โฟกัสได้ด้วย เบราว์เซอร์จะวาง **เคอร์เซอร์
+                ข้อความ (คาเร็ต)** ลงไปกลางคำว่า "Export" ทำให้หน้าตาเหมือน
+                ช่องพิมพ์ข้อความทั้งที่เป็นปุ่ม
+
+                <button> ได้มาให้ฟรีทั้งหมด: กด Enter/Space ได้เอง · เลือก
+                ข้อความไม่ได้ · โฟกัสได้โดยไม่ต้องใส่ tabIndex · screen reader
+                อ่านว่าเป็นปุ่มโดยไม่ต้องประกาศ role                        */}
+            <button
+              type="button"
               className={`topbar-link${isExport ? " active" : ""}`}
-              role="button"
-              tabIndex={0}
               aria-haspopup="true"
               aria-expanded={menuOpen}
               onClick={(e) => { e.stopPropagation(); setMenuOpen((v) => !v); }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMenuOpen((v) => !v); }
-              }}
             >
               Export<span className="topbar-caret">▼</span>
-            </span>
+            </button>
             <span className="topbar-dropdown">
               {EXPORT_FORMATS.map((f) => (
                 <NavLink

@@ -162,7 +162,9 @@ def _create_lookup(table: str, name_col: str, name: str) -> int:
                 cur.execute(f"INSERT INTO {table} ({name_col}) VALUES (%s)", (name,))
             except pymysql.MySQLError as exc:
                 raise HTTPException(409, f"เพิ่มไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
-            return cur.lastrowid
+            new_id = cur.lastrowid
+            log_edit(table, "add", name, after={name_col: name})
+            return new_id
     finally:
         db.close()
 
@@ -170,12 +172,16 @@ def _rename_lookup(table: str, id_col: str, name_col: str, id_value: int, name: 
     db = get_db()
     try:
         with db.cursor() as cur:
+            # อ่านชื่อเดิมไว้ก่อน UPDATE — ต้องได้ตอนแถวยังเป็นค่าเก่าอยู่
+            # ไม่งั้นประวัติจะมีแต่ "หลังแก้" ซึ่งไม่บอกอะไรเลย
+            old = _fetch_one(cur, f"SELECT {name_col} FROM {table} WHERE {id_col} = %s", (id_value,))
             try:
                 cur.execute(f"UPDATE {table} SET {name_col} = %s WHERE {id_col} = %s", (name, id_value))
             except pymysql.MySQLError as exc:
                 raise HTTPException(409, f"แก้ไขชื่อไม่สำเร็จ (ชื่อใหม่นี้อาจมีอยู่แล้ว): {exc}")
             if cur.rowcount == 0:
                 raise HTTPException(404, "ไม่พบข้อมูล")
+            log_edit(table, "edit", name, before=old, after={name_col: name})
     finally:
         db.close()
 
@@ -203,13 +209,18 @@ def _delete_lookup(table: str, id_col: str, id_value: int, references: List[tupl
             row = _fetch_one(cur, f"SELECT * FROM {table} WHERE {id_col} = %s", (id_value,))
             if row is None:
                 raise HTTPException(404, "ไม่พบข้อมูล")
-            _archive_before_delete(
+            trash_id = _archive_before_delete(
                 kind=kind or table, table=table, pk={id_col: id_value}, row=row
             )
 
             cur.execute(f"DELETE FROM {table} WHERE {id_col} = %s", (id_value,))
             if cur.rowcount == 0:
                 raise HTTPException(404, "ไม่พบข้อมูล")
+            # ป้าย ref ใช้ "ชื่อ" ของแถวที่ลบ ไม่ใช่ id — ประวัติต้องอ่านรู้เรื่อง
+            # หลังแถวหายไปแล้ว (id ที่ตายไปแล้วไม่สื่ออะไรกับใคร)
+            name_col = next((k for k in row if k != id_col), id_col)
+            log_edit(table, "delete", str(row.get(name_col, id_value)),
+                     before=row, trash_id=trash_id)
     finally:
         db.close()
 
@@ -308,6 +319,11 @@ def create_package_size(body: PackageSizeCreate):
                 )
             except pymysql.MySQLError as exc:
                 raise HTTPException(409, f"เพิ่ม Package Size ไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
+            log_edit("package_size", "add", body.package_size, after={
+                "package_size": body.package_size,
+                **{f: getattr(body, f) for f in _PKG_NUM_FIELDS},
+                "template_name": body.template_name,
+            })
             return {"package_size_id": cur.lastrowid}
     finally:
         db.close()
@@ -332,6 +348,13 @@ def update_package_size(package_size_id: int, body: PackageSizeUpdate):
                 values.append(template_id)
             if not set_parts:
                 raise HTTPException(400, "No valid fields provided")
+            # อ่านค่าเดิม (พร้อมชื่อ template ที่ join มาแล้ว) ก่อน UPDATE
+            # เก็บเป็น "ชื่อ" ไม่ใช่ id เพราะประวัติต้องอ่านรู้เรื่องด้วยตาเปล่า
+            old = _fetch_one(cur,
+                "SELECT ps.package_size, ps.nominal_x, ps.nominal_y, ps.upper_tol, "
+                "       ps.lower_tol, ps.offset_tol, t.template_name "
+                "FROM package_size ps LEFT JOIN template t ON ps.template_id = t.template_id "
+                "WHERE ps.package_size_id = %s", (package_size_id,))
             try:
                 cur.execute(
                     f"UPDATE package_size SET {', '.join(set_parts)} WHERE package_size_id = %s",
@@ -341,6 +364,15 @@ def update_package_size(package_size_id: int, body: PackageSizeUpdate):
                 raise HTTPException(409, f"แก้ไข Package Size ไม่สำเร็จ (ชื่อใหม่นี้อาจมีอยู่แล้ว): {exc}")
             if cur.rowcount == 0:
                 raise HTTPException(404, "Package Size not found")
+            if old:
+                # ส่งเฉพาะฟิลด์ที่ผู้ใช้ส่งมาจริง (ที่เหลือ = ไม่ได้แตะ)
+                new = {k: v for k, v in old.items()}
+                if body.package_size is not None: new["package_size"] = body.package_size
+                for f in _PKG_NUM_FIELDS:
+                    if getattr(body, f) is not None: new[f] = getattr(body, f)
+                if body.template_name is not None: new["template_name"] = body.template_name
+                log_edit("package_size", "edit", new.get("package_size") or str(package_size_id),
+                         before=old, after=new)
         return {"ok": True}
     finally:
         db.close()
@@ -374,6 +406,11 @@ def create_part_number(body: PartNumberCreate):
                 )
             except pymysql.MySQLError as exc:
                 raise HTTPException(409, f"เพิ่ม Part Number ไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
+            log_edit("part_number", "add", body.part_number_name, after={
+                "part_number_name": body.part_number_name,
+                "package_size": body.package_size, "handler": body.handler,
+                **{f: getattr(body, f, None) for f in _PN_NUM_FIELDS},
+            })
             return {"part_number_id": cur.lastrowid}
     finally:
         db.close()
@@ -402,6 +439,13 @@ def update_part_number(part_number_id: int, body: PartNumberUpdate):
                     values.append(value)
             if not set_parts:
                 raise HTTPException(400, "No valid fields provided")
+            old = _fetch_one(cur,
+                "SELECT pn.part_number_name, ps.package_size, h.handler_name AS handler, "
+                "       pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol, pn.offset_tol "
+                "FROM part_number pn "
+                "LEFT JOIN package_size ps ON pn.package_size_id = ps.package_size_id "
+                "LEFT JOIN handler h       ON pn.handler_id = h.handler_id "
+                "WHERE pn.part_number_id = %s", (part_number_id,))
             try:
                 cur.execute(
                     f"UPDATE part_number SET {', '.join(set_parts)} WHERE part_number_id = %s",
@@ -409,6 +453,15 @@ def update_part_number(part_number_id: int, body: PartNumberUpdate):
                 )
             except pymysql.MySQLError as exc:
                 raise HTTPException(409, f"แก้ไข Part Number ไม่สำเร็จ (ชื่อใหม่นี้อาจมีอยู่แล้ว): {exc}")
+            if old:
+                new = dict(old)
+                if body.part_number_name is not None: new["part_number_name"] = body.part_number_name
+                if body.package_size is not None: new["package_size"] = body.package_size
+                if body.handler is not None: new["handler"] = body.handler
+                for f in _PN_NUM_FIELDS:
+                    if getattr(body, f, None) is not None: new[f] = getattr(body, f)
+                log_edit("part_number", "edit",
+                         new.get("part_number_name") or str(part_number_id), before=old, after=new)
             if cur.rowcount == 0:
                 raise HTTPException(404, "Part Number not found")
         return {"ok": True}
@@ -420,3 +473,87 @@ def delete_part_number(part_number_id: int):
     # part_number ถูกอ้างอิงจาก parts_specifications.part_number_id เท่านั้น
     _delete_lookup("part_number", "part_number_id", part_number_id, [("parts_specifications", "part_number_id")])
     return {"ok": True}
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ประวัติการแก้ไข (หน้า Edit → การ์ด History)
+# ══════════════════════════════════════════════════════════════════════════════
+# ชื่อตารางที่โชว์บนหน้าเว็บ — เก็บ mapping ไว้ฝั่ง backend เพราะ table_name ใน
+# DB เป็นชื่อทางเทคนิค (parts_specifications / package_size) ที่ไม่ตรงกับหัวข้อ
+# ที่ผู้ใช้เห็นในหน้า Edit
+_HISTORY_LABEL = {
+    "parts": "Parts", "measurements": "Measurements",
+    "operator": "Operator", "owner": "Owner", "vendor": "Vendor",
+    "handler": "Handler", "template": "Template",
+    "package_size": "Package Size", "part_number": "Part Number",
+}
+
+@router.get("/api/history")
+def list_history(
+    table_name: Optional[str] = None,
+    action: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    """ประวัติการแก้ไขข้อมูล เรียงจากใหม่ไปเก่า
+
+    คืน {items, total} รูปแบบเดียวกับ /api/parts เพื่อให้หน้าเว็บใช้ตัวแบ่งหน้า
+    ตัวเดิมได้เลย
+
+    ⚠ ปลายช่วงวันที่ถูกครอบเต็มวันที่นี่ (_day_end) เหมือนหน้า Export — ส่ง
+      "2026-08-20" มาเฉย ๆ ต้องได้ข้อมูลของวันที่ 20 ทั้งวัน ไม่ใช่หยุดที่ 00:00
+    """
+    where, params = [], []
+    if table_name:
+        where.append("table_name = %s"); params.append(table_name)
+    if action:
+        where.append("action = %s"); params.append(action)
+    if date_from:
+        where.append("edited_at >= %s"); params.append(_day_start(date_from))
+    if date_to:
+        where.append("edited_at <= %s"); params.append(_day_end(date_to))
+    clause = ("WHERE " + " AND ".join(where)) if where else ""
+
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            # ตารางอาจยังไม่ถูกสร้าง (DB หน้างานที่ยังไม่ได้รัน sql-tools/
+            # add_edit_history.sql) — ตอบเป็น "ยังไม่มีประวัติ" ดีกว่าปล่อย 500
+            # ให้หน้า Edit พังทั้งหน้าเพราะการ์ดเสริมใบเดียว
+            try:
+                cur.execute(f"SELECT COUNT(*) AS n FROM edit_history {clause}", params)
+                total = cur.fetchone()["n"]
+                cur.execute(
+                    f"SELECT history_id, edited_at, table_name, action, ref, changes_json, trash_id "
+                    f"FROM edit_history {clause} "
+                    f"ORDER BY edited_at DESC, history_id DESC LIMIT %s OFFSET %s",
+                    (*params, limit, offset),
+                )
+                rows = cur.fetchall()
+            except pymysql.MySQLError as exc:
+                # ส่งสาเหตุกลับไปด้วย — ของเดิมตอบแค่ ready:false ซึ่งบอกแค่ว่า
+                # "ไม่ได้" แต่ไม่บอกว่าทำไม ทำให้ต้องไปไล่หาใน log เอง
+                log.warning("อ่าน edit_history ไม่สำเร็จ ที่ %s — %s", _db_identity(), exc)
+                return {"items": [], "total": 0, "ready": False,
+                        "reason": str(exc), "db": _db_identity()}
+
+            items = []
+            for r in rows:
+                raw = r["changes_json"]
+                # pymysql คืน JSON column มาเป็น str หรือ dict/list แล้วแต่เวอร์ชัน
+                changes = raw if isinstance(raw, (list, dict)) else (json.loads(raw) if raw else [])
+                items.append({
+                    "history_id":   r["history_id"],
+                    "edited_at":    _json_safe(r["edited_at"]),
+                    "table_name":   r["table_name"],
+                    "table_label":  _HISTORY_LABEL.get(r["table_name"], r["table_name"]),
+                    "action":       r["action"],
+                    "ref":          r["ref"],
+                    "changes":      changes,
+                    "trash_id":     r["trash_id"],
+                })
+            return {"items": items, "total": total, "ready": True}
+    finally:
+        db.close()

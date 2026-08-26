@@ -172,27 +172,21 @@ def _parse_measurement_line(line: str):
     """แปลง 1 บรรทัดของไฟล์ผลวัด (.txt) → (value_x, value_y, offset_ghx, offset_ghy, offset_opx, offset_opy)
     """
     parts = [p.strip() for p in line.strip().split(",")]
-    if len(parts) < 14:
+    if len(parts) < 8:
         return None
     try:
         value_x = float(parts[0])
         value_y = float(parts[1])
-        tr_gh = float(parts[2])
-        tl_gh = float(parts[3])
-        bl_gh = float(parts[4])
-        br_gh = float(parts[5])
-        tr_op = float(parts[6])
-        tl_op = float(parts[7])
-        bl_op = float(parts[8])
-        br_op = float(parts[9])
-        offset_ghx = float(parts[10])
-        offset_ghy = float(parts[11])
-        offset_opx = float(parts[12])
-        offset_opy = float(parts[13])
+        tr_op = float(parts[2])
+        tl_op = float(parts[3])
+        bl_op = float(parts[4])
+        br_op = float(parts[5])
+        offset_opx = float(parts[6])
+        offset_opy = float(parts[7])
 
     except ValueError:
         return None
-    return value_x, value_y, tr_gh,tl_gh,bl_gh,br_gh, tr_op, tl_op, bl_op, br_op, offset_ghx, offset_ghy, offset_opx, offset_opy
+    return value_x, value_y,tr_op, tl_op, bl_op, br_op, offset_opx, offset_opy
 
 
 def _read_lines(path: str):
@@ -204,12 +198,6 @@ def _read_lines(path: str):
             return [ln.strip() for ln in f if ln.strip()]
     except OSError:
         return []
-
-
-def _image_ts_key(image_path: str):
-    """แกะ "260731_172842" ออกจากชื่อไฟล์รูป — คืน None ถ้าชื่อไม่ตรงรูปแบบ"""
-    m = _IMG_TS_RE.match(os.path.basename(image_path))
-    return f"{m.group(1)}_{m.group(2)}" if m else None
 
 
 def _find_measurement_for_image(image_count: int, timeout: float = TXT_WAIT_TIMEOUT):
@@ -228,14 +216,16 @@ def _find_measurement_for_image(image_count: int, timeout: float = TXT_WAIT_TIME
         if target_path:
             lines = _read_lines(target_path)
             total_rows = len(lines)
+            print("total_rows: ",total_rows)
+            print(image_count)
 
             # 1. เช็คว่ามีจำนวนบรรทัดใน .txt ถึงลำดับชิ้นงานที่ต้องการแล้วหรือยัง
             if total_rows >= image_count:
                 # image_count เริ่มที่ 1 (1, 2, 3...) ต้อง -1 เพื่อแปลงเป็น Index 0-based ของ List
-                target_line = lines[image_count - 1]
+                target_line = lines[total_rows - 1]
                 parsed = _parse_measurement_line(target_line)
                 if parsed is not None:
-                    return parsed  # คืนค่า (value_x, value_y, offset_ghx, offset_ghy, offset_opx, offset_opy)
+                    return parsed  # คืนค่า (value_x, value_y, tr_op, tl_op, bl_op, br_op, offset_opx, offset_opy)
 
         # 2. ถ้าบรรทัดยังมาไม่ถึง ให้รอแล้ววนเช็คใหม่จนกว่าจะหมด timeout
         if time.time() >= deadline:
@@ -267,9 +257,8 @@ def get_current_session():
 def post_to_backend(
     session_id,
     value_x, value_y,
-    tr_gh, tl_gh, bl_gh, br_gh,
     tr_op, tl_op, bl_op, br_op,
-    offset_ghx, offset_ghy, offset_opx, offset_opy
+    offset_opx, offset_opy
 ):
     """POST ค่าเข้า backend — format ตรงตาม MeasurementCreate ใน main.py
 
@@ -284,21 +273,13 @@ def post_to_backend(
             "value_x":     value_x,
             "value_y":     value_y,
 
-            # ── กลุ่มค่า GH ──
-            "tr_gh":       tr_gh,
-            "tl_gh":       tl_gh,
-            "bl_gh":       bl_gh,
-            "br_gh":       br_gh,
-
-            # ── กลุ่มค่า OP ──
+            # ── กลุ่มค่าตัวเทียบ Pos OP ──
             "tr_op":       tr_op,
             "tl_op":       tl_op,
             "bl_op":       bl_op,
             "br_op":       br_op,
 
             # ── กลุ่มค่า Offset ──
-            "offset_ghx":  offset_ghx,
-            "offset_ghy":  offset_ghy,
             "offset_opx":  offset_opx,
             "offset_opy":  offset_opy,
 
@@ -480,8 +461,6 @@ def _handle_capture_inner(image_path, t_recv):
         size_mb = 0.0
 
     # ── ด่าน 1: จับคู่ค่ากับรูป ──────────────────────────────────────────
-    #ts_key = _image_ts_key(image_path)
-    #if ts_key:
     pair = _find_measurement_for_image(image_count)
     if pair is None:
         report("TXT_NOT_FOUND",f"หาบรรทัดใน .txt ไม่เจอ "f"(รอ {TXT_WAIT_TIMEOUT:.0f} วิแล้ว) — ทิ้งรูป")
@@ -498,9 +477,8 @@ def _handle_capture_inner(image_path, t_recv):
         return
     (
     value_x, value_y,
-    tr_gh, tl_gh, bl_gh, br_gh,
     tr_op, tl_op, bl_op, br_op,
-    offset_ghx, offset_ghy, offset_opx, offset_opy
+    offset_opx, offset_opy
     ) = pair
 
     # ── ด่าน 3: ต้องมี session ที่ running อยู่ ─────────────────────────
@@ -516,18 +494,15 @@ def _handle_capture_inner(image_path, t_recv):
     print(
     f"✅ {name} ({size_mb:.1f} MB) → "
     f"value_x={value_x} value_y={value_y} "
-    f"tr_gh={tr_gh} tl_gh={tl_gh} bl_gh={bl_gh} br_gh={br_gh} "
     f"tr_op={tr_op} tl_op={tl_op} bl_op={bl_op} br_op={br_op} "
-    f"offset_ghx={offset_ghx} offset_ghy={offset_ghy} "
     f"offset_opx={offset_opx} offset_opy={offset_opy}"
     )
     try:
         resp = post_to_backend(
         session_id,
         value_x, value_y,
-        tr_gh, tl_gh, bl_gh, br_gh,
         tr_op, tl_op, bl_op, br_op,
-        offset_ghx, offset_ghy, offset_opx, offset_opy
+        offset_opx, offset_opy
         )
     except Exception as exc:
         report("BACKEND_REJECT",
