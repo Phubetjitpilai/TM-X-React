@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 888" width="1600" height="888"><rect width="1600" height="888" fill="#fff"/>
+<text x="64" y="64" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="32" font-weight="700" fill="#0F2E4C">Summary</text>
+<text x="64" y="92" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="15" font-weight="400" fill="#7A8794">The whole project in seven short steps</text>
+<line x1="64" y1="112" x2="1536" y2="112" stroke="#D6DEE7"/>
+<circle cx="75.0" cy="140" r="11" fill="#2E7BA6"/>
+<text x="75.0" y="145" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">1</text>
+<text x="96.0" y="146" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="17" font-weight="700" fill="#0F2E4C">Current flow</text>
+<text x="96.0" y="174" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">An ALPL is taken out of the kit, placed on the glass, aligned by hand and</text>
+<text x="96.0" y="200" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">matched to a program. The operator reads each value off the screen and</text>
+<text x="96.0" y="226" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">writes it down — eight pieces take about 2.55 minutes.</text>
+<circle cx="75.0" cy="276" r="11" fill="#2E7BA6"/>
+<text x="75.0" y="281" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">2</text>
+<text x="96.0" y="282" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="17" font-weight="700" fill="#0F2E4C">Problem</text>
+<text x="96.0" y="310" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">Those records live in Excel, split across sheets with no standard naming,</text>
+<text x="96.0" y="336" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">and the specifications are not stored anywhere central — to see them you</text>
+<text x="96.0" y="362" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">have to go and ask the operator. Worse, the numbers themselves cannot be</text>
+<text x="96.0" y="388" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">trusted.</text>
+<rect x="96.0" y="400" width="672.0" height="30" rx="3" fill="#FDF6F2" stroke="#E8C4C0"/>
+<text x="108.0" y="420" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="14.5" font-weight="700" fill="#C1651B">We found 700 of 1,978 parts — 35.39% — recorded with the wrong result</text>
+<circle cx="75.0" cy="468" r="11" fill="#2E7BA6"/>
+<text x="75.0" y="473" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">3</text>
+<text x="96.0" y="474" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="17" font-weight="700" fill="#0F2E4C">New flow</text>
+<text x="96.0" y="502" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">In the new flow the operator fills in what is being measured and presses</text>
+<text x="96.0" y="528" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">Start. The edge controller loads the program and triggers each part, and the</text>
+<text x="96.0" y="554" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">TM-X sends the value and the image straight to the PC. Nobody reads a number</text>
+<text x="96.0" y="580" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">off a screen.</text>
+<circle cx="75.0" cy="630" r="11" fill="#2E7BA6"/>
+<text x="75.0" y="635" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">4</text>
+<text x="96.0" y="636" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="17" font-weight="700" fill="#0F2E4C">Scope</text>
+<text x="96.0" y="664" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">A week of records showed the HT shape is measured far more often than the</text>
+<text x="96.0" y="690" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">others, so that is where the system is aimed first. At 16 to 20 parts a day</text>
+<text x="96.0" y="716" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">— roughly 5,000 a year — the volume is small enough to run on a local PC</text>
+<text x="96.0" y="742" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">beside the machine, so no company server was needed.</text>
+<circle cx="843.0" cy="140" r="11" fill="#2E7BA6"/>
+<text x="843.0" y="145" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">5</text>
+<text x="864.0" y="146" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="17" font-weight="700" fill="#0F2E4C">Action</text>
+<text x="864.0" y="174" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">The system is made of eight parts: the web application, core service, data</text>
+<text x="864.0" y="200" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">receiver, image server, database, edge controller, the Power BI dashboard,</text>
+<text x="864.0" y="226" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">and the measuring program in the TM-X.</text>
+<circle cx="843.0" cy="276" r="11" fill="#2E7BA6"/>
+<text x="843.0" y="281" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">6</text>
+<text x="864.0" y="282" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="17" font-weight="700" fill="#0F2E4C">Current progress</text>
+<text x="864.0" y="310" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">Four are finished — the core service, the data receiver, the image server</text>
+<text x="864.0" y="336" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">and the database. Three are on track: the web application still needs its</text>
+<text x="864.0" y="362" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">interface tidied, the edge controller is waiting on the MCU, and the Power</text>
+<text x="864.0" y="388" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">BI dashboard needs a shared filter. Only the measuring program in the TM-X</text>
+<text x="864.0" y="414" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">has not started.</text>
+<circle cx="843.0" cy="464" r="11" fill="#2E7BA6"/>
+<text x="843.0" y="469" font-family="Helvetica, Arial, sans-serif" text-anchor="middle" font-size="12" font-weight="700" fill="#fff">7</text>
+<text x="864.0" y="470" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="17" font-weight="700" fill="#0F2E4C">Next progress</text>
+<text x="864.0" y="498" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">The measuring program in the TM-X starts today. Next week the PC server goes</text>
+<text x="864.0" y="524" font-family="Georgia, Times New Roman, serif" text-anchor="start" font-size="16" font-weight="400" fill="#0F2E4C">onto the floor so operators can run real parts on it.</text>
+<line x1="800.0" y1="146" x2="800.0" y2="772" stroke="#E3E9EE"/>
+<rect x="64" y="806" width="1472" height="60" rx="4" fill="#0F2E4C"/>
+<text x="800.0" y="843" font-family="Georgia, Times New Roman, serif" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">Everything the software has to do already works end to end — what is left is the last hardware signal, and the first real week on the floor.</text>
+</svg>

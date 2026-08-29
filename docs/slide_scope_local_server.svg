@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 850" width="1600" height="850" font-family="Helvetica, Segoe UI, Arial, sans-serif"><rect width="1600" height="850" fill="#fff"/>
+<text x="56" y="60" text-anchor="start" font-size="31" font-weight="700" fill="#0F2E4C">Where the system runs</text>
+<text x="56" y="90" text-anchor="start" font-size="14.5" font-weight="400" fill="#7A8794">How often ALPLs are actually measured — and what that means for the server it needs</text>
+<text x="56" y="140" text-anchor="start" font-size="12.5" font-weight="700" fill="#2E7BA6">HOW OFTEN IT IS MEASURED</text>
+<rect x="56" y="158" width="440" height="150" rx="5" fill="#F5F8FA" stroke="#0F2E4C" stroke-width="1.4"/>
+<text x="276.0" y="192" text-anchor="middle" font-size="14" font-weight="700" fill="#2E7BA6">New / Rework</text>
+<text x="276.0" y="252" text-anchor="middle" font-size="44" font-weight="700" fill="#0F2E4C">16 – 20</text>
+<text x="276.0" y="284" text-anchor="middle" font-size="13.5" font-weight="400" fill="#7A8794">measurements a day</text>
+<rect x="528" y="158" width="440" height="150" rx="5" fill="#F5F8FA" stroke="#0F2E4C" stroke-width="1.4"/>
+<text x="748.0" y="192" text-anchor="middle" font-size="14" font-weight="700" fill="#2E7BA6">IPM</text>
+<text x="748.0" y="252" text-anchor="middle" font-size="44" font-weight="700" fill="#0F2E4C">8 – 16</text>
+<text x="748.0" y="284" text-anchor="middle" font-size="13.5" font-weight="400" fill="#7A8794">per procurement cycle</text>
+<rect x="1000" y="158" width="440" height="150" rx="5" fill="#FDF6F2" stroke="#C1651B" stroke-width="2"/>
+<text x="1220.0" y="192" text-anchor="middle" font-size="14" font-weight="700" fill="#C1651B">Over a year</text>
+<text x="1220.0" y="252" text-anchor="middle" font-size="44" font-weight="700" fill="#C1651B">≈ 5,000</text>
+<text x="1220.0" y="284" text-anchor="middle" font-size="13.5" font-weight="400" fill="#7A8794">measurements stored</text>
+<text x="1220.0" y="326" text-anchor="middle" font-size="11.5" font-weight="400" fill="#7A8794">≈ 250 working days · New / Rework only</text>
+<rect x="56" y="358" width="1488" height="82" rx="5" fill="#0F2E4C"/>
+<text x="800.0" y="392" text-anchor="middle" font-size="19" font-weight="700" fill="#fff">That is one small row and one image per measurement — a single PC on the machine network is enough</text>
+<text x="800.0" y="420" text-anchor="middle" font-size="14" font-weight="400" fill="#CBD8E2">Scope decision:  run the database and the backend locally, not on a company server</text>
+<text x="56" y="486" text-anchor="start" font-size="12.5" font-weight="700" fill="#2E7BA6">WHY LOCAL</text>
+<rect x="56" y="504" width="440" height="170" rx="5" fill="#F5F8FA" stroke="#0F2E4C" stroke-width="1.4"/>
+<rect x="56" y="504" width="5" height="170" rx="2" fill="#2E7BA6"/>
+<text x="80" y="542" text-anchor="start" font-size="15.5" font-weight="700" fill="#0F2E4C">The volume does not need it</text>
+<text x="80" y="588" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">A company server is sized for workloads far</text>
+<text x="80" y="609" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">larger than this. At this rate it would sit</text>
+<text x="80" y="630" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">idle.</text>
+<rect x="528" y="504" width="440" height="170" rx="5" fill="#F5F8FA" stroke="#0F2E4C" stroke-width="1.4"/>
+<rect x="528" y="504" width="5" height="170" rx="2" fill="#2E7BA6"/>
+<text x="552" y="542" text-anchor="start" font-size="15.5" font-weight="700" fill="#0F2E4C">The Pi cannot reach the</text>
+<text x="552" y="564" text-anchor="start" font-size="15.5" font-weight="700" fill="#0F2E4C">company network</text>
+<text x="552" y="588" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">Site policy keeps the Raspberry Pi off the</text>
+<text x="552" y="609" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">corporate network, so the server has to sit</text>
+<text x="552" y="630" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">beside the machine anyway.</text>
+<rect x="1000" y="504" width="440" height="170" rx="5" fill="#F5F8FA" stroke="#0F2E4C" stroke-width="1.4"/>
+<rect x="1000" y="504" width="5" height="170" rx="2" fill="#2E7BA6"/>
+<text x="1024" y="542" text-anchor="start" font-size="15.5" font-weight="700" fill="#0F2E4C">Nothing waits on the network</text>
+<text x="1024" y="588" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">The database is on the same PC as the backend,</text>
+<text x="1024" y="609" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">so a measurement is written the moment it</text>
+<text x="1024" y="630" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">arrives.</text>
+<rect x="56" y="700" width="1488" height="72" rx="5" fill="#FDF6F2" stroke="#E8C4C0"/>
+<text x="78" y="732" text-anchor="start" font-size="15.5" font-weight="700" fill="#C1651B">What would change this decision:  more rooms needing access, or the volume growing by roughly ten times.</text>
+<text x="78" y="756" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">Until then, a local server is the right size for the job — and it can be moved onto a company server later without changing the design.</text>
+</svg>

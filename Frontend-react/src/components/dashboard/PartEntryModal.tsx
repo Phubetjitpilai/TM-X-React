@@ -217,6 +217,15 @@ export default function PartEntryModal({
           <button type="button" className="btn-submit-entry" disabled={busy} onClick={handleSave}>
             ✓ Save
           </button>
+          {/* บอกให้รู้ว่า Save ไม่ผ่านเพราะอะไร — ของเดิม handleSave แค่ return เงียบ ๆ
+              ถ้าช่องที่ขาดอยู่ในกลุ่มที่ยุบไว้ ผู้ใช้จะไม่เห็นอะไรเลยว่าเกิดอะไรขึ้น */}
+          {Object.keys(errors).length > 0 && (
+            <span className="entry-actions-error">
+              ยังกรอกไม่ครบใน{" "}
+              {Object.keys(errors).map(Number).sort((a, b) => a - b)
+                .map((gi) => `กลุ่มที่ ${gi + 1}`).join(" · ")}
+            </span>
+          )}
         </div>
       </div>
     </div>

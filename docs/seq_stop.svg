@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 1079" width="1560" height="1079" font-family="Helvetica, Segoe UI, Arial, sans-serif"><rect width="1560" height="1079" fill="#fff"/>
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#0F2E4C"/></marker></defs>
+<text x="40" y="50" text-anchor="start" font-size="26" font-weight="700" fill="#0F2E4C">Stop</text>
+<text x="40" y="78" text-anchor="start" font-size="13" font-weight="400" fill="#7A8794">From the Stop button to the moment the machine is idle again — every message matches the code</text>
+<rect x="55.0" y="100" width="150" height="40" rx="3" fill="#0F2E4C"/>
+<text x="130" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Web App</text>
+<line x1="130" y1="140" x2="130" y2="975" stroke="#0F2E4C" stroke-width="1.2" stroke-dasharray="4,5" opacity=".45"/>
+<rect x="320.0" y="100" width="160" height="40" rx="3" fill="#0F2E4C"/>
+<text x="400" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Core Service</text>
+<line x1="400" y1="140" x2="400" y2="975" stroke="#0F2E4C" stroke-width="1.2" stroke-dasharray="4,5" opacity=".45"/>
+<rect x="572.5" y="100" width="135" height="40" rx="3" fill="#0F2E4C"/>
+<text x="640" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Database</text>
+<line x1="640" y1="140" x2="640" y2="975" stroke="#0F2E4C" stroke-width="1.2" stroke-dasharray="4,5" opacity=".45"/>
+<rect x="802.5" y="100" width="155" height="40" rx="3" fill="#0F2E4C"/>
+<text x="880" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Data Receiver</text>
+<line x1="880" y1="140" x2="880" y2="975" stroke="#0F2E4C" stroke-width="1.2" stroke-dasharray="4,5" opacity=".45"/>
+<rect x="1055.0" y="100" width="150" height="40" rx="3" fill="#0F2E4C"/>
+<text x="1130" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">Raspberry Pi</text>
+<line x1="1130" y1="140" x2="1130" y2="975" stroke="#0F2E4C" stroke-width="1.2" stroke-dasharray="4,5" opacity=".45"/>
+<rect x="1322.5" y="100" width="175" height="40" rx="3" fill="#0F2E4C"/>
+<text x="1410" y="125" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">TM-X Controller</text>
+<line x1="1410" y1="140" x2="1410" y2="975" stroke="#0F2E4C" stroke-width="1.2" stroke-dasharray="4,5" opacity=".45"/>
+<rect x="40" y="158" width="1480" height="26" fill="#EEF3F7"/>
+<text x="54" y="176" text-anchor="start" font-size="11.5" font-weight="700" fill="#2E7BA6">STOP  —  the operator presses Stop on the dashboard</text>
+<line x1="133" y1="198" x2="396" y2="198" stroke="#0F2E4C" stroke-width="1.7" marker-end="url(#ar)"/>
+<rect x="191.9" y="179" width="146.2" height="16" fill="#fff"/>
+<text x="265.0" y="191" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">POST /api/session/stop</text>
+<text x="265.0" y="213" text-anchor="middle" font-size="10.5" font-weight="400" fill="#7A8794">{ session_id }</text>
+<rect x="294.8" y="238" width="210.4" height="30" rx="3" fill="#fff" stroke="#C1651B" stroke-width="1.6"/>
+<text x="400" y="258" text-anchor="middle" font-size="11.5" font-weight="700" fill="#C1651B">Stop the measurement session</text>
+<line x1="403" y1="294" x2="636" y2="294" stroke="#0F2E4C" stroke-width="1.7" marker-end="url(#ar)"/>
+<rect x="349.3" y="275" width="341.4" height="16" fill="#fff"/>
+<text x="520.0" y="287" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">UPDATE sessions   state = &#x27;stopped&#x27;,  ended_at = NOW()</text>
+<line x1="403" y1="321" x2="1126" y2="321" stroke="#0F2E4C" stroke-width="1.7" marker-end="url(#ar)"/>
+<rect x="618.7" y="302" width="292.59999999999997" height="16" fill="#fff"/>
+<text x="765.0" y="314" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">POST /command   { action: &quot;stop&quot;, session_id }</text>
+<rect x="879.9" y="349" width="500.2" height="30" rx="3" fill="#fff" stroke="#C1651B" stroke-width="1.6"/>
+<text x="1130" y="369" text-anchor="middle" font-size="11.5" font-weight="700" fill="#C1651B">Sets a flag that tells the measuring loop to stop   ·   is_running = false</text>
+<line x1="1127" y1="405" x2="404" y2="405" stroke="#0F2E4C" stroke-width="1.7" stroke-dasharray="6,4" marker-end="url(#ar)"/>
+<rect x="740.7" y="386" width="48.599999999999994" height="16" fill="#fff"/>
+<text x="765.0" y="398" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">200 OK</text>
+<rect x="272.75" y="433" width="254.5" height="30" rx="3" fill="#fff" stroke="#C1651B" stroke-width="1.6"/>
+<text x="400" y="453" text-anchor="middle" font-size="11.5" font-weight="700" fill="#C1651B">the queue kept in memory is cleared</text>
+<line x1="397" y1="489" x2="134" y2="489" stroke="#0F2E4C" stroke-width="1.7" stroke-dasharray="6,4" marker-end="url(#ar)"/>
+<rect x="194.95" y="470" width="140.1" height="16" fill="#fff"/>
+<text x="265.0" y="482" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">SSE   session_stopped</text>
+<rect x="40" y="516" width="1480" height="26" fill="#EEF3F7"/>
+<text x="54" y="534" text-anchor="start" font-size="11.5" font-weight="700" fill="#2E7BA6">THE PI WINDS DOWN</text>
+<rect x="933.45" y="557" width="393.09999999999997" height="30" rx="3" fill="#fff" stroke="#C1651B" stroke-width="1.6"/>
+<text x="1130" y="577" text-anchor="middle" font-size="11.5" font-weight="700" fill="#C1651B">the measuring loop leaves at its next check, within 0.1 s</text>
+<line x1="1133" y1="613" x2="1406" y2="613" stroke="#0F2E4C" stroke-width="1.7" marker-end="url(#ar)"/>
+<rect x="1187.75" y="594" width="164.5" height="16" fill="#fff"/>
+<text x="1270.0" y="606" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">closes the TCP connection</text>
+<text x="1270.0" y="628" text-anchor="middle" font-size="10.5" font-weight="400" fill="#7A8794">this is what ends the measuring session</text>
+<line x1="1127" y1="652" x2="404" y2="652" stroke="#0F2E4C" stroke-width="1.7" marker-end="url(#ar)"/>
+<rect x="691.9" y="633" width="146.2" height="16" fill="#fff"/>
+<text x="765.0" y="645" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">GET /api/session/state</text>
+<text x="765.0" y="667" text-anchor="middle" font-size="10.5" font-weight="400" fill="#7A8794">is this session still running?</text>
+<line x1="403" y1="691" x2="1126" y2="691" stroke="#0F2E4C" stroke-width="1.7" stroke-dasharray="6,4" marker-end="url(#ar)"/>
+<rect x="707.15" y="672" width="115.69999999999999" height="16" fill="#fff"/>
+<text x="765.0" y="684" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">state = &#x27;stopped&#x27;</text>
+<text x="765.0" y="706" text-anchor="middle" font-size="10.5" font-weight="400" fill="#7A8794">the web already closed it — nothing left to do</text>
+<rect x="838.95" y="731" width="582.1" height="30" rx="3" fill="#fff" stroke="#C1651B" stroke-width="1.6"/>
+<text x="1130" y="751" text-anchor="middle" font-size="11.5" font-weight="700" fill="#C1651B">If it were still running, the Pi would close the session itself and send the reason why</text>
+<rect x="40" y="787" width="1480" height="26" fill="#EEF3F7"/>
+<text x="54" y="805" text-anchor="start" font-size="11.5" font-weight="700" fill="#2E7BA6">DATA THAT WAS ALREADY ON ITS WAY</text>
+<line x1="1407" y1="827" x2="884" y2="827" stroke="#0F2E4C" stroke-width="1.7" marker-end="url(#ar)"/>
+<rect x="1023.1" y="808" width="243.79999999999998" height="16" fill="#fff"/>
+<text x="1145.0" y="820" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">FTP   a file sent just before the stop</text>
+<line x1="877" y1="854" x2="404" y2="854" stroke="#0F2E4C" stroke-width="1.7" marker-end="url(#ar)"/>
+<rect x="566.9" y="835" width="146.2" height="16" fill="#fff"/>
+<text x="640.0" y="847" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">GET /api/session/state</text>
+<line x1="403" y1="881" x2="876" y2="881" stroke="#0F2E4C" stroke-width="1.7" stroke-dasharray="6,4" marker-end="url(#ar)"/>
+<rect x="569.95" y="862" width="140.1" height="16" fill="#fff"/>
+<text x="640.0" y="874" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">no session is running</text>
+<rect x="674.0" y="909" width="412.0" height="30" rx="3" fill="#fff" stroke="#C1651B" stroke-width="1.6"/>
+<text x="880" y="929" text-anchor="middle" font-size="11.5" font-weight="700" fill="#C1651B">the file is thrown away — nothing is written to the database</text>
+<rect x="40" y="999" width="1480" height="56" rx="4" fill="#FDF6F2" stroke="#E8C4C0"/>
+<text x="60" y="1023" text-anchor="start" font-size="14.5" font-weight="700" fill="#C1651B">The database is closed first, and only then is the machine told — so a Stop can never be lost.</text>
+<text x="60" y="1043" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">Anything the TM-X sends after that moment is checked against the session state and thrown away, so a finished run can never gain extra rows.</text>
+</svg>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiDelete, apiGet, apiPatch, apiPost } from "../api/client";
@@ -257,6 +258,11 @@ export default function ExportPage() {
       return apiGet<any>(`/api/export/report-preview?${p}`);
     },
     enabled: canPreview,
+    // ⚠ ห้าม retry: ค่าเริ่มต้นของ TanStack คือลองใหม่ 3 ครั้งแบบ backoff ทำให้
+    //   คำขอที่ 500 ค้างอยู่ในสถานะ "กำลังโหลด…" หลายวินาทีก่อนจะยอมโชว์ error
+    //   ระหว่างนั้นตารางข้างล่างขึ้น "ไม่มีข้อมูลที่ตรงกับตัวกรอง" — คนอ่านแล้ว
+    //   เข้าใจว่า "กรองแล้วไม่เจอ" ทั้งที่จริงคือฝั่ง server พัง หาสาเหตุไม่เจอเลย
+    retry: false,
   });
 
   // ── เทมเพลต CRUD ────────────────────────────────────────────────────────
@@ -571,7 +577,19 @@ export default function ExportPage() {
                     <tr>{(previewQ.data?.columns ?? []).map((c: string) => <th key={c}>{c}</th>)}</tr>
                   </thead>
                   <tbody>
-                    {previewQ.data?.rows?.length ? (
+                    {/* ⚠ 3 สถานะนี้ต้องแยกกันให้ขาด — ของเดิมยุบเหลือข้อความเดียวคือ
+                        "ไม่มีข้อมูลที่ตรงกับตัวกรอง" ทำให้ตอน server ตอบ error
+                        หน้าเว็บโกหกว่ากรองแล้วไม่เจอ แล้วไล่หาสาเหตุผิดทางทั้งวัน */}
+                    {previewQ.isLoading ? (
+                      <tr><td className="empty" colSpan={previewQ.data?.columns?.length || 1}>กำลังโหลด…</td></tr>
+                    ) : previewQ.isError ? (
+                      <tr>
+                        <td className="empty" colSpan={previewQ.data?.columns?.length || 1}
+                            style={{ color: "var(--ng)" }}>
+                          โหลดตัวอย่างไม่สำเร็จ — {(previewQ.error as Error).message}
+                        </td>
+                      </tr>
+                    ) : previewQ.data?.rows?.length ? (
                       previewQ.data.rows.map((row: any[], i: number) => (
                         <tr key={i}>{row.map((cell, j) => <td key={j}>{cell == null ? "" : String(cell)}</td>)}</tr>
                       ))
@@ -587,7 +605,17 @@ export default function ExportPage() {
               </div>
             ) : (
               <div className="pv-wrap rpt-wrap">
-                <ReportSheet data={previewQ.data} />
+                {/* เหตุผลเดียวกับฝั่ง CSV — ReportSheet ที่ไม่มี data วาดเป็นกระดาษ
+                    เปล่า ซึ่งหน้าตาเหมือน "ไม่มีข้อมูล" ทั้งที่อาจเป็น error */}
+                {previewQ.isLoading ? (
+                  <div className="empty">กำลังโหลด…</div>
+                ) : previewQ.isError ? (
+                  <div className="empty" style={{ color: "var(--ng)" }}>
+                    โหลดตัวอย่างไม่สำเร็จ — {(previewQ.error as Error).message}
+                  </div>
+                ) : (
+                  <ReportSheet data={previewQ.data} />
+                )}
               </div>
             )}
 
@@ -645,12 +673,43 @@ export default function ExportPage() {
       )}
 
       {/* ── ที่วางผังรายงานตอนสั่งพิมพ์ ──────────────────────────────────
-          @media print ซ่อนทุกอย่างยกเว้นบล็อกนี้ (ดู index.css)
+          @media print ซ่อน #root ทั้งก้อนแล้วเหลือแค่บล็อกนี้ (ดู index.css)
 
           ⚠ วาดลงหน้านี้แล้วสั่ง print เลย ไม่เปิดหน้าต่างใหม่ เพราะ
             1) ไม่โดน pop-up blocker
-            2) ไม่ต้องประกอบ HTML ทั้งหน้าเป็นสตริง ซึ่งพลาดง่ายมาก      */}
-      <div id="print-root">{printData && <ReportSheet data={printData} />}</div>
+            2) ไม่ต้องประกอบ HTML ทั้งหน้าเป็นสตริง ซึ่งพลาดง่ายมาก
+
+          ⚠ ต้อง portal ออกไปนอก #root — ห้ามวางไว้ในต้นไม้ของหน้าเว็บ
+            ของเดิมวางไว้ข้างใน `#root > fieldset.page-lock > .main-edit` ทำให้
+            ซ่อนหน้าเว็บด้วย `display:none` ไม่ได้ (บล็อกนี้จะหายตามไปด้วย)
+            เลยต้องใช้ `visibility:hidden` แทน ซึ่ง **ยังกินพื้นที่ layout อยู่**
+            → เบราว์เซอร์นับความสูงของหน้าเว็บมาคิดจำนวนหน้า ได้กระดาษเปล่า
+              ต่อท้ายทุกครั้ง (เจอจริง: ข้อมูล 1 หน้า เปล่าอีก 2)
+            พอย้ายออกมาอยู่ใต้ body ตรง ๆ แล้ว ซ่อน #root ด้วย display:none
+            ได้เลย ความสูงของเอกสารจึงเหลือเท่ากับผังรายงานพอดี             */}
+      {createPortal(
+        <div id="print-root">
+          {printData && (
+            <>
+              {/* หัวกระดาษของเราเอง — โลโก้ซ้าย · ชื่อไฟล์กลาง · วันที่ขวา
+                  ⚠ ต้องมีอันนี้เพราะปิดหัว/ท้ายกระดาษของเบราว์เซอร์ไปแล้ว
+                    (@page margin: 0 ใน index.css) ไม่งั้นจะไม่มีอะไรบอกเลยว่า
+                    รายงานนี้คืออะไร ออกเมื่อไหร่ */}
+              <div className="print-head">
+                <img src="/assets/ADI-LOGO.svg" alt="Analog Devices" />
+                <span className="print-head-title">
+                  {cleanName || printData.template_name || "report"}
+                </span>
+                <span className="print-head-date">
+                  Date : {new Date().toLocaleDateString("en-GB")}
+                </span>
+              </div>
+              <ReportSheet data={printData} />
+            </>
+          )}
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }

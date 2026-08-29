@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 800" width="1600" height="800" font-family="Helvetica, Segoe UI, Arial, sans-serif"><rect width="1600" height="800" fill="#fff"/>
+<text x="56" y="60" text-anchor="start" font-size="32" font-weight="700" fill="#0F2E4C">Summary</text>
+<text x="56" y="90" text-anchor="start" font-size="14.5" font-weight="400" fill="#7A8794">What was built, where it stands today, and what happens next</text>
+<text x="56" y="132" text-anchor="start" font-size="12.5" font-weight="700" fill="#2E7BA6">WHAT WAS BUILT</text>
+<rect x="56" y="148" width="900" height="290" rx="5" fill="#F5F8FA" stroke="#0F2E4C" stroke-width="1.4"/>
+<circle cx="82" cy="191" r="4" fill="#2E7BA6"/>
+<text x="102" y="196" text-anchor="start" font-size="15" font-weight="400" fill="#0F2E4C">A web application that sets up a run, watches it, and</text>
+<text x="102" y="217" text-anchor="start" font-size="15" font-weight="400" fill="#0F2E4C">keeps every record</text>
+<circle cx="82" cy="253" r="4" fill="#2E7BA6"/>
+<text x="102" y="258" text-anchor="start" font-size="15" font-weight="400" fill="#0F2E4C">A core service that holds all state, decides OK / NG and</text>
+<text x="102" y="279" text-anchor="start" font-size="15" font-weight="400" fill="#0F2E4C">owns the database</text>
+<circle cx="82" cy="315" r="4" fill="#2E7BA6"/>
+<text x="102" y="320" text-anchor="start" font-size="15" font-weight="400" fill="#0F2E4C">An edge controller that drives the TM-X, and will drive</text>
+<text x="102" y="341" text-anchor="start" font-size="15" font-weight="400" fill="#0F2E4C">the MCU</text>
+<circle cx="82" cy="377" r="4" fill="#2E7BA6"/>
+<text x="102" y="382" text-anchor="start" font-size="15" font-weight="400" fill="#0F2E4C">A Power BI dashboard that viewers reach without asking an</text>
+<text x="102" y="403" text-anchor="start" font-size="15" font-weight="400" fill="#0F2E4C">operator</text>
+<text x="984" y="132" text-anchor="start" font-size="12.5" font-weight="700" fill="#2E7BA6">WHERE IT STANDS</text>
+<rect x="984" y="148" width="560" height="88" rx="5" fill="#fff" stroke="#C8D3DC"/>
+<rect x="984" y="148" width="6" height="88" rx="3" fill="#2E7D57"/>
+<text x="1030" y="204" text-anchor="middle" font-size="38" font-weight="700" fill="#2E7D57">4</text>
+<text x="1068" y="186" text-anchor="start" font-size="16" font-weight="700" fill="#0F2E4C">Completed</text>
+<text x="1068" y="208" text-anchor="start" font-size="11.5" font-weight="400" fill="#7A8794">Core Service · Data Receiver · Image Server</text>
+<text x="1068" y="225" text-anchor="start" font-size="11.5" font-weight="400" fill="#7A8794">· Database</text>
+<rect x="984" y="249" width="560" height="88" rx="5" fill="#fff" stroke="#C8D3DC"/>
+<rect x="984" y="249" width="6" height="88" rx="3" fill="#2E7BA6"/>
+<text x="1030" y="305" text-anchor="middle" font-size="38" font-weight="700" fill="#2E7BA6">3</text>
+<text x="1068" y="287" text-anchor="start" font-size="16" font-weight="700" fill="#0F2E4C">On track</text>
+<text x="1068" y="309" text-anchor="start" font-size="11.5" font-weight="400" fill="#7A8794">Web app UI · MCU integration · Power BI</text>
+<text x="1068" y="326" text-anchor="start" font-size="11.5" font-weight="400" fill="#7A8794">filters</text>
+<rect x="984" y="350" width="560" height="88" rx="5" fill="#fff" stroke="#C8D3DC"/>
+<rect x="984" y="350" width="6" height="88" rx="3" fill="#C1651B"/>
+<text x="1030" y="406" text-anchor="middle" font-size="38" font-weight="700" fill="#C1651B">1</text>
+<text x="1068" y="388" text-anchor="start" font-size="16" font-weight="700" fill="#0F2E4C">Not started</text>
+<text x="1068" y="410" text-anchor="start" font-size="11.5" font-weight="400" fill="#7A8794">The measuring program in the TM-X</text>
+<text x="56" y="486" text-anchor="start" font-size="12.5" font-weight="700" fill="#C1651B">WHAT IS NEXT</text>
+<rect x="56.0" y="504" width="730.0" height="150" rx="5" fill="#F5F8FA" stroke="#C1651B" stroke-width="1.5"/>
+<rect x="76.0" y="524" width="65.0" height="26" rx="13" fill="#C1651B"/>
+<text x="108.5" y="542" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">Today</text>
+<text x="76.0" y="584" text-anchor="start" font-size="16" font-weight="700" fill="#0F2E4C">Set up the measuring program in the TM-X</text>
+<text x="76.0" y="632" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">The last piece before the system can run a full part on its</text>
+<text x="76.0" y="650" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">own</text>
+<rect x="814.0" y="504" width="730.0" height="150" rx="5" fill="#F5F8FA" stroke="#C1651B" stroke-width="1.5"/>
+<rect x="834.0" y="524" width="99.39999999999999" height="26" rx="13" fill="#C1651B"/>
+<text x="883.7" y="542" text-anchor="middle" font-size="12.5" font-weight="700" fill="#fff">Next week</text>
+<text x="834.0" y="584" text-anchor="start" font-size="16" font-weight="700" fill="#0F2E4C">Install the PC server on the floor and run real</text>
+<text x="834.0" y="606" text-anchor="start" font-size="16" font-weight="700" fill="#0F2E4C">parts with the operators</text>
+<text x="834.0" y="632" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">The first week of real use is what tells us what to fix next</text>
+<rect x="56" y="686" width="1488" height="80" rx="5" fill="#0F2E4C"/>
+<text x="800.0" y="722" text-anchor="middle" font-size="17" font-weight="700" fill="#fff">Everything the software has to do already works end to end — a part goes in, and the result and its image reach the database and the dashboard on their own.</text>
+<text x="800.0" y="748" text-anchor="middle" font-size="13.5" font-weight="400" fill="#CBD8E2">What is left is the last hardware signal, and the first real week in the hands of the people who will use it.</text>
+</svg>

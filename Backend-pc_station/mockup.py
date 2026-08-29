@@ -20,7 +20,6 @@ import os
 import random
 import threading
 import time
-import uuid
 
 import httpx
 import uvicorn
@@ -200,7 +199,6 @@ def post_measurement(session_id, number_alpl, value_x, value_y,
     number_alpl ที่ส่งไปเป็นแค่ค่า fallback — Backend จะเพิกเฉยแล้วใช้ ALPL ตาม
     ตำแหน่งในคิวของ session นั้นเอง (ดู create_measurement) Agent ไม่จำเป็นต้อง
     รู้ว่ากำลังวัด ALPL ตัวไหนอยู่ในคิว
-    client_uuid: สร้างใหม่ทุกชิ้น ใช้กัน insert ซ้ำถ้ามีการ retry
 
     ⚠⚠ **payload ต้องตรงกับ `MeasurementCreate` ใน shared.py เป๊ะ** — ทุกฟิลด์
        เป็น required ไม่มี default แล้ว (จงใจ เพราะ default 0.0 ทำให้ผู้ส่งที่
@@ -221,7 +219,6 @@ def post_measurement(session_id, number_alpl, value_x, value_y,
         "tl_op":       tl_op,
         "bl_op":       bl_op,
         "br_op":       br_op,
-        "client_uuid": str(uuid.uuid4()),
     }
     try:
         r = httpx.post(f"{BACKEND_URL}/api/measurements", json=payload, timeout=10)

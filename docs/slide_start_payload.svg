@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 830" width="1560" height="830" font-family="Helvetica, Segoe UI, Arial, sans-serif"><rect width="1560" height="830" fill="#fff"/>
+<defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#0F2E4C"/></marker></defs>
+<text x="40" y="52" text-anchor="start" font-size="27" font-weight="700" fill="#0F2E4C">What travels when Start is pressed</text>
+<text x="40" y="80" text-anchor="start" font-size="13.5" font-weight="400" fill="#7A8794">The operator fills in a form · the backend turns it into the smallest thing the machine needs to know</text>
+<text x="255.0" y="138" text-anchor="middle" font-size="13" font-weight="700" fill="#2E7BA6">BROWSER</text>
+<text x="760.0" y="138" text-anchor="middle" font-size="13" font-weight="700" fill="#2E7BA6">PC SERVER</text>
+<text x="1285.0" y="138" text-anchor="middle" font-size="13" font-weight="700" fill="#2E7BA6">RASPBERRY PI</text>
+<rect x="40" y="155" width="430" height="170" rx="4" fill="#F5F8FA" stroke="#0F2E4C" stroke-width="1.4"/>
+<path d="M44,155 h422 a4,4 0 0 1 4,4 v28 h-430 v-28 a4,4 0 0 1 4,-4 z" fill="#0F2E4C"/>
+<text x="255.0" y="176" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">IPM</text>
+<circle cx="62" cy="207" r="3" fill="#2E7BA6"/>
+<text x="76" y="211" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Measure Type</text>
+<circle cx="62" cy="234" r="3" fill="#2E7BA6"/>
+<text x="76" y="238" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Operator</text>
+<circle cx="62" cy="261" r="3" fill="#2E7BA6"/>
+<text x="76" y="265" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Number ALPL</text>
+<text x="60" y="291" text-anchor="start" font-size="10.8" font-weight="400" fill="#C1651B">Package Size goes separately to /api/parts, only for an</text>
+<text x="60" y="307" text-anchor="start" font-size="10.8" font-weight="400" fill="#C1651B">ALPL that is not registered yet</text>
+<rect x="40" y="350" width="430" height="340" rx="4" fill="#F5F8FA" stroke="#0F2E4C" stroke-width="1.4"/>
+<path d="M44,350 h422 a4,4 0 0 1 4,4 v28 h-430 v-28 a4,4 0 0 1 4,-4 z" fill="#0F2E4C"/>
+<text x="255.0" y="371" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">NEW  /  REWORK</text>
+<circle cx="62" cy="402" r="3" fill="#2E7BA6"/>
+<text x="76" y="406" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Measure Type</text>
+<circle cx="62" cy="429" r="3" fill="#2E7BA6"/>
+<text x="76" y="433" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Operator</text>
+<circle cx="62" cy="456" r="3" fill="#2E7BA6"/>
+<text x="76" y="460" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Number ALPL</text>
+<circle cx="62" cy="483" r="3" fill="#2E7BA6"/>
+<text x="76" y="487" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Package Size</text>
+<circle cx="62" cy="510" r="3" fill="#2E7BA6"/>
+<text x="76" y="514" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Part Number</text>
+<circle cx="62" cy="537" r="3" fill="#2E7BA6"/>
+<text x="76" y="541" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Vendor</text>
+<circle cx="62" cy="564" r="3" fill="#2E7BA6"/>
+<text x="76" y="568" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">PO Number</text>
+<circle cx="62" cy="591" r="3" fill="#2E7BA6"/>
+<text x="76" y="595" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Description</text>
+<circle cx="62" cy="618" r="3" fill="#2E7BA6"/>
+<text x="76" y="622" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Owner</text>
+<circle cx="62" cy="645" r="3" fill="#2E7BA6"/>
+<text x="76" y="649" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">Receive Date</text>
+<rect x="620" y="345" width="280" height="170" rx="4" fill="#C1651B"/>
+<text x="760" y="378" text-anchor="middle" font-size="15" font-weight="700" fill="#fff">Core Service</text>
+<text x="760" y="406" text-anchor="middle" font-size="12.5" font-weight="400" fill="#fff">checks the form</text>
+<text x="760" y="429" text-anchor="middle" font-size="12.5" font-weight="400" fill="#fff">looks up the criteria</text>
+<text x="760" y="452" text-anchor="middle" font-size="12.5" font-weight="400" fill="#fff">turns tolerances into</text>
+<text x="760" y="475" text-anchor="middle" font-size="12.5" font-weight="400" fill="#fff">finished limits</text>
+<rect x="1050" y="155" width="470" height="535" rx="4" fill="#F5F8FA" stroke="#0F2E4C" stroke-width="1.4"/>
+<path d="M1054,155 h462 a4,4 0 0 1 4,4 v28 h-470 v-28 a4,4 0 0 1 4,-4 z" fill="#0F2E4C"/>
+<text x="1285.0" y="176" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">WHAT THE PI ACTUALLY RECEIVES</text>
+<circle cx="1072" cy="207" r="3" fill="#2E7BA6"/>
+<text x="1086" y="211" font-family="Menlo, Consolas, monospace" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">session_id</text>
+<circle cx="1072" cy="234" r="3" fill="#2E7BA6"/>
+<text x="1086" y="238" font-family="Menlo, Consolas, monospace" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">target_count</text>
+<circle cx="1072" cy="261" r="3" fill="#2E7BA6"/>
+<text x="1086" y="265" font-family="Menlo, Consolas, monospace" text-anchor="start" font-size="13.5" font-weight="700" fill="#0F2E4C">groups [ ]</text>
+<circle cx="1090" cy="288" r="3" fill="#2E7BA6"/>
+<text x="1104" y="292" font-family="Menlo, Consolas, monospace" text-anchor="start" font-size="12.5" font-weight="700" fill="#0F2E4C">template_name</text>
+<circle cx="1090" cy="315" r="3" fill="#2E7BA6"/>
+<text x="1104" y="319" font-family="Menlo, Consolas, monospace" text-anchor="start" font-size="12.5" font-weight="700" fill="#0F2E4C">alpl [ ]</text>
+<circle cx="1090" cy="342" r="3" fill="#2E7BA6"/>
+<text x="1104" y="346" font-family="Menlo, Consolas, monospace" text-anchor="start" font-size="12.5" font-weight="700" fill="#0F2E4C">limits.x_lo   x_hi</text>
+<circle cx="1090" cy="369" r="3" fill="#2E7BA6"/>
+<text x="1104" y="373" font-family="Menlo, Consolas, monospace" text-anchor="start" font-size="12.5" font-weight="700" fill="#0F2E4C">limits.y_lo   y_hi</text>
+<circle cx="1090" cy="396" r="3" fill="#2E7BA6"/>
+<text x="1104" y="400" font-family="Menlo, Consolas, monospace" text-anchor="start" font-size="12.5" font-weight="700" fill="#0F2E4C">limits.offset_max</text>
+<text x="1070" y="600" text-anchor="start" font-size="11.5" font-weight="400" fill="#7A8794">one entry per group — the Pi switches</text>
+<text x="1070" y="618" text-anchor="start" font-size="11.5" font-weight="400" fill="#7A8794">programs and judges OK / NG from these</text>
+<text x="1070" y="636" text-anchor="start" font-size="11.5" font-weight="400" fill="#7A8794">numbers alone</text>
+<line x1="478" y1="430" x2="614" y2="430" stroke="#0F2E4C" stroke-width="2" marker-end="url(#ar)"/>
+<text x="545.0" y="412" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">POST</text>
+<text x="545.0" y="455" text-anchor="middle" font-size="11" font-weight="400" fill="#7A8794">/api/session/start</text>
+<line x1="908" y1="430" x2="1044" y2="430" stroke="#0F2E4C" stroke-width="2" marker-end="url(#ar)"/>
+<text x="975.0" y="412" text-anchor="middle" font-size="11.5" font-weight="700" fill="#0F2E4C">POST</text>
+<text x="975.0" y="455" text-anchor="middle" font-size="11" font-weight="400" fill="#7A8794">/command</text>
+<rect x="40" y="720" width="1480" height="76" rx="4" fill="#FDF6F2" stroke="#E8C4C0"/>
+<text x="60" y="748" text-anchor="start" font-size="15.5" font-weight="700" fill="#C1651B">The measure type never reaches the Pi, and neither do the raw tolerances.</text>
+<text x="60" y="770" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">The backend works out the pass / fail bounds first, so the Pi only ever compares numbers — every rule about IPM, New and Rework</text>
+<text x="60" y="788" text-anchor="start" font-size="12.5" font-weight="400" fill="#7A8794">stays in one place, and the machine can never disagree with the database about whether a part passed.</text>
+</svg>

@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 642" width="1600" height="642" font-family="Georgia, Times New Roman, serif"><rect width="1600" height="642" fill="#fff"/>
+<text x="64" y="66" text-anchor="start" font-size="32" font-weight="700" fill="#0F2E4C">Summary</text>
+<text x="64" y="96" text-anchor="start" font-size="15" font-weight="400" fill="#7A8794">Six months, in one page</text>
+<line x1="64" y1="118" x2="1536" y2="118" stroke="#D6DEE7"/>
+<text x="64.0" y="150" text-anchor="start" font-size="12" font-weight="700" fill="#2E7BA6">THE JOB</text>
+<text x="64.0" y="176" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">ALPL plates are inspected in the PM Kit room before they go back onto a test</text>
+<text x="64.0" y="203" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">handler. Until now that meant an operator working the KEYENCE TM-X panel by hand,</text>
+<text x="64.0" y="230" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">reading each measurement off the screen and writing it down. The readings lived on</text>
+<text x="64.0" y="257" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">paper, so there was nothing to search later and no image to look back at.</text>
+<text x="64.0" y="314" text-anchor="start" font-size="12" font-weight="700" fill="#2E7BA6">WHAT WAS BUILT</text>
+<text x="64.0" y="340" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">The system replaces that with one screen. The operator enters the parts, presses</text>
+<text x="64.0" y="367" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">Start, and from there the edge controller drives the TM-X while the values and</text>
+<text x="64.0" y="394" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">images come back on their own — every reading stored with the picture the camera</text>
+<text x="64.0" y="421" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">took. One service holds all the state and makes the pass or fail decision, so the</text>
+<text x="64.0" y="448" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">machine and the database can never disagree. Records can be corrected, exported as</text>
+<text x="64.0" y="475" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">CSV, Excel or PDF, and read in Power BI without waiting for anyone to send them.</text>
+<text x="828.0" y="150" text-anchor="start" font-size="12" font-weight="700" fill="#2E7BA6">WHAT HAD TO CHANGE</text>
+<text x="828.0" y="176" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">Two things forced the design to move. Company policy would not let a Raspberry Pi</text>
+<text x="828.0" y="203" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">onto the corporate network, so the PC became the server and the Pi became an edge</text>
+<text x="828.0" y="230" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">controller beside the machine. And once the camera was ready it measured on its own</text>
+<text x="828.0" y="257" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">schedule and pushed a stream of images at us, until it was switched to an external</text>
+<text x="828.0" y="284" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">trigger so that nothing is measured without one explicit command per part.</text>
+<text x="828.0" y="341" text-anchor="start" font-size="12" font-weight="700" fill="#2E7BA6">WHERE IT STANDS</text>
+<text x="828.0" y="367" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">Four of the eight parts are finished — the core service, the data receiver, the</text>
+<text x="828.0" y="394" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">image server and the database. Three are on track: the web interface, the Power BI</text>
+<text x="828.0" y="421" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">dashboard, and the integration with the MCU. The measuring program in the TM-X</text>
+<text x="828.0" y="448" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">starts today, and next week the PC server goes onto the floor so operators can run</text>
+<text x="828.0" y="475" text-anchor="start" font-size="16.5" font-weight="400" fill="#0F2E4C">real parts on it.</text>
+<line x1="800.0" y1="150" x2="800.0" y2="502" stroke="#E3E9EE"/>
+<rect x="64" y="532" width="1472" height="72" rx="4" fill="#FDF6F2" stroke="#E8C4C0"/>
+<text x="88" y="562" text-anchor="start" font-size="17" font-weight="700" fill="#C1651B">Everything the software has to do already works end to end. What is left is the last hardware signal, and the</text>
+<text x="88" y="588" text-anchor="start" font-size="17" font-weight="700" fill="#C1651B">first real week in the hands of the people who will use it.</text>
+</svg>

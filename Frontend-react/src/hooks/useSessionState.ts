@@ -67,7 +67,18 @@ export function useSessionState() {
   const q = useQuery<SessionState, ApiError>({
     queryKey: ["session-state"],
     queryFn: () => apiGet<SessionState>("/api/session/state"),
-    refetchInterval: 4000,
+    /* ── ถามถี่ขึ้นเฉพาะตอนกำลังวัด ────────────────────────────────────────
+       ค่าที่ต้องการความสดที่สุดคือ `trigger_ready` — ปุ่ม ⚡ Trigger ต้องสว่าง
+       ทันทีที่ Pi ยืนรอสัญญาณ ไม่งั้นคนหน้างานจะยืนรอปุ่มโดยไม่รู้ว่าต้องรออีกนาน
+       แค่ไหน (Pi ยิง heartbeat บอกทันทีที่พร้อมแล้ว ตัวที่ช้าคือฝั่งเราไม่ไปถาม)
+
+       4 วิ ตอน idle ก็พอ เพราะสิ่งเดียวที่เปลี่ยนคือชิป PI กับป้าย DB ซึ่งช้าไป
+       สองสามวินาทีไม่มีผลอะไร · ส่วนตอน running ลดเหลือ 1 วิ
+
+       request เพิ่มขึ้น 4 เท่าเฉพาะช่วงวัด ซึ่งรับได้สบายเพราะระบบนี้มีผู้ใช้
+       จริงคนเดียว (ดูสไลด์ Scope — วัด 1 ชิ้นทุก ~30 นาที)                   */
+    refetchInterval: (query) =>
+      query.state.data?.state === "running" ? 1000 : 4000,
     staleTime: 0,
     // ห้าม retry: เส้นนี้ถูกใช้เป็น "เครื่องวัดว่า DB ยังไหวไหม" ด้วย
     // ถ้าปล่อยให้ retry ป้ายจะขึ้น DB Offline ช้ากว่าความจริงหลายวินาที

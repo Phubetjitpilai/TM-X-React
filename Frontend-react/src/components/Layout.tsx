@@ -116,8 +116,12 @@ export default function Layout() {
         </div>
 
         <nav className="topbar-nav">
+          {/* ⚠ ชื่อเมนูเป็น "Measure" แต่ route ยังเป็น "/" เหมือนเดิม — เปลี่ยนแค่
+              ข้อความที่ผู้ใช้เห็น ให้เข้าชุดกับ Edit/Export ที่เป็นคำกริยาทั้งคู่
+              (ห้ามเปลี่ยน `to="/"` เป็น "/measure" เพราะจะพัง bookmark เดิม
+              และ StaticFiles ตอน deploy ต้องมี fallback ให้ path ใหม่ด้วย) */}
           <NavLink to="/" end className={({ isActive }) => `topbar-link${isActive ? " active" : ""}`}>
-            Home
+            Measure
           </NavLink>
           <NavLink to="/edit" className={({ isActive }) => `topbar-link${isActive ? " active" : ""}`}>
             Edit

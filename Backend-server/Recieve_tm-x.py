@@ -59,7 +59,6 @@ from dotenv import load_dotenv
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
 from pyftpdlib.servers import FTPServer
-import uuid
 
 # รากโปรเจกต์ = โฟลเดอร์แม่ของ Backend-pc_station/ (ที่ .env กับ Store_image_temporary อยู่)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -140,10 +139,19 @@ _txt_lock = threading.Lock()
 _jobs_in_flight = 0
 _jobs_lock = threading.Lock()
 
-# ── ตัวแปรและ Lock สำหรับนับจำนวน ──────────────────────────────────────────
-image_count = 0
-row_txt_count = 0
-count_lock = threading.Lock()  # ใช้คุมทั้ง image_count และ row_txt_count
+# ── ตำแหน่งที่อ่านไฟล์ .txt ไปแล้ว ──────────────────────────────────────────
+# ⚠ ต้องเก็บเป็น "คู่" (path, rows) เสมอ ห้ามเก็บแค่ตัวเลข
+#   TM-X ขึ้นไฟล์ .txt ใหม่ทุกครั้งที่ Pi ยิง R0 (ชื่อไฟล์ = เวลาของชิ้นแรกในรอบนั้น
+#   เช่น tm-x/result/SD1_021/260828_140534.txt) ไฟล์ใหม่เริ่มที่ 1 บรรทัด —
+#   ถ้าเทียบกับตัวเลขเก่าที่ค้างอยู่จะกลายเป็น "ไม่เพิ่ม" ตลอดกาล แล้วทุกชิ้น
+#   หลังจากนั้นจะขึ้น TXT_NOT_FOUND (เคยเกิดจริง ดูล็อก session 73 → 74)
+#
+# เลิกใช้ตัวนับรูปมาเทียบกับจำนวนบรรทัดแล้ว — สองอย่างนั้นนับคนละฐานกัน
+# (ตัวนับรูปนับรวมรูปที่ถูกทิ้ง เช่น NO_SESSION ด้วย ส่วนบรรทัดรีเซ็ตตาม R0)
+# ลำดับชิ้นงานที่ต้องการดูมีอยู่ในชื่อไฟล์ของ TM-X อยู่แล้ว (…_0000000002_…)
+_txt_cursor_path = None
+_txt_cursor_rows = 0
+count_lock = threading.Lock()  # คุม _txt_cursor_path / _txt_cursor_rows
 
 
 def _job_begin():
@@ -200,34 +208,51 @@ def _read_lines(path: str):
         return []
 
 
-def _find_measurement_for_image(image_count: int, timeout: float = TXT_WAIT_TIMEOUT):
-    """หาผลการวัดจากบรรทัดที่ตรงกับลำดับรูป (image_count) ในไฟล์ .txt ล่าสุด
+def _find_measurement_for_image(timeout: float = TXT_WAIT_TIMEOUT):
+    """รอจนไฟล์ .txt มีบรรทัด "เพิ่มขึ้นจากเดิม" แล้วคืนค่าที่แกะจากบรรทัดล่าสุด
 
-    วนรอจนกว่าไฟล์ .txt จะมีจำนวนบรรทัดครบตาม image_count หรือจนกว่าจะหมดเวลา
-    คืนค่า (value_x, value_y, offset) หรือ None หากหมดเวลาแล้วยังไม่มีข้อมูล
+    ทำไมต้องรอ: TM-X ส่งของเรียง HEAD-A → .txt → capture-image เสมอ
+    (ยืนยันจากล็อกจริง) รูปที่เราใช้จึงมาถึง **ก่อน** ค่าเสมอ
+
+    ทำไมเทียบ "เพิ่มขึ้นจากเดิม" ไม่ใช่นับรูป: จำนวนแถวกับจำนวนรูปไม่ได้เดินคู่กัน
+      · TM-X ส่งบัฟเฟอร์ทั้งก้อนซ้ำตอน APPE (วัด 2 ชิ้นได้ 3 แถว)
+      · รูปที่ถูกทิ้ง (NO_SESSION) ก็ถูกนับไปแล้ว
+      · .txt ย้อนกลับไปที่ 1 แถวทุกครั้งที่ขึ้นไฟล์ใหม่
+    ดูที่ไฟล์โตขึ้นหรือเปล่าอย่างเดียวจึงทนต่อทั้งสามเรื่องนี้
+
+    คืน (value_x, value_y, tr_op, tl_op, bl_op, br_op, offset_opx, offset_opy)
+    หรือ None ถ้าหมดเวลาแล้วยังไม่มีบรรทัดใหม่
     """
+    global _txt_cursor_path, _txt_cursor_rows
     deadline = time.time() + timeout
+
     while True:
-        target_path = None
         with _txt_lock:
-            if _txt_paths:
-                target_path = _txt_paths[-1]  # ไฟล์ .txt ที่ได้รับล่าสุด
+            path = _txt_paths[-1] if _txt_paths else None   # ไฟล์ .txt ที่ได้รับล่าสุด
 
-        if target_path:
-            lines = _read_lines(target_path)
-            total_rows = len(lines)
-            print("total_rows: ",total_rows)
-            print(image_count)
+        if path:
+            # ⚠ อ่าน → เทียบ → เลื่อนหมุด ต้องอยู่ในล็อกเดียวกัน
+            #   รูป 2 ใบที่มาไล่กันติด ๆ อยู่คนละเธรด ถ้าแยกกันทั้งคู่จะเห็น
+            #   ค่าเดิมพร้อมกันแล้วหยิบบรรทัดเดียวกันไปทั้งคู่ = ค่าซ้ำ 2 แถว
+            with count_lock:
+                if path != _txt_cursor_path:
+                    print(f"📄 .txt ไฟล์ใหม่ → {os.path.basename(path)} (เริ่มนับบรรทัดใหม่)")
+                    _txt_cursor_path = path
+                    _txt_cursor_rows = 0
 
-            # 1. เช็คว่ามีจำนวนบรรทัดใน .txt ถึงลำดับชิ้นงานที่ต้องการแล้วหรือยัง
-            if total_rows >= image_count:
-                # image_count เริ่มที่ 1 (1, 2, 3...) ต้อง -1 เพื่อแปลงเป็น Index 0-based ของ List
-                target_line = lines[total_rows - 1]
-                parsed = _parse_measurement_line(target_line)
-                if parsed is not None:
-                    return parsed  # คืนค่า (value_x, value_y, tr_op, tl_op, bl_op, br_op, offset_opx, offset_opy)
+                lines  = _read_lines(path)
+                before = _txt_cursor_rows
+                after  = len(lines)
 
-        # 2. ถ้าบรรทัดยังมาไม่ถึง ให้รอแล้ววนเช็คใหม่จนกว่าจะหมด timeout
+                if after > before:
+                    # เลื่อนหมุดก่อนเสมอ ถึงแกะบรรทัดไม่ได้ก็ไม่ถอยกลับ — บรรทัดนั้น
+                    # เสียไปแล้ว รอบหน้าต้องรอบรรทัดถัดไป ไม่ใช่วนอ่านซ้ำจนหมดเวลา
+                    _txt_cursor_rows = after
+                    print(f"   📈 .txt {before} → {after} บรรทัด")
+                    parsed = _parse_measurement_line(lines[-1])
+                    if parsed is not None:
+                        return parsed
+
         if time.time() >= deadline:
             return None
         time.sleep(0.3)
@@ -282,8 +307,6 @@ def post_to_backend(
             # ── กลุ่มค่า Offset ──
             "offset_opx":  offset_opx,
             "offset_opy":  offset_opy,
-
-            "client_uuid": str(uuid.uuid4()),
         },
         timeout=10,
     )
@@ -367,7 +390,7 @@ def clear_temp_dir(wait_timeout: float = 30.0):
     ⚠ ยึด TEMP_IMAGE_DIR เป็น absolute path ที่ resolve แล้วเสมอ ไม่รับ path
       จากที่อื่นมาลบ — พลาดตรงนี้ทีเดียวคือลบผิดโฟลเดอร์บนเครื่องจริง
     """
-    global image_count, row_txt_count
+    global _txt_cursor_path, _txt_cursor_rows
     # ── รอให้งานที่ค้างอยู่เสร็จก่อน ────────────────────────────────────
     deadline = time.time() + wait_timeout
     if _jobs_count() > 0:
@@ -392,9 +415,10 @@ def clear_temp_dir(wait_timeout: float = 30.0):
         _txt_paths.clear()   # path ที่จำไว้ชี้ไปยังไฟล์ที่ไม่มีแล้ว
 
     with count_lock:
-        image_count = 0
-        row_txt_count = 0
-    print("🔄 รีเซ็ต image_count และ row_txt_count เป็น 0 เรียบร้อย")
+        # ไฟล์ที่หมุดชี้อยู่ถูกลบไปกับโฟลเดอร์ temp แล้ว ต้องล้างด้วย
+        _txt_cursor_path = None
+        _txt_cursor_rows = 0
+    print("🔄 รีเซ็ตตำแหน่งอ่าน .txt เรียบร้อย")
 
     if removed_files or removed_dirs:
         print(f"🧹 ล้าง {os.path.basename(TEMP_IMAGE_DIR)} แล้ว "
@@ -438,7 +462,7 @@ def _handle_capture(image_path, t_recv=None):
     """รันในเธรดแยกทุกครั้งที่ได้รูปที่ "นับเป็นชิ้นงาน" มา 1 ใบ
 
     ทำ 4 ด่านตามลำดับ — ตกด่านไหนก็ทิ้งรูปแล้วจบ:
-      1. หาค่าคู่กับรูปนี้ให้เจอ (จับคู่ด้วยเวลาในชื่อไฟล์)
+      1. หาค่าคู่กับรูปนี้ให้เจอ (รอจนไฟล์ .txt มีบรรทัดเพิ่มขึ้น แล้วเอาบรรทัดล่าสุด)
       2. ค่าต้องไม่ใช่ -9999.999 (TM-X วัดไม่ติด)
       3. ต้องมี session ที่ running อยู่ตอนนี้
       4. POST ค่า + อัปโหลดรูป
@@ -450,9 +474,6 @@ def _handle_capture(image_path, t_recv=None):
 
 
 def _handle_capture_inner(image_path, t_recv):
-    global image_count
-    with count_lock:
-        image_count += 1
     name = os.path.basename(image_path)
     t_recv = t_recv or time.time()
     try:
@@ -461,7 +482,7 @@ def _handle_capture_inner(image_path, t_recv):
         size_mb = 0.0
 
     # ── ด่าน 1: จับคู่ค่ากับรูป ──────────────────────────────────────────
-    pair = _find_measurement_for_image(image_count)
+    pair = _find_measurement_for_image()
     if pair is None:
         report("TXT_NOT_FOUND",f"หาบรรทัดใน .txt ไม่เจอ "f"(รอ {TXT_WAIT_TIMEOUT:.0f} วิแล้ว) — ทิ้งรูป")
         _remove_quietly(image_path)
@@ -619,6 +640,8 @@ def start_ftp_server():
     handler = ReceiverFTPHandler
     handler.authorizer = _ftp_authorizer
     handler.passive_ports = range(60000, 60100)
+    handler.dtp_handler.ac_in_buffer_size = 1048576
+    handler.dtp_handler.ac_out_buffer_size = 1048576
     server = FTPServer((AGENT_FTP_HOST, AGENT_FTP_PORT), handler)
 
     # ⚠ timeout=1 จำเป็นบน Windows — ห้ามเอาออก

@@ -212,9 +212,6 @@ def heartbeat_loop():
                 f"{BACKEND_URL}/api/heartbeat",
                 json={
                     "session_id": current_session_id,
-                    # บอก Backend ว่า "ตอนนี้ยิงทริกเกอร์เข้ามาได้ไหม" เพื่อให้ปุ่ม
-                    # จำลองทริกเกอร์บนหน้าเว็บสว่างเฉพาะตอนกดได้จริง
-                    # อ่าน global เฉยๆ ไม่ต้อง lock — bool ตัวเดียว atomic ใต้ GIL
                     "waiting_for_trigger": _waiting_for_trigger,
                 },
                 timeout=5,
@@ -253,18 +250,36 @@ def get_measured_count(session_id):
 # วนถามจนกว่ามันจะตอบ is_ready 
 # รอ Trigger จาก MCU
 def wait_for_trigger_mcu():
+    print("arrive")
+    global _waiting_for_trigger
     _trigger.clear()
     _waiting_for_trigger = True
+    # บอก Backend ทันทีว่าพร้อมรับ trigger — ไม่ต้องรอ heartbeat รอบถัดไป
+    #
+    # ⚠ timeout สั้นมากโดยตั้งใจ เพราะบรรทัดนี้อยู่ใน **เธรดที่กำลังวัดงาน**
+    #   ถ้า Backend ช้าหรือค้าง Pi จะหยุดรอตรงนี้ก่อนเข้าลูปรอสัญญาณ ทำให้เกิด
+    #   อาการ "กดปุ่มแล้วเครื่องไม่ขยับ" ซึ่งหาสาเหตุยากมาก
+    #   ส่งไม่ทันก็ไม่เป็นไร — heartbeat รอบปกติจะตามมาใน HB_INTERVAL วิอยู่แล้ว
+    try:
+        httpx.post(f"{BACKEND_URL}/api/heartbeat",
+            json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
+            timeout=0.5)
+    except Exception:
+        pass
     try:
         while is_running:
-            if _trigger.wait(0.1):   # ตื่นทุก 0.1 วิ ไปเช็ค is_running
+            if _trigger.wait(0.1):
                 return True
         return False
     finally:
         _waiting_for_trigger = False
-_mcu_ready = threading.Event()  
-_mcu_ack   = threading.Event()  
-_mcu_waiting = {"ready": False, "ack": False}
+        # บอก Backend ทันทีว่าไม่รอแล้ว → ปุ่มดับเลย
+        try:
+            httpx.post(f"{BACKEND_URL}/api/heartbeat",
+                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
+                timeout=5)
+        except Exception:
+            pass
 
 def send_recv(sock, command, timeout=SOCKET_TIMEOUT):
     """ส่ง 1 คำสั่ง แล้ว **วน recv จนเจอ CR** — คืน (response, ok)
@@ -386,6 +401,7 @@ def trigger_tmx(sock):
     clear_measurement(sock)          # MRS ก่อนเสมอ ห้ามลืม
     for attempt in range(1, T1_RETRY + 1):
         resp, ok = send_recv(sock, "T1")
+        print(resp)
         if ok:
             print(f"📡 TM-X ตอบ T1: {resp}")
             print(f"ส่ง T1 สำเร็จหลังลอง {T1_RETRY} ครั้ง  {resp}")
@@ -430,7 +446,7 @@ def clean_tools(tools):
     if not tools:
         return []
         # กรองเอาเฉพาะ item ที่สถานะไม่ใช่ 0 หรือ 3 (รองรับทั้ง int และ string)
-    return [item for item in tools if str(item[0]) != "-9999.999"]
+    return [item for item in tools if str(item[0]) not in "-9999.999"]
 
             # ── ดึงค่าออกมาตาม index ที่ตั้งไว้ ────────────────────────────
 def _val(idx,tools):
@@ -594,9 +610,9 @@ def post_measurement_from_pi(session_id, piece, x, y, tr_op, tl_op, bl_op, br_op
     (ชิ้นงานถูก MCU คัดแยกไปแล้ว ไม่มีอะไรให้วัดใหม่) สิ่งที่ขาดคือแถวใน DB
     ไม่ใช่การวัด — จึงเป็น "บันทึกค่าที่มี" ไม่ใช่ "retry"
 
-    ⚠ `client_uuid` ต้อง **คงที่ต่อชิ้น** ไม่ใช่ uuid4() สุ่มแบบที่ Recieve ใช้ —
-      ถ้ากดยอมรับแล้วเน็ตสะดุดจนต้องยิงซ้ำ backend จะเห็น uuid เดิมแล้วคืน
-      measurement_id เดิมให้ แทนการสร้างแถวใหม่ (ดู measurements.py:191-208)
+    ⚠ ไม่มีการกันยิงซ้ำแล้ว — `client_uuid` ถูกถอดออกทั้งระบบ เพราะฟังก์ชันนี้
+      ยิงครั้งเดียวจบ (พลาดแล้วตั้ง stop_reason แล้ว break ไม่มี retry loop)
+      ถ้าวันหลังใส่ retry เข้ามา ต้องกลับมาคิดเรื่องกันซ้ำใหม่ด้วย
 
     ⚠ ต้อง PATCH image ต่อด้วย `upload_failed=True` — ไม่งั้น `image_path = NULL`
       จะแปลว่า "รูปยังไม่มา" ซึ่งปกติหมายถึงกำลังจะมาในไม่กี่วินาที แต่เคสนี้
@@ -615,7 +631,6 @@ def post_measurement_from_pi(session_id, piece, x, y, tr_op, tl_op, bl_op, br_op
         "br_op":       br_op,
         "offset_opx":  offset_x,
         "offset_opy":  offset_y,
-        "client_uuid": f"pi-{session_id}-{piece}",
         "note":        "ค่าจาก Pi (GM) — Recieve ส่งไม่ถึง ไม่มีรูป",
     }
     try:
@@ -766,7 +781,8 @@ def command_flow(session_id, groups, target_count):
             # ⚠ เช็คอีกครั้งก่อน POST — ระหว่างที่ modal เปิดรอคน (นานได้ถึง
             #   ASK_USER_TIMEOUT) FTP อาจส่งมาช้าแต่มาถึงแล้ว ถ้าไม่เช็คจะได้
             #   2 แถวสำหรับชิ้นเดียว → position ขยับ 2 → ALPL เลื่อนทั้งคิว
-            #   (client_uuid กันไม่ได้ เพราะ Recieve ใช้ uuid4() สุ่ม คนละตัวกับเรา)
+            #   ⚠ การเช็คตรงนี้เป็น **ด่านเดียวที่กันแถวซ้ำ** — ระบบไม่มี client_uuid
+            #     หรือกลไกกันซ้ำฝั่ง backend อีกแล้ว ห้ามถอดออก
             if get_measured_count(session_id) != count_before:
                 print("   ℹ️ ค่ามาถึงระหว่างรอคำตอบ — ไม่ต้องบันทึกซ้ำ")
                 continue

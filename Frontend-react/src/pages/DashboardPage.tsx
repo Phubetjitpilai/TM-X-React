@@ -5,6 +5,7 @@ import { useSessionState, sessionStateLabel } from "../hooks/useSessionState";
 import { useToast } from "../components/Toast";
 import { useDialog } from "../components/Dialog";
 import AlplIcon from "../components/AlplIcon";
+import { axisValue, offsetValue, xyPair } from "../components/measurementCells";
 import { ReportAxis } from "../components/dashboard/ReportAxis";
 import OffsetMap from "../components/dashboard/OffsetMap";
 import IpmSummaryModal, { type IpmSummaryRow } from "../components/dashboard/IpmSummaryModal";
@@ -197,12 +198,34 @@ export default function DashboardPage() {
   const lastImageIdRef = useRef<number | null>(null);
   const applyLastImageId = (v: number | null) => { lastImageIdRef.current = v; setLastImageMeasurementId(v); };
   const [cameraImgUrl, setCameraImgUrl] = useState<string | null>(null);
+  /** รูปที่กำลังเปิดดูเต็มจอ — null = ไม่ได้เปิด
+   *  แยกจาก cameraImgUrl เพราะรูปใน Camera Preview เปลี่ยนเองทุกครั้งที่วัดชิ้นใหม่
+   *  ถ้าผูกกันไว้ รูปที่กำลังซูมดูอยู่จะโดนสลับกลางคันตอนชิ้นถัดไปมาถึง */
+  const [zoomImgUrl, setZoomImgUrl] = useState<string | null>(null);
 
   // ── Stats ─────────────────────────────────────────────────────────────
   const [stats, setStats] = useState({ total: 0, ok: 0, ng: 0 });
   /** ผล OK/NG รายชิ้นเรียงตามลำดับในคิว — ใช้ระบายสีชิปในแถบคิว
-   *  เก็บเป็น ref เพราะ syncQueueStrip อ่านตอนถูกเรียกจาก async ไม่ผ่าน render */
+   *  เก็บเป็น ref เพราะ syncQueueStrip อ่านตอนถูกเรียกจาก async ไม่ผ่าน render
+   *
+   *  ⚠ ถูกเซฟลง localStorage ด้วย (savePartEntryState) — ref เปล่าทุกครั้งที่
+   *    component เกิดใหม่ (refresh · HMR ตอน dev) ถ้าไม่เซฟไว้ แถบคิวจะลืมผล
+   *    ที่วัดไปแล้วทั้งหมด */
   const resultsRef = useRef<string[]>([]);
+
+  /** ชิ้นที่ i ควรเป็นชิปสีอะไร — **ทางเดียว** ที่ควรใช้ตัดสิน
+   *
+   *  ⚠ ห้ามเขียน `results[i] === "NG" ? "ng" : "ok"` อีก — `undefined` (ยังไม่รู้ผล)
+   *    จะตกไปเป็น "ok" เขียวติ๊กถูก ทั้งที่ของจริงอาจ NG ทุกชิ้น เคยเกิดจริงมาแล้ว
+   *    ตอนรีเฟรชหน้ากลาง session แล้วชิปขึ้นเขียวหมดสวนทางกับ Progress ที่ขึ้น NG
+   *
+   *  ระบบตรวจคุณภาพ "ไม่รู้" ต้องไม่แปลว่า "ผ่าน" เด็ดขาด — คืน `done` (เทา เส้นประ)
+   *  ให้เห็นชัดว่าวัดไปแล้วแต่หน้านี้ตอบผลไม่ได้
+   */
+  function chipStateFor(i: number): "ok" | "ng" | "done" {
+    const r = resultsRef.current[i];
+    return r === "NG" ? "ng" : r === "OK" ? "ok" : "done";
+  }
 
   /** จอ Live Telemetry ถูกสั่งล้างไว้สำหรับ session ไหน
    *
@@ -239,10 +262,20 @@ export default function DashboardPage() {
   >(null);
   const [mtLeft, setMtLeft] = useState(MT_ANSWER_TIMEOUT);
   const mtTimerRef = useRef<number | null>(null);
-  /** แถบคิว ALPL — done = วัดแล้ว · current = กำลังวัด · wait = ยังไม่ถึงคิว
-   *  ซ่อนทั้งแถบเมื่อคิวมีตัวเดียว (เช่น IPM ชิ้นเดียว) เพราะไม่มีอะไรให้ดู */
+  /** นับว่าส่งคำตอบใน modal ไปที่ Pi ไม่สำเร็จติดกันกี่ครั้ง
+   *
+   *  ใช้ `useRef` ไม่ใช่ `useState` เพราะเป็นค่าที่ใช้ **ตัดสินใจภายใน** อย่างเดียว
+   *  ไม่ได้เอาไปวาดบนจอ — ถ้าใช้ state จะ re-render ทั้งหน้าโดยเปล่าประโยชน์
+   *  และค่าที่อ่านได้ใน closure ของ catch อาจเป็นค่าเก่า
+   */
+  const mtFailRef = useRef(0);
+  /** แถบคิว ALPL — ok/ng = วัดแล้วรู้ผล · done = วัดแล้วแต่หน้านี้ไม่รู้ผล ·
+   *  now = กำลังวัด · wait = ยังไม่ถึงคิว
+   *  ซ่อนทั้งแถบเมื่อคิวมีตัวเดียว (เช่น IPM ชิ้นเดียว) เพราะไม่มีอะไรให้ดู
+   *
+   *  ⚠ `done` มีไว้เพื่อ **ห้ามเดาผลเป็นเขียว** — ดู chipStateFor() ข้างล่าง */
   const [queueStrip, setQueueStrip] = useState<
-    { alpl: number; state: "ok" | "ng" | "now" | "wait" }[]
+    { alpl: number; state: "ok" | "ng" | "done" | "now" | "wait" }[]
   >([]);
 
   // ── Parts cache (ใช้ validate ALPL + report modal — ไม่มีตารางแสดงในหน้านี้) ──
@@ -308,7 +341,7 @@ export default function DashboardPage() {
   const stationStatus = useSSE({
     session_started: (d) => onSessionStarted(d),
     measurement: (d) => onNewMeasurement(d),
-    session_stopped: () => onSessionStopped(),
+    session_stopped: (d) => onSessionStopped(d),
     session_complete: (d) => onSessionComplete(d),
     session_timeout: () => onSessionTimeout(),
     image_updated: (d) => onImageUpdated(d),
@@ -350,6 +383,9 @@ export default function DashboardPage() {
           entryQueue: entryQueueRef.current,
           lastTelemetry: telemetryRef.current,
           lastImageMeasurementId: lastImageIdRef.current,
+          // ผล OK/NG รายชิ้น — ต้องรอดการ refresh เหมือน lastTelemetry ไม่งั้น
+          // แถบคิวจะลืมผลทั้งแถวแล้วชิปกลายเป็น "ไม่รู้ผล" ทั้งที่เพิ่งวัดไปเอง
+          results: resultsRef.current,
           // "ล้างจอ" ต้องรอดการ refresh — ไม่งั้น poll รอบแรกหลังโหลดหน้าจะดึงคิว
           // กับตัวเลขของ session เดิมกลับมาทันที เหมือนไม่เคยกดล้าง
           // เก็บเป็น session_id ไม่ใช่ boolean จะได้ปลดตัวเองเมื่อขึ้น session ใหม่
@@ -550,9 +586,9 @@ export default function DashboardPage() {
     setQueueStrip(
       list.map((alpl, i) => ({
         alpl,
-        // ผลของชิ้นที่วัดไปแล้วมาจาก telemetryResults ที่สะสมจาก SSE — ถ้ายังไม่มี
-        // (เช่นเพิ่งรีเฟรชหน้ากลาง session) ให้เป็น ok ไปก่อน ดีกว่าโชว์ผิดเป็น ng
-        state: i < done ? (resultsRef.current[i] === "NG" ? "ng" : "ok")
+        // ผลของชิ้นที่วัดไปแล้วมาจาก resultsRef ที่สะสมจาก SSE (+ กู้จาก
+        // localStorage ตอน mount) — ถ้ายังไม่รู้ผลจริงๆ chipStateFor คืน "done"
+        state: i < done ? chipStateFor(i)
              : i === done && st?.state === "running" ? "now"
              : "wait",
       })),
@@ -591,8 +627,8 @@ export default function DashboardPage() {
     if (d.measured > 0) resultsRef.current[d.measured - 1] = d.result;
     setQueueStrip((prev) =>
       prev.map((q, i) =>
-        i < d.measured ? { ...q, state: resultsRef.current[i] === "NG" ? "ng" : "ok" }
-        : i === d.measured ? { ...q, state: "now" }
+        i < d.measured ? { ...q, state: chipStateFor(i) }
+        : i === d.measured ? { ...q, state: "now" as const }
         : q,
       ),
     );
@@ -607,6 +643,9 @@ export default function DashboardPage() {
   function onMeasureTimeout(d: any) {
     setMtModal(d);
     setMtLeft(MT_ANSWER_TIMEOUT);
+    // คำถามใหม่ = เริ่มนับใหม่ · ไม่งั้นความล้มเหลวจากชิ้นก่อนหน้าจะสะสมข้ามชิ้น
+    // แล้วเด้ง dialog "เครื่องไม่ตอบสนอง" ตั้งแต่กดพลาดครั้งแรกของชิ้นใหม่
+    mtFailRef.current = 0;
     if (mtTimerRef.current) window.clearInterval(mtTimerRef.current);
 
     // ⚠ นับถอยหลังด้วยตัวแปรใน closure ไม่ใช่ค่าใน updater ของ setMtLeft —
@@ -659,19 +698,50 @@ export default function DashboardPage() {
 
     try {
       await apiPost(`/api/session/${action}`, { session_id: sid });
+      mtFailRef.current = 0;        // ส่งผ่านแล้ว เริ่มนับใหม่
     } catch (e: any) {
       // 502 = backend ยิง /command ไปแล้วแต่ Pi ไม่รับ — Pi ยังบล็อกรอคำตอบอยู่
       // เฉย ๆ ไม่มีอะไรเดินหน้า ถ้าเงียบไว้ผู้ใช้จะยืนรอเครื่องที่ไม่มีวันขยับ
       // (backend คืนคำถามค้างให้แล้ว กดซ้ำได้)
-      showToast(`ส่งคำตอบไม่สำเร็จ: ${e?.message ?? ""} — กดใหม่อีกครั้ง หรือกด Stop`);
+      mtFailRef.current += 1;
+
+      /* ── 2 ครั้งแรกให้ลองใหม่ · ครั้งที่ 3 เลิกแนะนำให้กดซ้ำ ────────────────
+         อาจเป็นเน็ตสะดุดชั่วคราวจริง ๆ จึงควรให้โอกาสก่อน — แต่ถ้าพลาด 3 ครั้ง
+         ติดกันแปลว่าเครื่องไม่ตอบสนองแล้ว **กดอีกกี่ครั้งก็ไม่มีทางสำเร็จ**
+         ต้องเปลี่ยนคำแนะนำจาก "กดใหม่" เป็น "ไปจัดการที่เครื่อง" ไม่งั้นผู้ใช้
+         จะกดวนอยู่จนกว่า backend จะ mark timeout เอง (5-20 วิ) โดยไม่รู้ว่า
+         ควรทำอะไรต่อ
+
+         ใช้ dialog ไม่ใช่ toast เพราะต้องกดรับทราบ — เป็นคำแนะนำที่ต้องลงมือทำ
+         ไม่ใช่แค่รายงานสถานะ (กติกาเดียวกับกรณี Stop สั่งไม่ผ่าน)            */
+      if (mtFailRef.current >= 3) {
+        dialog.alert(
+          `ส่งคำตอบไปที่เครื่องไม่สำเร็จ ${mtFailRef.current} ครั้งติดกัน\n\n${e?.message ?? ""}\n\n` +
+          `เครื่องไม่ตอบสนองแล้ว — กด Stop แล้วทำการ Restart Raspberry Pi ` +
+          `(ถอดสายไฟแล้วเสียบใหม่ โปรแกรมจะรันเองตอนเปิดเครื่อง)`,
+          { title: "⚠ เครื่องไม่ตอบสนอง", danger: true },
+        );
+      } else {
+        showToast(`ส่งคำตอบไม่สำเร็จ: ${e?.message ?? ""} — กดใหม่อีกครั้ง หรือกด Stop`);
+      }
     }
   }
 
-  function onSessionStopped() {
+  function onSessionStopped(d?: { agent_error?: string | null }) {
     resetTelemetry();
     resultsRef.current = [];
     updateSession({ state: "stopped" });
     clearAllQueuesAndForms();
+
+    // แท็บที่ **ไม่ได้เป็นคนกด Stop** ก็ต้องรู้ด้วยว่าเครื่องอาจยังวัดต่ออยู่
+    // (คนกดได้เห็นจาก response ของตัวเองไปแล้วใน doStopSession)
+    if (d?.agent_error) {
+      dialog.alert(
+        `session ถูกหยุดแล้ว แต่สั่งเครื่องไม่สำเร็จ\n\n${d.agent_error}\n\n` +
+        `เครื่องอาจยังวัดต่ออยู่ — กรุณาตรวจที่เครื่อง`,
+        { title: "⚠ ต้องไปหยุดที่เครื่อง", danger: true },
+      );
+    }
   }
   function onSessionComplete(d: any) {
     // เก็บ session_id ไว้ "ก่อน" clearAllQueuesAndForms() — ตัวนั้นล้าง state ทิ้ง
@@ -726,6 +796,14 @@ export default function DashboardPage() {
     }
   }
 
+  // ปิดรูปเต็มจอด้วย Esc — ผูก listener เฉพาะตอนเปิดอยู่ จะได้ไม่ค้างไว้ทั้งหน้า
+  useEffect(() => {
+    if (!zoomImgUrl) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setZoomImgUrl(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [zoomImgUrl]);
+
   // ── Mount: โหลดข้อมูลเริ่มต้น + restore localStorage + polling สำรอง ──────
   useEffect(() => {
     try {
@@ -734,6 +812,8 @@ export default function DashboardPage() {
         const d = JSON.parse(raw);
         if (d.entryQueue) { setEntryQueue(d.entryQueue); entryQueueRef.current = d.entryQueue; }
         if (d.lastTelemetry) applyTelemetry(d.lastTelemetry);
+        // กู้ผลรายชิ้นก่อน loadSessionState() ตัวแรกจะเรียก syncQueueStrip
+        if (Array.isArray(d.results)) resultsRef.current = d.results;
         clearedSidRef.current = d.clearedSid ?? null;
         if (d.lastImageMeasurementId) {
           applyLastImageId(d.lastImageMeasurementId);
@@ -914,7 +994,26 @@ export default function DashboardPage() {
    */
   async function doStopSession(sid?: number | null) {
     try {
-      await apiPost("/api/session/stop", { session_id: sid ?? session.session_id });
+      /* ⚠ ต้องอ่าน `agent_error` ในผลลัพธ์ด้วย — backend ตอบ 200 แม้สั่ง Pi ไม่ผ่าน
+         เพราะฝั่ง DB หยุดสำเร็จจริง กดซ้ำก็ไม่ช่วยอะไร **catch จึงไม่ทำงาน**
+
+         แต่ "สั่ง Pi ไม่ผ่าน" แปลว่า **เครื่องอาจยังวัดต่ออยู่จริง** ทั้งที่ระบบ
+         บอกว่าจบแล้ว — ของจะไหลต่อโดยไม่มีใครบันทึก ซึ่งอันตรายกว่ากรณี Start
+         พังมาก (ดูคอมเมนต์ใน stop_session ฝั่ง backend)
+
+         backend บันทึก STOP_NOT_DELIVERED ลง DB และ broadcast SSE ไว้ให้แล้ว
+         ขาดแค่ฝั่งนี้ที่ต้องเอามาบอกคน                                        */
+      const r = await apiPost<{ ok: boolean; agent_error?: string | null }>(
+        "/api/session/stop", { session_id: sid ?? session.session_id });
+
+      if (r?.agent_error) {
+        dialog.alert(
+          `ระบบหยุด session ให้แล้ว แต่สั่งเครื่องไม่สำเร็จ\n\n${r.agent_error}\n\n` +
+          `เครื่องอาจยังวัดต่ออยู่ และค่าที่วัดหลังจากนี้จะไม่ถูกบันทึก — ` +
+          `กรุณาไปหยุดที่เครื่องเอง`,
+          { title: "⚠ ต้องไปหยุดที่เครื่อง", danger: true },
+        );
+      }
     } catch (e) {
       dialog.alert(e instanceof ApiError ? e.message : "หยุด session ไม่สำเร็จ", { title: "หยุดการวัดไม่สำเร็จ" });
     }
@@ -1096,6 +1195,13 @@ export default function DashboardPage() {
                         เพราะกฎว่าโหมดไหนนับ offset อยู่ที่ backend ที่เดียว
                         ถ้าวันหลังกฎเปลี่ยน หน้าเว็บจะตามเองโดยไม่ต้องแก้
 
+                      ⚠ fallback ดูโหมด **เฉพาะตอน state = running** เท่านั้น
+                        `sessionMode` แกะมาจาก `queue_state` ของ session ล่าสุด
+                        ซึ่ง **ค้างอยู่ต่อหลัง session จบ** ถ้าเช็คโหมดตลอดเวลา
+                        พอวัด IPM จบแล้วกด Clear การ์ดจะหายไปเลย ทั้งที่จอว่าง
+                        ไม่มีค่าอะไรให้ซ่อน — เหลือช่องโหว่ในเลย์เอาต์แทน
+                        ตอนว่าง/จบแล้วจึงโชว์โครงเปล่าไว้เสมอ
+
                       ⚠ ถอดช่อง GH-X / GH-Y ออกแล้ว — เลิกใช้เครื่องมือฝั่ง GH
                         (ถอดออกจาก MeasurementCreate + ตาราง measurements) */}
                 </div>
@@ -1107,7 +1213,9 @@ export default function DashboardPage() {
                     `.telemetry-xy-col` (ซึ่งเป็น flex column) `grid-column` จะ
                     ไม่มีผลเลย การ์ดจะแคบอยู่ในคอลัมน์ซ้ายเหมือนเดิม */}
                 {(telemetry?.offset_counts ??
-                  (sessionMode ?? "").toUpperCase() !== "IPM") && (
+                  (session.state === "running"
+                    ? (sessionMode ?? "").toUpperCase() !== "IPM"
+                    : true)) && (
                   <div className="telemetry-cell offset telemetry-offset-cell">
                     <OffsetMap
                       title="Offset Opening"
@@ -1133,8 +1241,13 @@ export default function DashboardPage() {
                     {queueStrip.map((q, i) => (
                       <span key={`${q.alpl}-${i}`} className={`tq-chip ${q.state}`}>
                         {q.state === "now" && <span className="tq-dot" />}
-                        {(q.state === "ok" || q.state === "ng") && (
-                          <span className="tq-ico">{q.state === "ng" ? "✕" : "✓"}</span>
+                        {(q.state === "ok" || q.state === "ng" || q.state === "done") && (
+                          <span
+                            className="tq-ico"
+                            title={q.state === "done" ? "วัดแล้ว — หน้านี้ยังไม่รู้ผล ดูที่ตาราง Measurements" : undefined}
+                          >
+                            {q.state === "ng" ? "✕" : q.state === "done" ? "?" : "✓"}
+                          </span>
                         )}
                         {q.alpl}
                       </span>
@@ -1172,7 +1285,12 @@ export default function DashboardPage() {
               <div className="card-title">Camera Preview</div>
               <div className="camera-preview-box">
                 {cameraImgUrl ? (
-                  <img src={cameraImgUrl} alt={`Latest capture (measurement #${lastImageMeasurementId})`} />
+                  <img
+                    src={cameraImgUrl}
+                    alt={`Latest capture (measurement #${lastImageMeasurementId})`}
+                    title="คลิกเพื่อดูเต็มจอ"
+                    onClick={() => setZoomImgUrl(cameraImgUrl)}
+                  />
                 ) : (
                   <>
                     <span className="camera-preview-icon">🖼</span>
@@ -1297,8 +1415,10 @@ export default function DashboardPage() {
                     <th className="th-spec">Nominal X / Y</th>
                     <th className="th-spec">Tol (+/-)</th>
                     <th className="th-spec">Offset Tol</th>
-                    <th>Value X</th>
-                    <th>Value Y</th>
+                    {/* รวม X กับ Y ไว้ช่องเดียว — ระบายสีแยกทีละแกน จะได้เห็น
+                        ทันทีว่าแกนไหนเป็นตัวที่ทำให้ทั้งแถวเป็น NG
+                        (ตาราง Edit ใช้ชุดเดียวกัน ดู measurementCells.tsx) */}
+                    <th>Value X/Y</th>
                     <th>Offset X/Y</th>
                     <th>Result</th>
                     <th>Note</th>
@@ -1349,17 +1469,22 @@ export default function DashboardPage() {
                               : m.offset_tol != null ? Number(m.offset_tol).toFixed(3)
                               : "ยังไม่ตั้ง"}
                           </td>
-                          <td>{m.value_x != null ? Number(m.value_x).toFixed(3) : "—"}</td>
-                          <td>{m.value_y != null ? Number(m.value_y).toFixed(3) : "—"}</td>
+                          <td style={{ whiteSpace: "nowrap" }}>
+                            {xyPair(
+                              axisValue(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol),
+                              axisValue(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol),
+                            )}
+                          </td>
                           {/* ⚠ ตั้งใจไม่ใส่ผัง <OffsetMap compact> ตรงนี้ — ตารางนี้มี
-                              13 คอลัมน์อยู่แล้ว รูปเล็ก ๆ ซ้ำทุกแถวทำให้แถวสูงขึ้น
+                              คอลัมน์เยอะอยู่แล้ว รูปเล็ก ๆ ซ้ำทุกแถวทำให้แถวสูงขึ้น
                               และเบียดคอลัมน์อื่นโดยได้ข้อมูลเพิ่มน้อย · ทิศทางดูได้
                               จากรายงานที่กดเปิดทีละแถวอยู่แล้ว */}
-                          <td>
+                          <td style={{ whiteSpace: "nowrap" }}>
                             {isIpm ? "—"
-                              : m.offset_opx != null && m.offset_opy != null
-                                ? `${Number(m.offset_opx).toFixed(3)} / ${Number(m.offset_opy).toFixed(3)}`
-                                : "—"}
+                              : xyPair(
+                                  offsetValue(m.offset_opx, m.offset_tol),
+                                  offsetValue(m.offset_opy, m.offset_tol),
+                                )}
                           </td>
                           <td>
                             <span className={`result-badge ${cls}`}>{res}</span>
@@ -1604,6 +1729,14 @@ export default function DashboardPage() {
           }}
           onClose={() => setPeModalOpen(false)}
         />
+      )}
+
+      {/* ดูรูปเต็มจอ — คลิกที่ไหนก็ปิด (รูปเองก็ปิด เพราะ cursor เป็น zoom-out ทั้งจอ) */}
+      {zoomImgUrl && (
+        <div className="img-zoom" onClick={() => setZoomImgUrl(null)}>
+          <img src={zoomImgUrl} alt="Measurement image, full size" />
+          <span className="img-zoom-hint">คลิกที่ใดก็ได้ หรือกด Esc เพื่อปิด</span>
+        </div>
       )}
     </div>
   );

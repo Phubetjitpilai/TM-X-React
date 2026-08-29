@@ -244,33 +244,10 @@ async def create_measurement(req: MeasurementCreate):
     qstate = None
     db = get_db()
     try:
-        if req.client_uuid:
-            with db.cursor() as cur:
-                cur.execute(
-                    "SELECT measurement_id, session_id, result FROM measurements "
-                    "WHERE client_uuid = %s",
-                    (req.client_uuid,),
-                )
-                dup = cur.fetchone()
-            if dup:
-                with db.cursor() as cur:
-                    cur.execute(
-                        "SELECT measured_count, target_count FROM sessions WHERE session_id = %s",
-                        (dup["session_id"],),
-                    )
-                    s = cur.fetchone() or {}
-                log.info(
-                    "Duplicate measurement POST (client_uuid=%s) — คืนผลเดิม measurement_id=%d",
-                    req.client_uuid, dup["measurement_id"],
-                )
-                return {
-                    "measurement_id": dup["measurement_id"],
-                    "result":  dup["result"],
-                    "status":  "duplicate_ignored",
-                    "measured": s.get("measured_count"),
-                    "target":   s.get("target_count"),
-                }
-
+        # ⚠ เดิมตรงนี้มีบล็อกเช็ค `client_uuid` ซ้ำ แล้วคืนแถวเดิมแทนการ insert ใหม่
+        #   ถอดออกแล้วพร้อมกับตัว client_uuid เอง เพราะไม่มีฝั่งไหนส่งค่าที่ "คงที่
+        #   ต่อชิ้น" มาอีก — Data Receiver ไม่ส่งเลย ส่วน Pi ก็ยิงครั้งเดียวไม่มี retry
+        #   การกันซ้ำจึงไม่เคยได้ทำงานจริง มีแต่ทำให้ทุก POST เสีย SELECT ฟรี 1 ครั้ง
         with db.cursor() as cur:
             session_id = req.session_id
             cur.execute(
@@ -334,17 +311,18 @@ async def create_measurement(req: MeasurementCreate):
                     "(session_id, number_alpl, value_x, value_y, "
                     " offset_opx, offset_opy, "
                     " offset_pos_op, result, "
-                    " measure_type, operator_id, note, client_uuid) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    " measure_type, operator_id, note) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (
                         session_id, number_alpl, req.value_x, req.value_y,
                         req.offset_opx, req.offset_opy,
                         offset_pos_op, result,
-                        measure_type, operator_id, note, req.client_uuid
+                        measure_type, operator_id, note
                     ),
                 )
-            except pymysql.IntegrityError:
-                raise HTTPException(409, "Measurement นี้ถูกบันทึกไปแล้ว (duplicate client_uuid)")
+            except pymysql.IntegrityError as exc:
+                log.warning("INSERT measurement ไม่สำเร็จ: %s", exc)
+                raise HTTPException(409, "เกิดปัญหาในการบันทึกข้อมูลลงใน Database")
             measurement_id = cur.lastrowid
 
             cur.execute(

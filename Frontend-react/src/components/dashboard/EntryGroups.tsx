@@ -96,6 +96,24 @@ interface Props {
 export default function EntryGroups({ mode, groups, onChange, disabled, errors, options, onOverwrite }: Props) {
   // กลุ่มไหนถูกย่ออยู่ — เก็บเป็น index เพราะกลุ่มไม่มี id ของตัวเอง
   const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+
+  /* กลุ่มไหนมี error ต้องกางออกเสมอ
+   *
+   * ⚠ เคยเป็นบั๊กจริง: ผู้ใช้กรอกกลุ่มที่ 2 ครบแล้วยุบกลุ่มที่ 1 ไว้ พอกด Save
+   *   แล้วกลุ่มที่ 1 ยังมีช่องว่าง handleSave จะ return ทันที **โดยที่ error
+   *   ไปแสดงอยู่ในกลุ่มที่มองไม่เห็น** — อาการที่เห็นคือ "กด Save แล้วไม่มีอะไรเกิดขึ้น"
+   *   หาสาเหตุไม่เจอเลยเพราะไม่มีอะไรผิดตรงที่ตาเห็น
+   */
+  useEffect(() => {
+    const bad = Object.keys(errors ?? {}).map(Number);
+    if (!bad.length) return;
+    setCollapsed((prev) => {
+      if (!bad.some((gi) => prev.has(gi))) return prev;   // กางอยู่แล้ว ไม่ต้อง setState ซ้ำ
+      const next = new Set(prev);
+      bad.forEach((gi) => next.delete(gi));
+      return next;
+    });
+  }, [errors]);
   const layout = GROUP_LAYOUT[mode];
   const fields = GROUP_FIELDS[mode];
 
@@ -271,6 +289,8 @@ export default function EntryGroups({ mode, groups, onChange, disabled, errors, 
             <div className="entry-group-head" onClick={() => toggle(gi)}>
               <span className="entry-group-title">กลุ่มที่ {gi + 1}</span>
               <span className="entry-group-sum">{summaryOf(g)}</span>
+              {/* เตือนที่หัวกลุ่มด้วย เผื่อผู้ใช้ยุบกลับเองหลังเห็น error แล้ว */}
+              {errors?.[gi] && <span className="entry-group-badge">ยังกรอกไม่ครบ</span>}
               {/* ลบได้เฉพาะตอนมีมากกว่า 1 กลุ่ม — ลบกลุ่มสุดท้ายทิ้งแล้วฟอร์มจะว่าง
                   โดยไม่มีทางกรอกอะไรได้เลย */}
               {groups.length > 1 && !disabled && (

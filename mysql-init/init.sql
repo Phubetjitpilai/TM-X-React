@@ -153,7 +153,6 @@ CREATE TABLE sessions (
 -- (ไม่ลบก็ได้ ไม่มีโค้ดจุดไหนอ่านหรือเขียนมันอีกแล้ว)
 
 
--- client_uuid: UUID ที่ Agent สร้างต่อการวัด 1 ครั้ง ใช้กัน insert ซ้ำตอน retry
 -- POST /api/measurements
 CREATE TABLE measurements (
   measurement_id INT          AUTO_INCREMENT PRIMARY KEY,
@@ -167,7 +166,6 @@ CREATE TABLE measurements (
   result         VARCHAR(10)  NOT NULL,
   note           TEXT,
   operator_id    INT          NOT NULL,
-  client_uuid    VARCHAR(36)  NULL UNIQUE,
   measure_type   VARCHAR(10)  NOT NULL,
   image_path     VARCHAR(255),
   image_upload_failed TINYINT(1) NOT NULL DEFAULT 0,

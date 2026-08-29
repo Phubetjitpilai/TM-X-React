@@ -384,6 +384,8 @@ button.topbar-link {
    ผังฉบับเต็ม (full=1) ถูกวาดลง #print-root ในหน้าเดิม แล้วสั่ง window.print()
    — ไม่เปิดหน้าต่างใหม่ จะได้ไม่โดน pop-up blocker */
 #print-root { display: none; }
+/* หัวกระดาษมีไว้ใช้ตอนพิมพ์เท่านั้น — ซ่อนบนจอด้วย เผื่อ #print-root ถูกเปิด */
+#print-root .print-head { display: none; }
 /* ⚠⚠ ทุกกฎในนี้ต้องขึ้นต้นด้วย `body.printing-report` เสมอ
    ไฟล์นี้ถูกโหลดทุกหน้า แต่ `#print-root` มีเฉพาะหน้า Export — ถ้าไม่ล็อกไว้
    ผู้ใช้กด Ctrl+P ที่หน้า Home/Edit จะได้ **กระดาษเปล่า** เพราะทุกอย่างถูกซ่อน
@@ -391,19 +393,29 @@ button.topbar-link {
    คลาสนี้ถูกใส่/ถอดโดย printReport() ใน ExportPage เฉพาะตอนสั่งพิมพ์รายงาน
    เท่านั้น หน้าอื่นจึงพิมพ์ได้ตามปกติของเบราว์เซอร์ */
 @media print {
-  @page { size: landscape; margin: 12mm; }
+  /* แนวนอน — เทมเพลตที่ใช้จริงมีถึง ~11 คอลัมน์ (Vendor · PO · Owner ·
+     Handler · Part Number ครบ) แนวตั้งเริ่มอึดอัด
+     ⚠ เป็นแค่ค่าเริ่มต้นที่เสนอให้หน้าต่างพิมพ์ ผู้ใช้เลือกทับได้เสมอ
+     ⚠ ถ้าคอลัมน์เพิ่มจนล้นอีก ให้ลด `font-size` ของ td ข้างล่างก่อน
+       แล้วค่อยพิจารณาเปลี่ยน `white-space: nowrap` เป็น normal ให้ตัดบรรทัดได้
+
+     ⚠ margin: 0 คือตัวปิดหัว/ท้ายกระดาษของเบราว์เซอร์ (URL · วันที่ · เลขหน้า)
+       CSS สั่งปิดตรง ๆ ไม่ได้ — Chrome จะซ่อนให้เองเมื่อ margin เป็น 0 เท่านั้น
+       ระยะขอบจริงย้ายไปเป็น padding ของ #print-root แทน (ดูข้างล่าง)
+       ผู้ใช้ยังติ๊ก "Headers and footers" กลับมาเองได้ในหน้าต่างพิมพ์ */
+  @page { size: landscape; margin: 0; }
 
   body.printing-report { background: #fff !important; margin: 0 !important; padding: 0 !important; }
 
-  /* ซ่อนด้วย `visibility` ไม่ใช่ `display: none`
-     #print-root ฝังลึก 3 ชั้น (body > #root > fieldset.page-lock > .main-edit)
-     display เป็น "ตัดทั้งกิ่ง" ลูกเขียนทับกลับมาไม่ได้ ถ้าซ่อน fieldset ตัว
-     #print-root ที่อยู่ข้างในหายตามไปด้วย → กระดาษเปล่าเหมือนกัน
-     visibility ถ่ายทอดลงลูกแต่ลูกตั้ง visible ทับได้ จึงเปิดเฉพาะกิ่งที่ต้องการ
-     ได้โดยไม่ต้องรู้ว่าอยู่ลึกกี่ชั้น */
-  body.printing-report * { visibility: hidden !important; }
-  body.printing-report #print-root,
-  body.printing-report #print-root * { visibility: visible !important; }
+  /* ซ่อนหน้าเว็บทั้งก้อนด้วย `display: none` ได้เลย เพราะ #print-root ถูก
+     portal ออกไปอยู่ใต้ <body> ตรง ๆ แล้ว (ดู ExportPage.tsx) ไม่ได้อยู่ใน #root
+
+     ⚠ ห้ามกลับไปใช้ `visibility: hidden` เด็ดขาด — มันซ่อนแต่ **ยังกินพื้นที่
+       layout อยู่** เบราว์เซอร์จึงเอาความสูงของหน้าเว็บทั้งหน้ามาคิดจำนวน
+       หน้ากระดาษ ผลคือได้กระดาษเปล่าต่อท้ายทุกครั้ง (เคยเจอจริง: ข้อมูล 1 หน้า
+       เปล่าอีก 2 หน้า) ส่วน display:none ไม่กินที่ ความสูงเอกสารจึงเหลือเท่ากับ
+       ผังรายงานพอดี */
+  body.printing-report #root { display: none !important; }
 
   /* บังคับพิมพ์สีพื้นออกมาด้วย — ปกติเบราว์เซอร์ตัดสีพื้นทิ้งเพื่อประหยัดหมึก
      ทำให้เซลล์ที่ลงสีไว้กลายเป็นขาวหมดในไฟล์ PDF */
@@ -416,15 +428,43 @@ button.topbar-link {
   body.printing-report #print-root {
     display: block !important;
     background: #fff !important;
-    /* ดึงออกจาก flow ของ .main-edit (max-width/padding/flex ของหน้าเว็บ)
-       ไม่งั้นตารางถูกบีบตามความกว้าง layout หน้าจอแทนความกว้างกระดาษ */
-    position: absolute; left: 0; top: 0; width: 100%;
+    /* อยู่ใน flow ปกติได้แล้ว — เป็นลูกโดยตรงของ <body> จึงไม่โดน max-width /
+       padding / flex ของ .main-edit บีบอีกต่อไป (เหตุผลเดิมที่ต้องใช้ absolute)
+       ⚠ ต้องอยู่ใน flow ด้วย ไม่งั้นความสูงของเอกสารจะไม่เท่ากับผังรายงาน
+         แล้วจำนวนหน้าจะเพี้ยนอีก
+       padding แทนระยะขอบที่ย้ายออกจาก @page (ซึ่งต้องเป็น 0 เพื่อปิดหัว/ท้าย
+       กระดาษของเบราว์เซอร์) */
+    width: 100%;
+    padding: 12mm;
+    box-sizing: border-box;
   }
+
+  /* ── หัวกระดาษของเราเอง ────────────────────────────────────────────────
+     โลโก้ซ้าย · ชื่อไฟล์กลาง · วันที่ขวา
+     ⚠ ไม่ใช้ position: fixed เพื่อให้ซ้ำทุกหน้า เพราะมันจะไปทับเนื้อหาแถวบน
+       ของหน้าที่ 2 เป็นต้นไป (fixed ไม่กินพื้นที่ใน flow) รายงานที่ใช้จริง
+       ยาวหน้าเดียวอยู่แล้ว — ถ้าวันหลังยาวหลายหน้าค่อยเปลี่ยนไปใช้
+       thead ของตารางแทน ซึ่งเบราว์เซอร์ซ้ำหัวให้เองทุกหน้าโดยไม่ทับอะไร */
+  body.printing-report #print-root .print-head {
+    display: flex !important; align-items: center; justify-content: space-between;
+    gap: 12px; margin-bottom: 10mm;
+    font-family: Tahoma, sans-serif; color: #000;
+  }
+  body.printing-report #print-root .print-head img { height: 12mm; width: auto; }
+  body.printing-report #print-root .print-head-title {
+    font-size: 15pt; font-weight: 700; text-align: center; flex: 1;
+  }
+  body.printing-report #print-root .print-head-date { font-size: 10pt; white-space: nowrap; }
   body.printing-report #print-root table { border-collapse: collapse; margin: 0 auto; }
   /* border: 0 กับทุกช่อง แล้วใส่คืนเฉพาะช่องที่มีเนื้อหา (.bx) —
      กันเส้นจางๆ ของช่องเปล่าโผล่มาในไฟล์ */
+  /* ขนาดตัวอักษรในไฟล์ PDF — ปรับที่นี่ที่เดียว
+     ยิ่งเทมเพลตมีคอลัมน์เยอะ ยิ่งต้องเล็กลงเพื่อไม่ให้ล้นหน้ากระดาษ
+     8pt กับ padding 2px/5px พอดีกับผังที่มี ~11 คอลัมน์ (Vendor · PO · Owner ·
+     Handler · Part Number ครบ) ถ้าคอลัมน์น้อยกว่านั้นขยับขึ้นเป็น 9-10pt ได้ */
   body.printing-report #print-root td {
-    padding: 4px 10px; white-space: nowrap; border: 0;
+    padding: 2px 5px; white-space: nowrap; border: 0;
+    font-size: 8pt; line-height: 1.25;
     font-family: Tahoma, sans-serif; color: #000;
   }
   body.printing-report #print-root td.bx { border: 2px solid #000; }
@@ -592,6 +632,9 @@ button.topbar-link {
 .tq-chip.ng   { background: var(--ng-bg); color: var(--ng); }
 .tq-chip.now  { background: var(--surface); color: var(--accent); border-color: var(--accent); }
 .tq-chip.wait { background: var(--surface2); color: var(--muted); }
+/* วัดไปแล้วแต่หน้านี้ไม่รู้ผล (เปิดจากอีกเครื่อง / ข้อมูลเก่ากว่าที่เซฟไว้) —
+   เส้นประบอกว่า "ยังไม่ยืนยัน" ห้ามใช้สีเขียวเด็ดขาด เพราะจะอ่านว่าผ่าน */
+.tq-chip.done { background: var(--surface2); color: var(--muted); border: 1px dashed var(--border); }
 .tq-ico { font-size: 0.75rem; }
 .tq-dot {
   width: 7px; height: 7px; border-radius: 50%;
@@ -647,19 +690,21 @@ button.topbar-link {
    หรือแก้ย้อนหลังไม่ได้ (ผลการวัด) — ทำให้ดู "จางกว่า" คอลัมน์ที่แก้ได้จริง
    เพื่อสื่อว่าเป็นข้อมูลอ้างอิงให้ดูเฉยๆ
 
-   ⚠ เดิมมี `::after { content: ' 🔒' }` ต่อท้ายทุกหัวคอลัมน์ — ถอดออกแล้ว
-     เพราะทำให้แถวหัวตารางรกและกว้างขึ้นโดยไม่ได้ข้อมูลเพิ่ม (พื้นหลังเทาสื่อ
-     อยู่แล้ว) แถม screen reader อ่านออกเสียงซ้ำทุกคอลัมน์
-     คำอธิบายว่า "เทา = แก้ไม่ได้" อยู่ที่ `.derived-legend` เหนือตารางแล้ว */
-.th-derived, .td-derived { background: var(--surface2); color: var(--muted); }
-.derived-legend {
-  background: var(--surface2); color: var(--muted);
-  border: 1px solid var(--border); border-radius: 4px;
-  padding: 0 0.35rem; font-weight: 600;
-}
+   ⚠ กลับมาใช้ 🔒 ที่หัวคอลัมน์แทนการระบายสีทั้งคอลัมน์ (เคยลองสลับไปมาแล้ว) —
+     พื้นหลังเทาทั้งแถบทำให้ตารางอ่านยากเวลามีคอลัมน์ล็อกติดกันหลายอัน และ
+     แยกไม่ออกว่า "เทา" แปลว่าแก้ไม่ได้ หรือแค่ไม่มีข้อมูล
+     กุญแจอยู่ที่หัวคอลัมน์ = บอกครั้งเดียวต่อคอลัมน์ ไม่ใช่ย้ำทุกเซลล์
+
+   ⚠ `color: var(--muted)` ยังอยู่ ห้ามเอาออก — `.td-derived` ถูกใช้ใน
+     HistoryCard ด้วย (เวลา/ข้อความ placeholder) ที่นั่นพึ่งสีจาง ๆ ตัวนี้อยู่ */
+.th-derived, .td-derived { color: var(--muted); }
+.th-derived::after { content: " 🔒"; font-size: 0.85em; }
 /* ค่าที่วัดได้ — เขียวคืออยู่ในเกณฑ์ แดงคือหลุด */
 .val-ok { color: var(--ok); font-weight: 600; }
 .val-ng { color: var(--ng); font-weight: 600; }
+/* คู่ X / Y ในช่องเดียว — ตัวคั่นต้องจางกว่าตัวเลข ไม่งั้นแย่งสายตากับสีเขียว/แดง */
+.xy-pair { display: inline-flex; align-items: baseline; gap: 0.3rem; }
+.xy-sep { color: var(--border); font-weight: 400; }
 
 /* ── ถังขยะหน้า Edit (ยกจาก Frontend/edit.html) ────────────────────────── */
 .count { font-size: 0.78rem; color: var(--muted); font-weight: normal; }
@@ -1006,7 +1051,11 @@ button.topbar-link {
   background: var(--surface2);
   border: 1px dashed var(--border);
   border-radius: var(--radius);
-  min-height: 180px;
+  /* รูปจาก TM-X เกือบเป็นจัตุรัส — บังคับสัดส่วน 4:3 แล้วให้กล่องยืดเต็มความกว้าง
+     ของคอลัมน์ แทนการล็อกความสูงไว้เตี้ย ๆ (เดิม 180px ทำให้ชิ้นงานเล็กจนดูไม่ออก)
+     min-height ยังต้องมีไว้กันกล่องแบนตอนยังไม่มีรูป */
+  aspect-ratio: 4 / 3;
+  min-height: 300px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1021,10 +1070,30 @@ button.topbar-link {
   inset: 0;
   width: 100%;
   height: 100%;
+  /* ⚠ ต้องเป็น contain เท่านั้น ห้ามใช้ cover — รูปนี้เป็นหลักฐานการวัด
+     ถ้าถูกครอบตัดหรือยืด สัดส่วนชิ้นงานจะผิดและดูเทียบกับค่าที่วัดไม่ได้ */
   object-fit: contain;
   background: #000;
+  cursor: zoom-in;
 }
 .camera-preview-icon { font-size: 1.8rem; opacity: .5; }
+
+/* ── ดูรูปเต็มจอ — คลิกที่รูปใน Camera Preview ─────────────────────────────
+   จอ 4:3 ในการ์ดยังเล็กเกินกว่าจะดูขอบชิ้นงานได้ ตัวนี้เปิดรูปเต็มหน้าจอ
+   โดยไม่ต้องไปเปิดที่หน้า Measurements ให้เสียจังหวะตอนกำลังวัด */
+.img-zoom {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0, 0, 0, 0.88);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 1rem;
+  cursor: zoom-out;
+}
+.img-zoom img {
+  max-width: 94vw; max-height: 86vh;
+  object-fit: contain;
+  border-radius: 4px;
+}
+.img-zoom-hint { color: #cbd5dd; font-size: 0.85rem; }
 
 /* ── Part Entry summary — collapsible dropdown ───────────────────────── */
 .pe-summary-dropdown {
@@ -1203,6 +1272,14 @@ button.topbar-link {
   border-radius: var(--radius);
 }
 .entry-actions { display: flex; gap: 0.6rem; align-items: center; }
+/* เหตุผลที่ Save ไม่ผ่าน — ต้องอยู่ติดปุ่ม เพราะคนมองที่ปุ่มตอนกดแล้วไม่มีอะไรเกิดขึ้น */
+.entry-actions-error { font-size: 0.82rem; font-weight: 600; color: var(--ng); }
+/* ป้ายเตือนบนหัวกลุ่มที่ยุบไว้ */
+.entry-group-badge {
+  font-size: 0.72rem; font-weight: 700; color: var(--ng);
+  background: var(--ng-bg); border-radius: 999px;
+  padding: 0.12rem 0.5rem; margin-left: 0.4rem; white-space: nowrap;
+}
 .btn-submit-entry { background: var(--ok); color: #fff; }
 .btn-edit-entry { background: var(--accent2); color: #fff; }
 .entry-status {

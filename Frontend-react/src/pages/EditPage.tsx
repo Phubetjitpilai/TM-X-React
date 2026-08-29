@@ -4,6 +4,7 @@ import { useToast } from "../components/Toast";
 import TrashCard from "../components/TrashCard";
 import LookupTables from "../components/LookupTables";
 import HistoryCard from "../components/HistoryCard";
+import { axisValue, offsetValue, xyPair } from "../components/measurementCells";
 
 // EditPage — พอร์ตจาก Frontend/edit.html (Database Editor) แบบยึดโครงสร้าง/
 // field/คอลัมน์/ข้อความ ตามต้นฉบับเป็นหลัก
@@ -46,9 +47,14 @@ interface Measurement {
   note: string | null;
   timestamp: string | null;
   operator_name?: string | null;
-  /** ระยะเยื้อง — โหมด IPM ไม่เอามาตัดสิน OK/NG (ดู _judge ฝั่ง backend)
-   *  แต่ยังโชว์ให้ดูเสมอ */
-  offset?: number | null;
+  /** ระยะเยื้องแยกแกน — โหมด IPM ไม่เอามาตัดสิน OK/NG (ดู _judge ฝั่ง backend)
+   *
+   *  ⚠ ตาราง measurements **ไม่มีคอลัมน์ `offset` เดี่ยว** แล้ว ถูกแยกเป็น
+   *    offset_opx / offset_opy ตั้งแต่ตอนแก้ _judge ให้ตรวจทีละแกน —
+   *    ของเดิมหน้านี้อ่าน `m.offset` ซึ่ง backend ไม่เคยส่งมา ช่อง Offset
+   *    จึงว่างเปล่าทุกแถวโดยไม่มี error อะไรเตือน */
+  offset_opx?: number | null;
+  offset_opy?: number | null;
   offset_tol?: number | null;
   measure_type?: string | null;
   nominal_x?: number | null;
@@ -86,32 +92,10 @@ interface ConfirmState {
   onConfirm: () => void | Promise<void>;
 }
 
-/** ระบายสีค่าที่วัดได้ตามว่าอยู่ในเกณฑ์ไหม — เขียว = ผ่าน แดง = หลุด
- *
- *  ⚠ ตัดสินจาก nominal/tol ที่ backend ส่งมากับแถวนั้น **ไม่คำนวณเกณฑ์เอง**
- *    เพราะเกณฑ์มาจากคนละตารางตามโหมด (IPM ใช้ package_size · New/Rework ใช้
- *    part_number) ถ้าฝั่งหน้าเว็บเดาเองจะขัดกับ result ที่ backend บันทึกไว้
- */
-function valueCell(v?: number | null, nominal?: number | null, upper?: number | null, lower?: number | null) {
-  if (v == null) return "";
-  const txt = Number(v).toFixed(3);
-  if (nominal == null || upper == null || lower == null) return txt;
-  const ok = v >= nominal - lower && v <= nominal + upper;
-  return (
-    <span className={ok ? "val-ok" : "val-ng"} title={`รับได้ ${(nominal - lower).toFixed(3)} – ${(nominal + upper).toFixed(3)}`}>
-      {txt}
-    </span>
-  );
-}
-
-function offsetCell(v?: number | null, tol?: number | null) {
-  if (v == null) return "";
-  const txt = Number(v).toFixed(3);
-  // offset_tol เป็น null = โหมด IPM ที่ไม่เอา offset มาตัดสิน → ไม่ต้องระบายสี
-  if (tol == null) return txt;
-  const ok = Math.abs(v) <= tol;
-  return <span className={ok ? "val-ok" : "val-ng"} title={`ไม่เกิน ${Number(tol).toFixed(3)}`}>{txt}</span>;
-}
+/* ⚠ `valueCell` / `offsetCell` ที่เคยอยู่ตรงนี้ ย้ายไป
+   components/measurementCells.tsx แล้ว (เป็น axisValue / offsetValue) เพราะ
+   ตาราง Measurements ของหน้า Home ใช้เกณฑ์สีชุดเดียวกัน — ถ้าปล่อยให้ต่างคน
+   ต่างมีจะกลายเป็นแถวเดียวกันแต่คนละสีในสองหน้าจอ */
 
 function pageInfoText(page: number, total: number, count: number): string {
   if (total === 0) return "ไม่มีรายการ";
@@ -794,16 +778,25 @@ export default function EditPage() {
           <table>
             <thead>
               <tr>
-                {/* ⚠ ลำดับ/ชื่อต้องตรงกับ edit.html — ขาด Offset / Operator /
-                    Measure Type ไป 3 คอลัมน์ · 🔒 = แก้ไม่ได้ (ผลการวัดจริงกับ
-                    ข้อมูลของ session ที่แก้ย้อนหลังไม่ได้) แก้ได้เฉพาะ ALPL
-                    กับ Operator เท่านั้น */}
+                {/* ⚠ ลำดับ/ชื่อคอลัมน์ต้องตรงกับตาราง Measurements หน้า Home
+                    (DashboardPage) ทุกตัว **ยกเว้น Image** ที่ไม่เอามา เพราะ
+                    หน้านี้เป็นหน้าแก้ข้อมูล ไม่ใช่หน้าดูผล — คนที่อยากดูรูป
+                    เปิดจากหน้า Home ซึ่งกดแถวแล้วมีรายงานเต็มให้อยู่แล้ว
+                    ถ้าแก้ที่นี่ต้องไปแก้อีกฝั่งด้วย ไม่งั้นสองหน้าจะเล่าคนละเรื่อง
+
+                    🔒 = แก้ไม่ได้ · แก้ได้เฉพาะ ALPL กับ Operator เท่านั้น
+                    (ค่าที่วัดมาจริงกับข้อมูลของ session แก้ย้อนหลังไม่ได้) */}
                 <th className="th-derived">ID</th>
                 <th className="th-derived">Session</th>
                 <th>ALPL</th>
-                <th className="th-derived">Value X</th>
-                <th className="th-derived">Value Y</th>
-                <th className="th-derived">Offset</th>
+                {/* เกณฑ์ที่ใช้ตัดสินการวัดครั้งนั้น — วางไว้ "ก่อน" Value X
+                    เพื่อให้อ่านไล่ซ้าย→ขวาได้ว่า "เกณฑ์เท่านี้ วัดได้เท่านี้
+                    ผลเลยเป็นแบบนี้" (ลำดับเดียวกับหน้า Home) */}
+                <th className="th-derived">Nominal X / Y</th>
+                <th className="th-derived">Tol (+/-)</th>
+                <th className="th-derived">Offset Tol</th>
+                <th className="th-derived">Value X/Y</th>
+                <th className="th-derived">Offset X/Y</th>
                 <th className="th-derived">Result</th>
                 <th className="th-derived">Note</th>
                 <th>Operator</th>
@@ -815,13 +808,16 @@ export default function EditPage() {
             <tbody>
               {measurementsData.length === 0 ? (
                 <tr className="empty-row">
-                  <td colSpan={12}>{measSearchRef.current || measDate ? "ไม่พบ Measurement ที่ตรงกับตัวกรอง" : "ยังไม่มีข้อมูล Measurements"}</td>
+                  <td colSpan={15}>{measSearchRef.current || measDate ? "ไม่พบ Measurement ที่ตรงกับตัวกรอง" : "ยังไม่มีข้อมูล Measurements"}</td>
                 </tr>
               ) : (
                 measurementsData.map((m) => {
                   const res = m.result || "—";
                   const cls = res === "OK" ? "ok" : res === "NG" ? "ng" : "";
                   const ts = m.timestamp ? new Date(m.timestamp).toLocaleString() : "—";
+                  // โหมดของ "แถวนี้" ไม่ใช่โหมดของ session ปัจจุบัน — ตารางนี้
+                  // แสดงข้อมูลย้อนหลังที่ปนกันทุกโหมด (กติกาเดียวกับหน้า Home)
+                  const isIpm = (m.measure_type ?? "").toUpperCase() === "IPM";
                   return (
                     <tr
                       key={m.measurement_id}
@@ -832,9 +828,37 @@ export default function EditPage() {
                       <td>
                         <strong>{m.number_alpl}</strong>
                       </td>
-                      <td className="td-derived">{valueCell(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol)}</td>
-                      <td className="td-derived">{valueCell(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol)}</td>
-                      <td className="td-derived">{offsetCell(m.offset, m.offset_tol)}</td>
+                      <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
+                        {m.nominal_x != null && m.nominal_y != null
+                          ? `${Number(m.nominal_x).toFixed(3)} / ${Number(m.nominal_y).toFixed(3)}`
+                          : "—"}
+                      </td>
+                      <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
+                        {m.upper_tol != null && m.lower_tol != null
+                          ? `+${Number(m.upper_tol).toFixed(3)} / -${Number(m.lower_tol).toFixed(3)}`
+                          : "—"}
+                      </td>
+                      {/* IPM ไม่เอา offset มาตัดสิน → คอลัมน์นี้กับ Offset X/Y เป็น "—"
+                          ค่ายังอยู่ใน DB ครบ (ดูได้จาก Export/Power BI) แค่ไม่เอามา
+                          แสดงเพราะไม่มีส่วนร่วมกับผล OK/NG ของแถวนั้นเลย */}
+                      <td className="td-derived">
+                        {isIpm ? "—"
+                          : m.offset_tol != null ? Number(m.offset_tol).toFixed(3)
+                          : "ยังไม่ตั้ง"}
+                      </td>
+                      <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
+                        {xyPair(
+                          axisValue(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol),
+                          axisValue(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol),
+                        )}
+                      </td>
+                      <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
+                        {isIpm ? "—"
+                          : xyPair(
+                              offsetValue(m.offset_opx, m.offset_tol),
+                              offsetValue(m.offset_opy, m.offset_tol),
+                            )}
+                      </td>
                       <td>
                         <span className={`result-badge ${cls}`}>{res}</span>
                       </td>

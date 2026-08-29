@@ -1073,7 +1073,6 @@ class MeasurementCreate(BaseModel):
     bl_op:       float 
 
     note:        Optional[str] = None
-    client_uuid: Optional[str] = None
 
 class ImageUpdate(BaseModel):
     # image_path เป็น Optional แล้ว — กรณี Agent จัดการรูปไม่สำเร็จ
@@ -1109,7 +1108,15 @@ _EXPORT_FROM = f"""
 
 EXPORT_SELECT = """
     SELECT m.measurement_id, m.session_id, m.number_alpl, m.value_x, m.value_y,
-           m.`offset` AS `offset`,
+           -- ⚠ ตาราง measurements **ไม่มีคอลัมน์ `offset` เดี่ยวแล้ว** — ถูกแยกเป็น
+           --   offset_opx / offset_opy / offset_pos_op ตั้งแต่ตอนแก้ _judge ให้ตรวจ
+           --   ทีละแกน แต่ SELECT ก้อนนี้ถูกลืมไว้ ทำให้ทุก export (CSV/PDF/Excel)
+           --   ตายด้วย `Unknown column 'm.offset'` → หน้าเว็บขึ้น "ไม่มีข้อมูล"
+           --   ส่วน COUNT(*) ยังผ่านเพราะไม่ได้แตะคอลัมน์นี้ จึงดูเหมือนตัวกรองปกติ
+           m.offset_opx, m.offset_opy, m.offset_pos_op,
+           -- ค่าที่ใช้ตัดสิน OK/NG คือแกนที่แย่ที่สุด (ทั้งสองแกนเทียบ limit เดียวกัน
+           -- ดู _judge) — คอลัมน์ "Offset" ในเทมเพลตเก่าจึงหมายถึงตัวนี้
+           GREATEST(ABS(m.offset_opx), ABS(m.offset_opy)) AS `offset`,
            m.result, m.note, m.measure_type, m.timestamp,
            op.operator_name,
            pn.part_number_name,
@@ -1159,6 +1166,22 @@ def _axis_state(r, axis: str) -> str:
     if val is None or nom is None or r["upper_tol"] is None or r["lower_tol"] is None:
         return ""
     return "OK" if _within_tolerance(val, nom, r["upper_tol"], r["lower_tol"]) else "NG"
+
+def _offset_state(r) -> str:
+    """Offset ของแถวนี้ผ่านเกณฑ์ไหม — คืน "OK"/"NG" ("" ถ้าเทียบไม่ได้)
+
+    ⚠ ของเดิมบรรทัดนี้เรียก `_offset_ok()` ซึ่ง **นิยามอยู่ใน routers/measurements.py
+      ไม่ใช่ที่นี่** — shared.py ถูก import โดย measurements.py (ทางเดียว) จึงมองไม่เห็น
+      แล้วจะระเบิดเป็น NameError ตอน render คอลัมน์ Offset เท่านั้น ไม่ใช่ตอน import
+      ทำให้ซ่อนตัวอยู่ได้นาน (บั๊ก SQL เรื่องคอลัมน์ `offset` บังไว้อีกชั้นด้วย)
+
+    เทียบด้วย _TOL_EPS เหมือน _offset_ok ทุกประการ — ห้ามให้สองที่คิดไม่ตรงกัน
+    ไม่งั้นสีในไฟล์ export จะขัดกับคอลัมน์ Result ที่มาจาก DB
+    """
+    off, tol = r.get("offset"), r.get("offset_tol")
+    if off is None or tol is None:
+        return ""           # IPM (tol เป็น NULL) หรือยังไม่มีค่า → ไม่ตัดสิน
+    return "OK" if abs(off) <= tol + _TOL_EPS else "NG"
 
 def _tolerance_spec(r) -> str:
     """สเปกขนาดชิ้นงานแบบย่อบรรทัดเดียว — ใช้ในรายงาน PDF/Excel เท่านั้น
@@ -1211,12 +1234,20 @@ EXPORT_COLUMNS: Dict[str, Dict[str, Any]] = {
                       "get": lambda r: _fmt_num(r["value_y"])},
     # offset ไม่ได้เทียบกับช่วง nominal ± tol เหมือน X/Y แต่เทียบกับเพดาน
     # offset_tol ตัวเดียว จึงมี state เป็นของตัวเองไม่ใช้ _axis_state
+    #
+    # ⚠ `offset_tol` เป็น NULL เสมอในโหมด IPM (ดู CASE ใน EXPORT_SELECT) →
+    #   state คืน "" = ไม่ระบายสี ซึ่งถูกต้อง เพราะ IPM ไม่เอา offset มาตัดสิน
     "offset":        {"label": "Offset",        "group": "ข้อมูลการวัด", "scope": "csv",
                       "values": ["OK", "NG"],
-                      "state": lambda r: (
-                          "" if r.get("offset") is None or r.get("offset_tol") is None
-                          else ("OK" if _offset_ok(r.get("offset"), r.get("offset_tol")) else "NG")),
+                      "state": lambda r: _offset_state(r),
                       "get": lambda r: _fmt_num(r.get("offset"))},
+    # แกนแยก — ข้อมูลมีอยู่ในตารางอยู่แล้วแต่เดิม export ออกไม่ได้เลย
+    "offset_opx":    {"label": "Offset X",      "group": "ข้อมูลการวัด", "scope": "csv",
+                      "get": lambda r: _fmt_num(r.get("offset_opx"))},
+    "offset_opy":    {"label": "Offset Y",      "group": "ข้อมูลการวัด", "scope": "csv",
+                      "get": lambda r: _fmt_num(r.get("offset_opy"))},
+    "offset_pos_op": {"label": "Offset Position", "group": "ข้อมูลการวัด", "scope": "csv",
+                      "get": lambda r: r.get("offset_pos_op") or ""},
     # ── บล็อก Tolerance (รายงานเท่านั้น) ────────────────────────────────
     # ลากครั้งเดียวได้ผังกว้าง 2 คอลัมน์ สูง 3 แถว:
     #   แถว 1  [        Tolerance        ]   ผสาน 2 คอลัมน์ — หัวตาราง
