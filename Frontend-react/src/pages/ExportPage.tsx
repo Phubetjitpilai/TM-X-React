@@ -265,6 +265,19 @@ export default function ExportPage() {
     retry: false,
   });
 
+  /* จำนวนคอลัมน์ของตารางตัวอย่าง ใช้เป็น colSpan ของแถวข้อความสถานะทั้ง 3 แบบ
+     (กำลังโหลด / โหลดไม่สำเร็จ / ไม่มีข้อมูล) ให้พาดเต็มความกว้างตาราง
+
+     ⚠ ต้องคำนวณ **นอกกิ่ง if** — ถ้าเขียน `previewQ.data?.columns?.length`
+       ข้างในกิ่ง `previewQ.isLoading` จะไม่ผ่าน `tsc` (TS2339) เพราะ TanStack
+       v5 คืน type เป็น union แยกตามสถานะ พอ narrow เข้ากิ่ง isLoading แล้ว
+       `data` เหลือ `undefined` อย่างเดียว → `?.` ตัด undefined ทิ้งจนเหลือ
+       `never` → หยิบ `.columns` จากของที่ไม่มีอยู่
+
+       (กิ่ง `isError` ไม่มีปัญหานี้ เพราะมันครอบทั้ง "พังตั้งแต่แรก" และ
+        "เคยสำเร็จแล้วพังตอน refetch" ตัวหลังยังมี data เก่าค้างอยู่)       */
+  const previewColSpan = previewQ.data?.columns?.length || 1;
+
   // ── เทมเพลต CRUD ────────────────────────────────────────────────────────
   const refreshTpl = () => qc.invalidateQueries({ queryKey: ["export-templates", format] });
 
@@ -581,10 +594,10 @@ export default function ExportPage() {
                         "ไม่มีข้อมูลที่ตรงกับตัวกรอง" ทำให้ตอน server ตอบ error
                         หน้าเว็บโกหกว่ากรองแล้วไม่เจอ แล้วไล่หาสาเหตุผิดทางทั้งวัน */}
                     {previewQ.isLoading ? (
-                      <tr><td className="empty" colSpan={previewQ.data?.columns?.length || 1}>กำลังโหลด…</td></tr>
+                      <tr><td className="empty" colSpan={previewColSpan}>กำลังโหลด…</td></tr>
                     ) : previewQ.isError ? (
                       <tr>
-                        <td className="empty" colSpan={previewQ.data?.columns?.length || 1}
+                        <td className="empty" colSpan={previewColSpan}
                             style={{ color: "var(--ng)" }}>
                           โหลดตัวอย่างไม่สำเร็จ — {(previewQ.error as Error).message}
                         </td>
@@ -595,7 +608,7 @@ export default function ExportPage() {
                       ))
                     ) : (
                       <tr>
-                        <td className="empty" colSpan={previewQ.data?.columns?.length || 1}>
+                        <td className="empty" colSpan={previewColSpan}>
                           ไม่มีข้อมูลที่ตรงกับตัวกรอง
                         </td>
                       </tr>

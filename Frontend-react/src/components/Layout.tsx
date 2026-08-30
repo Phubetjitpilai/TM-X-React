@@ -7,24 +7,27 @@ import { useSessionState } from "../hooks/useSessionState";
 // (index/edit/export/report-template เดิม) — ใช้ CSS class จริงจาก index.css
 // ที่ยกมาจาก shared.css เพื่อให้หน้าตาตรงกับต้นฉบับเป๊ะๆ ไม่ใช่แค่ "คล้ายๆ"
 
-/* ── ป้ายสถานะรวม 2 เรื่องไว้ด้วยกัน ────────────────────────────────────────
-   SSE (เบราว์เซอร์ ↔ Backend) กับ DB (Backend ↔ MySQL) — เพราะในมุมผู้ใช้
-   "Backend ตอบได้แต่ทำงานไม่ได้" ก็คือใช้งานไม่ได้อยู่ดี แยกเป็น 2 ป้ายจะต้อง
-   มองหลายที่และมีโอกาสขัดกันเอง
+/* ── สถานะบนแถบบน: แยกเป็น 2 ตัว Server / Database ─────────────────────────
+   ของเดิมยุบทั้งสองเรื่องเป็นป้ายเดียว 4 ค่า (online / db-offline / offline /
+   connecting) ด้วยเหตุผลว่า "ผู้ใช้ไม่ต้องมองหลายที่" — แต่มันแลกมาด้วย
+   ปัญหาที่คอมเมนต์เดิมเองก็เตือนไว้: ตอน Backend ตายสนิท query ก็ล้มเหลว
+   เหมือน DB ล่ม ป้ายเดียวจึง **พูดความจริงไม่ได้** ต้องเลือกข้างว่าจะโทษใคร
 
-     online       SSE ต่อได้ + DB ต่อได้         ← ใช้งานได้เต็มที่
-     db-offline   SSE ต่อได้ แต่ query ตอบ 503   ← เปิดเว็บได้ แต่โหลดข้อมูลไม่ขึ้น
-     offline      SSE หลุด                       ← หนักสุด
+   พอแยกเป็น 2 ตัว ปัญหานั้นหายไปเอง เพราะพูดตรงๆ ได้ว่า "Server ตาย ส่วน DB
+   ไม่ทราบเพราะถามไม่ได้" ซึ่งเป็นสถานะที่ถูกต้องจริงๆ
 
-   ⚠ SSE หลุดถือว่าหนักกว่าเสมอ — ห้ามให้ผล query มาลดระดับเป็น db-offline
-     เพราะตอน Backend ตายสนิท query ก็ล้มเหลวเหมือนกัน แล้วจะกลายเป็นบอกว่า
-     "แค่ DB ล่ม" ทั้งที่ทั้งเครื่องไม่ตอบ → ไปไล่หาสาเหตุผิดจุด             */
-const BADGE: Record<string, string> = {
-  online: "🟢 Server Online",
-  offline: "🔴 Server Offline",
-  connecting: "🟡 Server Connecting",
-  "db-offline": "🟡 DB Offline",
-};
+     Server    online / connecting / offline   ← เบราว์เซอร์ ↔ Backend
+     Database  online / offline / unknown      ← Backend ↔ MySQL
+
+   ⚠ `unknown` ห้ามวาดเป็นสีแดง — "ถามไม่ได้" ไม่เท่ากับ "พัง" ถ้าทำเป็นแดง
+     คนจะวิ่งไปรีสตาร์ต MySQL ทั้งที่ตัวที่ตายจริงคือ uvicorn
+
+   ⚠ Database ที่ปกติ **ไม่แสดงอะไรเลย** (เงียบ = ปกติ) — MySQL หน้างานลง
+     เป็น Windows Service อยู่บนเครื่องเดียวกับ backend ปกติจึงต่อติดแทบ
+     ตลอดเวลา ป้ายเขียวที่ขึ้นทุกวันคือป้ายที่ไม่มีใครมอง พอถึงวันที่มัน
+     ผิดปกติจริงตาก็ข้ามไปแล้ว                                              */
+type ServerState = "online" | "connecting" | "offline";
+type DbState = "online" | "offline" | "unknown";
 
 const EXPORT_FORMATS = [
   { key: "csv", label: "CSV" },
@@ -57,13 +60,39 @@ export default function Layout() {
         → ตอนนี้ "เขียว" ต้องมาจาก **poll สำเร็จจริง** เท่านั้น
           ห้ามอนุมานจาก "ไม่มี error"
 
-     ลำดับความสำคัญ: SSE หลุด = หนักสุดเสมอ (backend ไม่ตอบทั้งตัว)          */
-  const status =
-    sse === "offline" ? "offline"
-    : isError ? (sse === "online" || dbOffline ? "db-offline" : "offline")
-    : isSuccess ? "online"
-    : sse === "online" ? "online"
+     3. **ลำดับความสำคัญเดิมกลับหัว** — ของเดิมให้ `sse` มาก่อน `poll` ทั้งสองทาง
+        (`sse === "offline"` เป็นเงื่อนไขแรกสุด และ `sse === "online"` เป็นตัว
+        ตัดสินว่าเป็น db-offline) ซึ่งผิดทั้งคู่ เพราะ **สองตัวนี้ไม่ได้รู้เรื่อง
+        พร้อมกัน**:
+
+            poll  = ไปเคาะจริงทุก 4 วิ            → รู้ทันทีที่ backend ตาย
+            sse   = ค่าที่ค้างไว้ รอ event มาปลุก → รู้ช้ากว่าได้ถึง 25 วิ
+                    (backend ส่ง keep-alive ห่าง 25 วิ — session.py `timeout=25`
+                     ถ้าเบราว์เซอร์ยังไม่ได้ลองอ่านสาย ก็ยังไม่รู้ว่าปลายทางตาย)
+
+        อาการที่เกิดจริง 2 แบบ:
+          · ปิด backend → ขึ้น "Server online + Database offline" ทั้งที่ MySQL
+            ไม่เกี่ยวอะไรเลย (`sse` ยังค้างว่า online → เข้าเส้น db-offline
+            โดยไม่ได้ดู status code ด้วยซ้ำ เพราะ `||` ลัดวงจรไปก่อน)
+          · เปิด backend กลับ → ยังค้าง "Server offline" ทั้งที่ poll ผ่านแล้ว
+
+     กติกาใหม่: **เชื่อ poll เสมอ · `sse` เป็นแค่ตัวเสริมตอนยังไม่เคย poll สำเร็จ** */
+  const server: ServerState =
+    isSuccess ? "online"              // poll ผ่าน = backend ตอบได้ จบ ไม่ต้องดูอย่างอื่น
+    : dbOffline ? "online"            // 503 = backend ตอบได้ แค่ต่อ MySQL ไม่ติด
+    : isError ? "offline"             // พังแบบอื่น (500 จาก proxy / เน็ตหลุด) = ไม่ตอบ
+    : sse === "offline" ? "offline"   // ยังไม่เคย poll สำเร็จ แถม SSE ก็พัง
     : "connecting";
+
+  /* DB สรุปจาก status code เท่านั้น — 503 คือคำตอบจากปาก backend เองว่าต่อ
+     MySQL ไม่ได้ ส่วน error อื่นแปลว่า "เราถามไม่ถึง" ไม่ใช่ "DB พัง"
+
+     ⚠ `unknown` ห้ามวาดเป็นสีแดง — ถ้าทำเป็นแดง คนจะวิ่งไปรีสตาร์ต MySQL
+       ทั้งที่ตัวที่ตายจริงคือ uvicorn                                    */
+  const db: DbState =
+    dbOffline ? "offline"
+    : isSuccess ? "online"
+    : "unknown";
 
   // report-template ถือเป็นส่วนหนึ่งของ Export (เปิดต่อจากขั้นที่ 1)
   const isExport =
@@ -172,7 +201,17 @@ export default function Layout() {
         </nav>
 
         <div className="topbar-right">
-          <span className={`station-badge ${status}`}>{BADGE[status]}</span>
+          {/* aria-live: ให้ screen reader ประกาศเองเมื่อสถานะเปลี่ยน โดยไม่ต้อง
+              ให้ผู้ใช้เลื่อนไปหา — "polite" คือรอจนพูดประโยคปัจจุบันจบก่อน */}
+          <span className="station-status" aria-live="polite">
+            <span className={`station-badge ${server}`}>Server {server}</span>
+
+            {/* Database: เงียบตอนปกติ โผล่เฉพาะตอนล่มหรือตอนถามไม่ได้ */}
+            {db === "offline" && <span className="station-badge db-offline">Database offline</span>}
+            {db === "unknown" && server === "offline" && (
+              <span className="station-badge unknown">Database unknown</span>
+            )}
+          </span>
         </div>
       </header>
 

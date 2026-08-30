@@ -63,7 +63,27 @@ function setSharedStatus(s: SSEStatus) {
 }
 
 function openShared() {
-  if (sharedES) return;
+  /* ⚠ ต้องเช็ค readyState ด้วย ห้ามเช็คแค่ `if (sharedES) return`
+     EventSource retry เองได้เฉพาะตอน "สายถูกตัดกลางคัน" เท่านั้น — ถ้าเซิร์ฟเวอร์
+     ตอบกลับมาเป็น status ที่ไม่ใช่ 200 หรือ Content-Type ที่ไม่ใช่ text/event-stream
+     สเปกบังคับให้ **ปิดถาวร** (readyState = CLOSED) แล้วไม่ลองใหม่อีกเลย
+
+     ตอน dev เจอเคสนี้ทุกครั้งที่ปิด backend: Vite proxy ตอบแทนเป็น
+     `500 text/plain` (ดู vite/dist/node — `res.writeHead(500, ...)` ใน
+     proxy.on("error")) สายจึงตายสนิท พอเปิด backend กลับมาก็ไม่ฟื้น
+     ป้ายบนแถบค้างเป็น Server offline จนกว่าจะกด F5
+
+     ตัวแปร `sharedES` ยัง**ไม่ใช่ null** ตอนนั้น (มีแต่ closeSharedIfIdle ที่
+     เซ็ต null และมันทำงานเฉพาะตอน refCount = 0 ซึ่ง Layout ไม่เคย unmount)
+     การเช็คแค่ว่ามีสายอยู่ไหมจึงเท่ากับตรึงสายที่ตายแล้วไว้ตลอดกาล        */
+  if (sharedES && sharedES.readyState !== EventSource.CLOSED) return;
+  if (sharedES) {
+    // ล้าง handler ก่อนทิ้งเสมอ ด้วยเหตุผลเดียวกับใน closeSharedIfIdle()
+    sharedES.onopen = null;
+    sharedES.onerror = null;
+    sharedES.close();
+    sharedES = null;
+  }
   const es = new EventSource("/api/stream");
   sharedES = es;
 
@@ -132,7 +152,18 @@ export function useSSE(handlers: Handlers = {}): SSEStatus {
     openShared();
     setStatus(sharedStatus);
 
+    /* ตัวปลุกสายที่ตายถาวร — คู่กับการเช็ค readyState ใน openShared()
+       จำเป็นเพราะ CLOSED ไม่มี event อะไรยิงตามมาอีกเลย ไม่มีใครมาบอกเราว่า
+       "ตอนนี้ต่อใหม่ได้แล้วนะ" ต้องเป็นฝ่ายไปลองเองเป็นระยะเท่านั้น
+
+       5 วิ ถี่พอให้คนหน้างานไม่ทันสังเกตว่าเคยหลุด และเบาพอที่จะไม่กวนอะไร
+       (ยิงจริงเฉพาะตอนสายตายแล้ว — ตอนปกติแค่อ่านค่า readyState เฉยๆ)     */
+    const revive = window.setInterval(() => {
+      if (!sharedES || sharedES.readyState === EventSource.CLOSED) openShared();
+    }, 5000);
+
     return () => {
+      window.clearInterval(revive);
       subscribers.delete(proxy);
       statusListeners.delete(setStatus);
       refCount -= 1;

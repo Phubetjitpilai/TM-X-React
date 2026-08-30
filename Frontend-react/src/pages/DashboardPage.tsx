@@ -1100,8 +1100,11 @@ export default function DashboardPage() {
                   กด Start ว่าเครื่องพร้อมไหม ซ่อนตอนไม่มี session ก็หมดความหมาย */}
               <div className="session-chip">
                 <span className="sc-label">Raspberry Pi</span>
+                {/* ⚠ ต้องตรงกับ SessionControl.tsx เป๊ะ — ชิปนี้มี 2 ที่ในโค้ด
+                    แก้ที่เดียวแล้วอีกที่จะเพี้ยนโดยไม่มีอะไรเตือน
+                    (ไม่มีอีโมจิแล้ว ป้ายมีสีพื้นหลังอยู่แล้ว) */}
                 <span className={`sc-value sc-pi ${piOnline ? "online" : piStatus === false ? "offline" : "unknown"}`}>
-                  {piOnline ? "🟢 Online" : piStatus === false ? "🔴 Offline" : "🟡 Connecting"}
+                  {piOnline ? "Online" : piStatus === false ? "Offline" : "Connecting"}
                 </span>
               </div>
               <div className="session-btns">

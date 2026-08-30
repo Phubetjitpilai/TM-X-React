@@ -142,12 +142,35 @@ select:focus, input:focus, textarea:focus {
 /* หน้าที่เปิดอยู่ — พื้นหลังฟ้าอ่อน + ตัวเข้ม ให้เห็นชัดตอนมองผ่านๆ
    (โทนเดียวกับตัวที่เลือกอยู่ใน dropdown ของ Export) */
 .topbar-link.active { background: rgba(55,138,222,.12); color: var(--accent); font-weight: 700; }
+/* ── สถานะ Server / Database บนแถบบน ──────────────────────────────────────
+   ทรงเดียวทุกสถานะ: กล่องสี + ข้อความ ต่างกันแค่โทนสี
+
+   ที่เลือกให้ "ปกติ" มีพื้นหลังด้วย (แทนที่จะเป็นตัวหนังสือลอยๆ) เพราะแถบบนนี้
+   ต้องอ่านจากระยะห่างในห้อง PM Kit ไม่ได้อ่านจากระยะนั่งพิมพ์ — กล่องมีสี
+   หาเจอเร็วกว่ามาก
+
+   แลกมาด้วยข้อเสียที่ต้องยอมรับ: เขียวขึ้นค้างทั้งวันจนตาชิน เราชดเชยด้วย
+   การให้ Database เงียบตอนปกติ (ดูคอมเมนต์ใน Layout.tsx) แถบบนวันปกติจึงมี
+   กล่องเดียว — ถ้าเมื่อไหร่เห็น 2 กล่อง แปลว่ามีอะไรผิดปกติแน่นอน
+
+   ⚠ **ไม่มีจุดนำหน้า** โดยตั้งใจ — เคยใส่แล้วเอาออก เพราะกล่องถือสีอยู่แล้ว
+     ทั้งพื้นหลัง ขอบ และตัวอักษร จุดสีเดียวกันอีกจุดจึงไม่ได้เพิ่มข้อมูลอะไร
+     แค่กินที่ (จุดมีประโยชน์เฉพาะตอนที่ไม่มีพื้นหลัง เพราะเป็นตัวเดียวที่ถือสี)
+
+     ถ้าวันหนึ่งต้องรองรับการปรินต์ขาวดำหรือคนตาบอดสี ให้ใส่ **ไอคอนที่ต่างกัน
+     จริงในแต่ละสถานะ** (ถูก/นาฬิกา/กากบาท) ไม่ใช่กลับมาใส่จุด เพราะจุดทุก
+     สถานะหน้าตาเหมือนกันหมด ต่างแค่สี ซึ่งช่วยอะไรไม่ได้เลยในสองกรณีนั้น   */
+.station-status { display: flex; align-items: center; gap: 0.6rem; }
+
 .station-badge {
+  display: inline-flex;
+  align-items: center;
   font-size: 0.8rem;
   font-weight: 600;
-  padding: 0.3rem 0.85rem;
-  border-radius: 999px;
+  padding: 0.3rem 0.75rem;
+  border-radius: var(--radius);
   border: 1px solid var(--border);
+  white-space: nowrap;
 }
 /* ── โลโก้ + เมนู Export แบบ dropdown (ยกจาก Frontend/shared.css) ────────
    ห้อยใต้ตัวเมนูโดยตรง (absolute เทียบกับ .topbar-menu) · ลูกศรบอกว่ากดแล้ว
@@ -203,10 +226,29 @@ button.topbar-link {
 
 .station-badge.online     { background: var(--ok-bg);   border-color: var(--ok);   color: var(--ok); }
 .station-badge.offline    { background: var(--ng-bg);   border-color: var(--ng);   color: var(--ng); }
-.station-badge.connecting { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
-/* db-offline ใช้โทนเดียวกับ connecting โดยตั้งใจ — ทั้งคู่คือ "ใช้งานไม่ได้
-   เต็มที่ แต่ยังไม่ถึงขั้นขาดการติดต่อ" ตัวหนังสือเป็นตัวแยกว่าเป็นเรื่องไหน */
+/* แดง = Server ตาย · เหลือง = DB ล่ม — ต่างระดับกันจริง ไม่ได้ต่างแค่ข้อความ
+   Server ตายคือทั้งระบบใช้ไม่ได้ ส่วน DB ล่มยังเปิดหน้าเว็บดูของเดิมได้อยู่ */
 .station-badge.db-offline { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+
+/* connecting กับ unknown เป็น "เทา" ทั้งคู่ ไม่ใช่เหลือง — ทั้งสองตัวแปลว่า
+   *ยังไม่รู้* ไม่ใช่ *พัง* ถ้าทำเป็นเหลืองเหมือน db-offline คนจะวิ่งไปแก้
+   ทั้งที่อีกเดี๋ยวมันก็ต่อติดเอง สีเตือนเก็บไว้ให้เรื่องที่ต้องลงมือจริง */
+.station-badge.connecting,
+.station-badge.unknown    { background: var(--surface2); border-color: var(--border); color: var(--muted); }
+
+/* จางเข้าออกเฉพาะ connecting — บอกว่า "กำลังพยายามอยู่" ต่างจาก unknown ที่นิ่ง
+   เพราะ unknown คือยอมแพ้แล้ว (Server ตาย ถามต่อไม่ได้) ไม่ได้กำลังทำอะไร
+
+   ⚠ ช่วง opacity แคบ (1 → 0.55) โดยตั้งใจ — ตอนมีจุดนำหน้า จุดจะกะพริบ 1 → 0.25
+     ได้เพราะมันเล็ก แต่ตอนนี้ทั้งกล่องเป็นตัวกะพริบ ถ้าใช้ช่วงกว้างเท่าเดิม
+     มันจะวูบทั้งมุมจอจนรบกวนสายตา */
+.station-badge.connecting { animation: station-pulse 1.6s ease-in-out infinite; }
+@keyframes station-pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.55 } }
+
+/* เคารพการตั้งค่าระบบของคนที่เวียนหัวกับภาพเคลื่อนไหว — ป้ายยังอยู่ แค่ไม่จาง */
+@media (prefers-reduced-motion: reduce) {
+  .station-badge.connecting { animation: none; }
+}
 
 /* ── ปุ่มมาตรฐาน (ยกจาก Frontend/shared.css + edit.html) ──────────────────
    ⚠ 3 คลาสนี้ถูกใช้ใน ConfirmDialog / PartEntry / SessionControl / Measurements
@@ -659,7 +701,14 @@ button.topbar-link {
    ตัวที่ยังไม่มีค่าจะถูกซ่อนทั้งชิป ไม่ใช่โชว์ขีดกลางไว้ — แถบตอน idle จะได้
    ไม่รกด้วยช่องว่างเปล่า
    ปุ่ม Start/Stop ดันไปชิดขวาด้วย margin-left:auto (ไม่ใช้ spacer div) */
-.session-chip { display: flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+/* ⚠ baseline ไม่ใช่ center — ป้าย (.sc-label 0.7rem) กับค่า (.sc-value 1rem)
+     ตัวอักษรคนละขนาด `center` จัดให้ **กล่องอยู่กลางเท่ากัน** ซึ่งทำให้เส้น
+     บรรทัดของตัวอักษรเหลื่อมกัน เห็นชัดตั้งแต่ถอดพื้นหลังออกจาก .sc-value
+     (ก่อนหน้านั้นกล่องบังไว้อยู่)
+     `baseline` จัดให้ตัวอักษรนั่งบนเส้นเดียวกัน ซึ่งเป็นสิ่งที่ตาคาดหวังจริง
+     — ป้ายที่ยังมีกล่องอยู่ (.session-state-badge / .sc-pi) ก็ยังตรง เพราะ
+     เบราว์เซอร์ใช้เส้นบรรทัดของตัวอักษรข้างในเป็นตัวอ้างอิงให้เอง            */
+.session-chip { display: flex; align-items: baseline; gap: 0.4rem; white-space: nowrap; }
 .session-btns { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; margin-left: auto; }
 .sc-label {
   font-size: 0.7rem; color: var(--muted); font-weight: 600;
@@ -670,20 +719,60 @@ button.topbar-link {
      ไม่ใช่ชื่อที่เขาเขียน ส่วน STATUS เป็นคำที่เราตั้งเองจึงทำได้
    สี: var(--text) ดำเข้มสุด ต่างจากป้าย STATUS ที่สีเปลี่ยนตามสถานะ — แบ่ง
      หน้าที่ให้ชัดว่า "สี = สถานะ" · "ดำ = ข้อเท็จจริงที่ไม่เปลี่ยนตามสถานะ" */
+/* ⚠ **ไม่มีพื้นหลังและไม่มี padding** — เคยมีแล้วเอาออก
+     ของเดิมใส่ `background: var(--surface2)` + padding ให้ทุกค่าในแถวนี้
+     ผลคือ Operator/Measure Type/Session ได้กล่องเหมือนกับ STATUS กับ Pi
+     ทั้งที่คนละประเภทกัน — ค่าพวกนี้ตั้งไว้ตอน Start แล้วนิ่งยาว ส่วนอีกสอง
+     ตัวเปลี่ยนได้ตลอดเวลา พอดังเท่ากันหมดตาเลยไม่รู้ว่าควรมองอะไรก่อน
+     (ขัดกับกติกาที่เขียนไว้เองข้างบนด้วย)
+
+     ผลพลอยได้: กล่องที่กว้างไม่เท่ากัน (`78` แคบ · `Connecting` กว้าง) เรียง
+     ติดกันแล้วดูขรุขระ พอถอดกล่องออกปัญหานี้หายไปเอง
+
+     กล่องยังอยู่ครบที่ .session-state-badge กับ .sc-pi ซึ่งมี padding/พื้นหลัง
+     ของตัวเองอยู่แล้ว ไม่ได้พึ่งคลาสนี้                                    */
 .sc-value {
   font-size: 1rem; font-weight: 700; letter-spacing: .04em;
-  color: var(--text); background: var(--surface2);
-  border-radius: var(--radius); padding: 0.2rem 0.75rem;
+  color: var(--text);
 }
 /* ── ชิป PI — ต่างจากชิปอื่น 2 อย่างโดยตั้งใจ ────────────────────────────
    ① ไม่ซ่อนตอน idle — ประโยชน์หลักคือดูก่อนกด Start ว่าเครื่องพร้อมไหม
    ② มีสี ซึ่งขัดกติกา "สี = สถานะเท่านั้น" ของแถบนี้ — แต่ชิปนี้ *เป็น* สถานะ
       จริงๆ ไม่ใช่ข้อเท็จจริงคงที่แบบ Operator/Measure Type
-   3 สถานะ ไม่ใช่ 2 — "ไม่ทราบ" ต้องแยกจาก "ออฟไลน์" ให้ชัด */
-.sc-pi { display: inline-flex; align-items: center; gap: 0.35rem; }
-.sc-pi.online  { color: #15803d; background: #dcfce7; }
-.sc-pi.offline { color: #b91c1c; background: #fee2e2; }
-.sc-pi.unknown { color: #a16207; background: #fef9c3; }
+   3 สถานะ ไม่ใช่ 2 — "ไม่ทราบ" ต้องแยกจาก "ออฟไลน์" ให้ชัด
+
+   ⚠ ใช้โทนสีชุดเดียวกับ .station-badge บนแถบบนโดยตั้งใจ (--ok / --ng / เทา)
+     ของเดิมเป็นเลขฮาร์ดโค้ดคนละชุด (#15803d / #b91c1c / #a16207) ซึ่งสดกว่า
+     ทั้งระบบอยู่ป้ายเดียว ทำให้ "เขียว" ของ Pi กับ "เขียว" ของ Server เป็น
+     คนละเขียว ทั้งที่สื่อความหมายเดียวกัน — ถ้าจะแก้โทนต้องแก้ที่ตัวแปรกลาง
+     ใน :root เท่านั้น ห้ามใส่ hex ตรงนี้อีก
+
+   ⚠ ไม่มีจุดนำหน้าและไม่มีอีโมจิ ด้วยเหตุผลเดียวกับ .station-badge — กล่อง
+     ถือสีอยู่แล้วทั้งพื้นหลัง ขอบ และตัวอักษร (ดูคอมเมนต์ที่ .station-badge) */
+.sc-pi {
+  display: inline-flex;
+  align-items: center;
+  /* ⚠ padding/radius ต้องประกาศเองตรงนี้ ไม่ได้มาจาก .sc-value อีกแล้ว
+     (ดูคอมเมนต์ที่ .sc-value ว่าทำไมถึงถอดออกจากที่นั่น) — ค่าตรงกับ
+     .session-state-badge เป๊ะ เพราะสองตัวนี้ยืนข้างกันในแถวเดียวกัน */
+  border-radius: var(--radius);
+  padding: 0.2rem 0.75rem;
+  border: 1px solid var(--border);
+}
+.sc-pi.online  { background: var(--ok-bg);   border-color: var(--ok);  color: var(--ok); }
+.sc-pi.offline { background: var(--ng-bg);   border-color: var(--ng);  color: var(--ng); }
+/* unknown = "ยังไม่เคยได้ heartbeat เลย" ไม่ใช่ "พัง" → เทา ไม่ใช่เหลือง
+   (เหลืองเก็บไว้ให้ Database offline อย่างเดียวทั้งระบบ) · จางเข้าออกเพื่อ
+   บอกว่ากำลังรออยู่ ไม่ได้ค้าง — ช่วง opacity แคบเหมือน .station-badge */
+.sc-pi.unknown {
+  background: var(--surface2);
+  border-color: var(--border);
+  color: var(--muted);
+  animation: station-pulse 1.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sc-pi.unknown { animation: none; }
+}
 
 /* ── คอลัมน์ read-only ในหน้า Edit (ยกจาก edit.html) ────────────────────
    คอลัมน์ที่ระบบ derive มาให้ (Handler ← Part Number · Template ← Package Size)
@@ -935,11 +1024,52 @@ button.topbar-link {
   letter-spacing: .04em;
   padding: 0.2rem 0.75rem;
   border-radius: var(--radius);
+  /* ขอบจริง สีตามสถานะข้างล่าง — ตรงกับชิป .sc-pi ที่ยืนอยู่ข้างกันในแถวเดียวกัน
+     (เคยเป็นขอบใสอยู่พักหนึ่งเพื่อให้สูงเท่ากันเฉยๆ ตอนนี้ให้มันมีหน้าที่จริง) */
+  border: 1px solid var(--border);
 }
-.session-state-badge.idle     { background: var(--surface2); color: var(--muted); }
-.session-state-badge.running  { background: rgba(55,138,222,.12);  color: var(--accent); }
-.session-state-badge.stopped  { background: var(--surface2); color: var(--muted); }
-.session-state-badge.timeout  { background: var(--warn-bg);  color: var(--warn); }
+/* 4 สถานะ แต่มีแค่ **ตัวเดียวที่กำลังเกิดขึ้นตอนนี้** — อีกสามตัวคือ "ไม่ได้วัด"
+   เหมือนกันหมด ต่างกันแค่เหตุผล น้ำหนักทางสายตาจึงต้องไม่เท่ากัน:
+
+     idle     เงียบสุด  ยังไม่เคยเริ่มอะไรเลย
+     stopped  เข้มขึ้น  วัดแล้วหยุด = มีเรื่องเกิดขึ้นไปแล้ว
+     timeout  เหลือง    จบแบบผิดปกติ ต้องมีคนดู
+     running  ทึบ       ตัวเดียวในทั้งหน้าจอที่พื้นทึบ
+
+   ⚠ idle กับ stopped **ห้ามใช้สีเดียวกัน** (ของเดิมเป็น --surface2/--muted
+     ทั้งคู่ แยกไม่ออกถ้าไม่อ่านคำ) — คนละความหมายกัน ตอนไล่หาสาเหตุต่างกันมาก */
+/* แยก idle/stopped ด้วย **น้ำหนักตัวอักษร ไม่ใช่สีใหม่** — idle ใช้ --muted
+   (จาง) · stopped ใช้ --text (เข้มสุด) บนพื้นที่เข้มขึ้นหนึ่งขั้น ทั้งคู่ยัง
+   เป็นเทาเหมือนเดิม ไม่ได้เพิ่มสีเข้าระบบ และไม่ต้องมี hex ฮาร์ดโค้ดสักตัว */
+.session-state-badge.idle {
+  background: var(--surface2); border-color: var(--border); color: var(--muted);
+}
+.session-state-badge.stopped {
+  background: var(--bg); border-color: var(--border); color: var(--text);
+}
+.session-state-badge.timeout {
+  background: var(--warn-bg); border-color: var(--warn); color: var(--warn);
+}
+/* ⚠ **พื้นทึบตัวอักษรขาว — ตัวเดียวในระบบที่ทำแบบนี้** ตั้งใจให้ผิดจากพวก
+     ทั้งหมด เพราะคนหน้างานเหลือบมองจอเพื่อจะรู้เรื่องเดียวคือ "ตอนนี้เครื่อง
+     เดินอยู่ไหม" ป้ายนี้ต้องตอบได้โดยไม่ต้องอ่านตัวหนังสือ
+
+     ห้ามเอาสไตล์นี้ไปใช้กับป้ายอื่นอีก ไม่งั้นมันจะเลิกเด่น
+
+     ใช้ --accent ไม่ใช่ --ok เพราะเขียวถูกจองไว้แปลว่า "ชิ้นงานผ่าน" แล้ว
+     ถ้า running เขียวด้วย จะแยกไม่ออกว่า "เครื่องกำลังทำงาน" หรือ "ชิ้นนี้ผ่าน"
+
+     (ของเดิมเป็น rgba(55,138,222,.12) ฮาร์ดโค้ด ทั้งที่ --accent คือสีเดียวกัน) */
+.session-state-badge.running {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+  animation: running-pulse 1.8s ease-in-out infinite;
+}
+/* ⚠ ช่วงแคบกว่า station-pulse (1 → 0.62 ไม่ใช่ 1 → 0.55) เพราะป้ายนี้พื้นทึบ
+   สีจัด ถ้าจางเท่ากับป้ายพื้นอ่อน น้ำเงินทั้งก้อนจะซีดจนดูเหมือนถูกปิดใช้งาน */
+@keyframes running-pulse { 0%, 100% { opacity: 1 } 50% { opacity: 0.62 } }
+@media (prefers-reduced-motion: reduce) {
+  .session-state-badge.running { animation: none; }
+}
 .session-btns { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
 .btn-start   { background: var(--accent); color: #fff; }
 .btn-stop    { background: var(--ng);     color: #fff; }

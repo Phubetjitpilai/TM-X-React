@@ -43,8 +43,12 @@ export default function SessionControl({
   //
   // ⚠ ชิปนี้ **ไม่ซ่อนตอน idle** ต่างจากชิปอื่น เพราะประโยชน์หลักคือดูก่อนกด
   //   Start ว่าเครื่องพร้อมไหม ถ้าซ่อนตอนไม่มี session ก็หมดความหมาย
+  //
+  // ⚠ ไม่มีอีโมจินำหน้าแล้ว — ป้ายมีสีพื้นหลังอยู่แล้ว อีโมจิจึงพูดซ้ำเรื่อง
+  //   เดียวกัน แถมหน้าตาต่างกันทุก OS และปรินต์ไม่ออก (เหตุผลเดียวกับที่ถอด
+  //   ออกจากป้าย Server/Database บนแถบบน — ดู Layout.tsx)
   const piCls = piStatus === true ? "online" : piStatus === false ? "offline" : "unknown";
-  const piText = piStatus === true ? "🟢 Online" : piStatus === false ? "🔴 Offline" : "🟡 Connecting";
+  const piText = piStatus === true ? "Online" : piStatus === false ? "Offline" : "Connecting";
 
   // ── ปุ่ม Start ต้องบอก "ติดอะไรอยู่" ไม่ใช่แค่กดไม่ได้เฉยๆ ─────────────
   // ไม่งั้นผู้ใช้จะนึกว่าระบบพัง แล้วไปไล่หาที่ฟอร์ม Part Entry ทั้งที่ปัญหา
