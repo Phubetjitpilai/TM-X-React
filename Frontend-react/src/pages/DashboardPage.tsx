@@ -19,8 +19,6 @@ import PartEntryModal, { type EntryQueue } from "../components/dashboard/PartEnt
 
 const PART_ENTRY_STORAGE_KEY = "tmx_part_entry_state_v1";
 const MEAS_PAGE_SIZE = 10;
-const ENTRY_MODES = ["ipm", "new", "rework"] as const;
-type EntryMode = (typeof ENTRY_MODES)[number];
 
 interface SessionState {
   state: "idle" | "running" | "stopped" | "timeout";
@@ -229,9 +227,9 @@ export default function DashboardPage() {
 
   /** จอ Live Telemetry ถูกสั่งล้างไว้สำหรับ session ไหน
    *
-   *  ⚠ จำเป็นเพราะการล้าง state เฉย ๆ **ไม่พอ** — loadSessionState() ทำงานทุก 5 วิ
-   *    แล้วเรียก syncQueueStrip()/updateStats() ซึ่งจะไปดึงคิวกับสถิติของ session
-   *    นั้นกลับมาเติมใหม่ภายในไม่กี่วินาที ผู้ใช้จะเห็นของที่เพิ่งล้างโผล่กลับมาเอง
+   *  ⚠ จำเป็นเพราะการล้าง state เฉย ๆ **ไม่พอ** — พอผล poll ของ useSessionState()
+   *    เปลี่ยน effect จะเรียก syncQueueStrip()/updateStats() ซึ่งไปดึงคิวกับสถิติ
+   *    ของ session นั้นกลับมาเติมใหม่ ผู้ใช้จะเห็นของที่เพิ่งล้างโผล่กลับมาเอง
    *
    *  ผูกกับ session_id ไม่ใช่ boolean เฉย ๆ — พอขึ้น session ใหม่ธงจะหมดผลเอง
    *  โดยไม่ต้องล้างให้ (คนละ session แล้ว ไม่มีเหตุผลที่จะซ่อนของใหม่)
@@ -306,7 +304,6 @@ export default function DashboardPage() {
 
   // ── Part Entry modal / toggle ────────────────────────────────────────
   const [peModalOpen, setPeModalOpen] = useState(false);
-  const [, setEntryMode] = useState<EntryMode | null>(null);
   const [peSummaryOpen, setPeSummaryOpen] = useState(false);
 
 
@@ -354,9 +351,26 @@ export default function DashboardPage() {
   // ── สถานะ Pi + DB ────────────────────────────────────────────────────────
   // มาจาก /api/session/state ที่ poll อยู่แล้วทุก 4 วิ — ไม่ได้เพิ่ม request ใหม่
   // (useSessionState dedupe ให้ตาม queryKey แม้ Layout จะเรียกซ้ำอีกที)
-  const { piStatus, dbOffline: dbDown, triggerReady, manualTrigger } = useSessionState();
+  const { data: polledSession, piStatus, dbOffline: dbDown, triggerReady, manualTrigger } = useSessionState();
   const piOnline = piStatus === true;
   const dbOffline = !!dbDown;
+
+  /** ลายเซ็นของ "สิ่งที่หน้านี้สนใจจริง ๆ" ในผล poll
+   *
+   *  ⚠ ต้องมีตัวนี้ ห้ามใช้ `[polledSession]` ตรง ๆ เป็น dependency — TanStack
+   *    คืน **object ใหม่ทุกครั้งที่ refetch** แม้ข้อมูลจะเหมือนเดิมเป๊ะ effect
+   *    จึงทำงานทุกวินาทีตอน running แล้ว updateStats() จะยิง /api/measurements
+   *    3 คำขอทุกวินาที (ของเดิมยิงทุก 5 วิ = แย่ลง 5 เท่า)
+   *
+   *  ⚠ **ห้ามใส่ `last_seen`** — heartbeat ขยับทุก 5 วิ ใส่แล้วเท่ากับไม่ได้กรอง
+   *    อะไรเลย (และไม่มีใครในหน้านี้อ่านค่านั้น)
+   *
+   *  `measured_count` ครอบเรื่อง queue_state ให้แล้ว เพราะ position ใน
+   *  queue_state ขยับพร้อมกับตัวนับนี้เสมอ (ดู create_measurement)
+   */
+  const sessionSig = polledSession
+    ? `${polledSession.session_id}|${polledSession.state}|${polledSession.measured_count}|${polledSession.target_count}`
+    : "";
 
   /* ── ปุ่มจำลองสัญญาณทริกเกอร์ — ใช้ระหว่างที่ยังไม่ได้ต่อ MCU ──────────────
      ยิงไปที่ Backend ไม่ใช่ที่ Pi โดยตรง (ดูเหตุผลใน manual_trigger ฝั่ง backend)
@@ -485,15 +499,23 @@ export default function DashboardPage() {
     setPartNumberCatalog(partNumbers);
   }
 
-  async function loadSessionState() {
-    try {
-      const d = await apiGet<Partial<SessionState>>("/api/session/state");
-      updateSession(d);
-      syncQueueStrip(d);
-    } catch (e) {
-      console.warn("loadSessionState:", e);
-    }
-  }
+  /* ── ผล poll เปลี่ยน → อัปเดตหน้าจอ ──────────────────────────────────────
+     เดิมหน้านี้ตั้ง `setInterval(loadSessionState, 5000)` ยิง /api/session/state
+     เองอีกเส้น **ทั้งที่ useSessionState() ยิงเส้นเดียวกันอยู่แล้ว** และเพราะมัน
+     เป็น apiGet ดิบ TanStack จึง dedupe ให้ไม่ได้ ผลคือ
+
+       · ตอน running ยิงซ้ำสองทาง (1 วิ + 5 วิ) โดยไม่รู้จักกัน
+       · หน้านี้ถือ session อยู่ 2 ชุดที่มาถึงคนละเวลา — มีจังหวะที่ป้ายบนแถบ
+         กับแถบคิวข้างล่างพูดไม่ตรงกัน
+
+     ตอนนี้เหลือทางเดียว และดีกว่าเดิมตรงที่ **ทำงานเมื่อข้อมูลเปลี่ยนจริงเท่านั้น**
+     ไม่ใช่ทำตามนาฬิกา (ดู sessionSig ว่าอะไรนับว่า "เปลี่ยน")                */
+  useEffect(() => {
+    if (!polledSession) return;
+    updateSession(polledSession);
+    syncQueueStrip(polledSession);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionSig]);
 
   // updateSession: merge ค่าใหม่เข้ากับ session เดิม + เช็คว่าคิว Part Entry
   // ที่ค้างอยู่ "หมดอายุ" ไปแล้วหรือยัง (ผูกกับ session_id ที่จบไปแล้ว) —
@@ -518,7 +540,8 @@ export default function DashboardPage() {
     setEntryQueue(null);
     entryQueueRef.current = null;
     savePartEntryState();
-    setEntryMode(null);
+    // เดิมมี setEntryMode(null) ตรงนี้ — ลบทิ้งแล้วเพราะ state ตัวนั้นถูกเขียน
+    // อย่างเดียว ไม่มีใครอ่านเลย (ซากจากตอนที่ยังแยกฟอร์มเป็น 3 โหมด)
   }
 
   function resetTelemetry() {
@@ -576,6 +599,22 @@ export default function DashboardPage() {
   function syncQueueStrip(st: any) {
     // ผู้ใช้กด 🧹 Clear ไว้ — ต้องค้างว่างไว้ ไม่ใช่โหลดกลับมาใหม่
     if (isTelemetryCleared()) { setQueueStrip([]); return; }
+
+    /* ⚠ session ที่จบไปแล้ว **ห้ามวาดแถบคิวขึ้นมาใหม่**
+       /api/session/state คืน session ล่าสุดเสมอโดยไม่ดู state เลย
+       (session.py — `SELECT ... FROM sessions ORDER BY session_id DESC LIMIT 1`
+        ไม่มี WHERE) `queue_state` ของรอบที่จบไปเมื่อวานจึงยังถูกส่งมาทุกครั้ง
+       ที่เปิดหน้า → เปิดเว็บวันถัดไปแล้วเจอคิวเก่าค้างอยู่ทั้งที่ล้างไปแล้ว
+
+       แถบคิวยังรอดการรีเฟรชกลาง session ตามเจตนาเดิมทุกประการ เพราะตอนนั้น
+       `state` เป็น "running" (นั่นคือเหตุผลที่ backend แนบ queue_state มาให้
+        ตั้งแต่แรก — ดูคอมเมนต์ที่ session.py:141)
+
+       ⚠ ห้ามแก้เป็น "จำค่าไว้ใน localStorage แทน" — คิวเป็นข้อเท็จจริงของ
+         session ที่ DB จำอยู่แล้ว เก็บสำเนาที่สองไว้จะเพี้ยนจากต้นฉบับได้
+         (เช่นมีคนลบแถวจากหน้า Edit) และจะทำให้ของเก่าค้างข้ามวันหนักกว่าเดิม */
+    if (st?.state !== "running") { setQueueStrip([]); return; }
+
     const raw = st?.queue_state;
     if (!raw) { setQueueStrip([]); return; }
     let q: any = null;
@@ -812,7 +851,9 @@ export default function DashboardPage() {
         const d = JSON.parse(raw);
         if (d.entryQueue) { setEntryQueue(d.entryQueue); entryQueueRef.current = d.entryQueue; }
         if (d.lastTelemetry) applyTelemetry(d.lastTelemetry);
-        // กู้ผลรายชิ้นก่อน loadSessionState() ตัวแรกจะเรียก syncQueueStrip
+        // ⚠ ต้องกู้ผลรายชิ้น **ก่อน** ที่ผล poll ตัวแรกจะมาถึงแล้วเรียก
+        //   syncQueueStrip — effect นั้นอ่าน resultsRef เพื่อระบายสีชิป
+        //   (effect ของ mount ทำงานแบบ synchronous จึงเสร็จก่อน response แน่นอน)
         if (Array.isArray(d.results)) resultsRef.current = d.results;
         clearedSidRef.current = d.clearedSid ?? null;
         if (d.lastImageMeasurementId) {
@@ -824,12 +865,11 @@ export default function DashboardPage() {
       console.warn("loadPartEntryState:", e);
     }
 
+    // สถานะ session ไม่ต้องโหลดตรงนี้แล้ว — useSessionState() ยิงให้ตั้งแต่ render
+    // แรก แล้ว effect ที่ผูกกับ sessionSig จะรับช่วงต่อเองตอน response มาถึง
     (async () => {
-      await Promise.all([loadSessionState(), loadMeasurementsPage(1, "", ""), refreshParts(), loadDropdownData()]);
+      await Promise.all([loadMeasurementsPage(1, "", ""), refreshParts(), loadDropdownData()]);
     })();
-
-    const t = window.setInterval(loadSessionState, 5000);
-    return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1696,6 +1736,10 @@ export default function DashboardPage() {
           แทนที่ของเดิมที่แยกเป็น 3 ฟอร์มโหมดละชุด กลุ่มละ 1 ชุดเท่านั้น */}
       {peModalOpen && (
         <PartEntryModal
+          /* คิวที่ค้างอยู่ — ปุ่ม "✎ Edit" จะได้เปิดมาพร้อมของเดิม ไม่ใช่ฟอร์มเปล่า
+             (ตอนไม่มีคิว ปุ่มที่โผล่คือ "+ New Entry" และ entryQueue เป็น null
+              อยู่แล้ว จึงได้ฟอร์มเปล่าตามที่ควรเป็นโดยไม่ต้องแยกเงื่อนไข) */
+          initial={entryQueue ?? undefined}
           operators={operatorOptions}
           vendors={vendorOptions}
           owners={ownerOptions}

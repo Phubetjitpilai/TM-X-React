@@ -5,6 +5,7 @@ import TrashCard from "../components/TrashCard";
 import LookupTables from "../components/LookupTables";
 import HistoryCard from "../components/HistoryCard";
 import { axisValue, offsetValue, xyPair } from "../components/measurementCells";
+import { useSessionState } from "../hooks/useSessionState";
 
 // EditPage — พอร์ตจาก Frontend/edit.html (Database Editor) แบบยึดโครงสร้าง/
 // field/คอลัมน์/ข้อความ ตามต้นฉบับเป็นหลัก
@@ -171,7 +172,24 @@ export default function EditPage() {
   const measSearchTimer = useRef<number | null>(null);
 
   // ── Session running lock ────────────────────────────────────────────
-  const [sessionRunning, setSessionRunning] = useState(false);
+  /** กำลังมีการวัดอยู่ไหม — ใช้ล็อกปุ่มแก้/ลบทั้งหน้า
+   *
+   *  ⚠ เดิมหน้านี้ตั้ง setInterval ยิง /api/session/state เองทุก 4 วิ ตอนนี้ไป
+   *    เกาะ useSessionState() แทน เพราะ:
+   *      · TanStack Query รวมคำขอให้ตาม queryKey — Layout ก็เรียก hook เดียวกัน
+   *        อยู่แล้ว เปิดหน้านี้จึงไม่ได้เพิ่มคำขอใหม่เลย (ของเดิมเพิ่ม 1 ชุด)
+   *      · ตรรกะแยก 503 / อ่าน pi_status จาก body ของ error / retry:false
+   *        อยู่ในนั้นครบแล้ว ไม่ต้องลอกมาไว้ที่นี่อีกชุด
+   *
+   *  ⚠ ผลข้างเคียงที่ยอมรับ: ตอน session กำลัง running จะ poll ถี่ขึ้นเป็น 1 วิ
+   *    (ของเดิม 4 วิคงที่) เพราะ useSessionState เร่งความถี่เองตอนวัดอยู่
+   *
+   *  `undefined` (ยังโหลดไม่เสร็จ / ถามไม่ได้) → ถือว่า **ไม่ได้วัดอยู่** เพื่อไม่ให้
+   *  หน้าจอล็อกค้างตอน backend ล่ม — ฝั่ง backend มี _block_if_session_running()
+   *  กันอีกชั้นอยู่แล้ว ตัวนี้เป็นแค่การบอกผู้ใช้ล่วงหน้า
+   */
+  const { data: sessionState } = useSessionState();
+  const sessionRunning = sessionState?.state === "running";
 
   // ── Dropdown lookups ─────────────────────────────────────────────────
   // ⚠ ไม่มี Handler ในนี้แล้ว — Handler เป็นค่าที่ derive มาจาก Part Number ที่เลือก
@@ -260,21 +278,11 @@ export default function EditPage() {
     setPackageSizeOptions(packageSizes.map((p) => p.package_size));
   }
 
-  async function checkSessionRunning() {
-    try {
-      const d = await apiGet<{ state: string }>("/api/session/state");
-      setSessionRunning(d.state === "running");
-    } catch {
-      /* poll ล้มเหลวเงียบๆ — ไม่ให้กระทบการใช้งานหน้าอื่น */
-    }
-  }
-
   useEffect(() => {
     (async () => {
-      await Promise.all([loadParts(1, ""), loadMeasurements(1, "", ""), loadDropdownData(), checkSessionRunning()]);
+      await Promise.all([loadParts(1, ""), loadMeasurements(1, "", ""), loadDropdownData()]);
     })();
-    const t = window.setInterval(checkSessionRunning, 4000);
-    return () => window.clearInterval(t);
+    // ไม่มี setInterval แล้ว — สถานะ session มาจาก useSessionState() ข้างบน
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

@@ -66,6 +66,7 @@ def _parse_measurement_line(line: str):
     filtered_items = [item for item in items if item != "-9999.999"]
 
     if len(filtered_items) < 8:
+        #clear_temp_dir(wait_timeout=0)
         return None
 
     try:
@@ -382,7 +383,7 @@ def _log_received_file(path: str, note: str = ""):
     parsed = _parse_measurement_line(last)
     if parsed is None:
         n = len(last.split(","))
-        print(f"           ⚠️ แปลงค่าไม่ได้ — ได้ {n} ช่อง (ต้องการ ≥8) หรือมีตัวอักษรปน")
+        print(f"           ⚠️ แปลงค่าไม่ได้ — ได้ {n} ช่อง (ต้องการ = 8) ")
         return
 
     print(f"           แปลงค่าได้: value_x={parsed[0]}  value_y={parsed[1]}  "

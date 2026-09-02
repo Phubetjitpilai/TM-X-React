@@ -103,6 +103,12 @@ class CommandRequest(BaseModel):
 async def command(req: CommandRequest):
     global is_running, _answer_action
     if req.action == "start":
+        try:
+            httpx.post(f"{BACKEND_URL}/api/heartbeat",
+                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
+                timeout=5)
+        except Exception:
+            pass
         print("\n ได้รับคำสั่ง Start จาก Backend")
         groups = req.groups
         if not groups:

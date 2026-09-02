@@ -55,17 +55,53 @@ interface Props {
   confirmRegister: (items: { alpl: number; package_size: string }[]) => Promise<boolean>;
   /** แจ้งเตือนทั่วไป (toast) — ใช้ตอน autofill เขียนทับค่าที่ผู้ใช้พิมพ์เอง */
   onNotify: (message: string) => void;
+  /** คิวเดิมที่จะเอามาเติมในฟอร์ม — `undefined` = เปิดฟอร์มเปล่า
+   *
+   *  ปุ่ม "✎ Edit" กับ "+ New Entry" ใช้ฟังก์ชันเปิด modal ตัวเดียวกัน แต่ปุ่มแรก
+   *  จะโผล่เฉพาะตอนมีคิวอยู่ · ปุ่มหลังโผล่เฉพาะตอนไม่มี — ส่ง `entryQueue`
+   *  เข้ามาตรง ๆ จึงถูกทั้งสองกรณีโดยไม่ต้องมีธงบอกโหมด
+   */
+  initial?: EntryQueue;
 }
 
 const MODES: EntryMode[] = ["IPM", "New", "Rework"];
 
+/** แปลงคิวที่เก็บไว้ กลับเป็นค่าที่ฟอร์มใช้ได้
+ *
+ *  ⚠ สองชนิดนี้เก็บ ALPL คนละแบบ — `PayloadGroup.number_alpl` เป็น `number[]`
+ *    (คลี่ช่วงแล้ว) ส่วนฟอร์มเป็น string ดิบที่ผู้ใช้พิมพ์
+ *
+ *  ⚠ **การแปลงกลับสูญข้อมูลรูปแบบ** — ถ้าผู้ใช้พิมพ์ "400-403" ตอนแรก มันถูก
+ *    คลี่เป็น [400,401,402,403] ไปแล้วตั้งแต่ตอน Save เปิด Edit จึงเห็นเป็น
+ *    "400, 401, 402, 403" ค่าถูกต้องทุกตัวแต่หน้าตาไม่เหมือนที่พิมพ์
+ *    ถ้าจะให้เหมือนเป๊ะต้องเก็บ string ดิบไว้ใน EntryQueue อีกฟิลด์
+ */
+function toFormGroups(q: EntryQueue): GroupValues[] {
+  return q.groups.map((g) => {
+    const out: GroupValues = {};
+    for (const [k, v] of Object.entries(g)) {
+      out[k] = Array.isArray(v) ? v.join(", ") : String(v ?? "");
+    }
+    return out;
+  });
+}
+
 export default function PartEntryModal({
   operators, vendors, owners, packageSizes, partNumbersFor,
-  onSave, onClose, confirmRegister, onNotify,
+  onSave, onClose, confirmRegister, onNotify, initial,
 }: Props) {
-  const [mode, setMode] = useState<EntryMode>("IPM");
-  const [operator, setOperator] = useState("");
-  const [groups, setGroups] = useState<GroupValues[]>([emptyGroup("IPM")]);
+  /* ตั้งค่าเริ่มต้นจาก `initial` ครั้งเดียวตอน mount — พอเพียงเพราะหน้าแม่วาด
+     modal นี้แบบ `{peModalOpen && <PartEntryModal .../>}` ทุกครั้งที่เปิดใหม่
+     component จึงเกิดใหม่ทั้งตัวและ initializer ทำงานซ้ำเสมอ
+
+     ⚠ ห้ามใช้ useEffect ซิงก์ `initial` เข้ามาทีหลัง — ระหว่างที่ผู้ใช้กำลัง
+       พิมพ์อยู่ ถ้าคิวฝั่งแม่เปลี่ยน (เช่น SSE สั่งล้างคิวตอน session จบ)
+       ของที่พิมพ์ค้างไว้จะโดนเขียนทับกลางคัน */
+  const [mode, setMode] = useState<EntryMode>(initial?.mode ?? "IPM");
+  const [operator, setOperator] = useState(initial?.operator ?? "");
+  const [groups, setGroups] = useState<GroupValues[]>(() =>
+    initial ? toFormGroups(initial) : [emptyGroup("IPM")],
+  );
   const [errors, setErrors] = useState<Record<number, Record<string, string>>>({});
   const [operatorError, setOperatorError] = useState("");
   const [busy, setBusy] = useState(false);

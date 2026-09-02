@@ -12,15 +12,22 @@ router = APIRouter()
 
 
 def _deleted_files():
-    """ไล่หาไฟล์ .json ทุกอันในถังขยะ — คืน (โฟลเดอร์วัน, ชื่อไฟล์, path เต็ม)"""
+    """ไล่หาไฟล์ .json ทุกอันในถังขยะ — คืน (โฟลเดอร์วัน, ชื่อไฟล์, path เต็ม)
+
+    ⚠ **ลำดับที่คืนออกไปไม่มีความหมาย** — คนจัดลำดับคือ `list_deleted()` ที่เรียง
+      จาก `deleted_at` อีกที ห้ามพยายามเรียงตรงนี้ให้ถูกต้องตามเวลา เพราะทำไม่ได้:
+        · ชื่อโฟลเดอร์เป็น `DD-MM-YYYY` (พ.ศ.) — **วันมาก่อนเดือน** เรียงเป็น
+          ข้อความแล้วจะได้ลำดับตามวันที่ของเดือน (02-09 ไปอยู่หลัง 30-08)
+        · ชื่อไฟล์เป็น `{kind}_{pk}.json` — ไม่มีอะไรเกี่ยวกับเวลาเลย
+    """
     if not os.path.isdir(DELETED_DIR):
         return []
     out = []
-    for day in sorted(os.listdir(DELETED_DIR), reverse=True):
+    for day in sorted(os.listdir(DELETED_DIR)):
         day_dir = os.path.join(DELETED_DIR, day)
         if not os.path.isdir(day_dir):
             continue
-        for name in sorted(os.listdir(day_dir), reverse=True):
+        for name in sorted(os.listdir(day_dir)):
             if name.endswith(".json"):
                 out.append((day, name, os.path.join(day_dir, name)))
     return out
@@ -68,6 +75,18 @@ def list_deleted():
             # โดยไม่มีใครรู้ แล้วผู้ใช้จะเห็นว่า "เหลือ 3 วัน" ทั้งที่ของหายไปแล้ว
             "days_left":  _days_left(day),
         })
+
+    # ── เรียงจากลบล่าสุดก่อน ──────────────────────────────────────────────
+    # ต้องเรียง "ที่นี่ที่เดียว" ไม่ใช่ตอนไล่ไฟล์ใน _deleted_files() เพราะชื่อ
+    # โฟลเดอร์กับชื่อไฟล์บอกเวลาไม่ได้ (ดูคำเตือนในฟังก์ชันนั้น)
+    #
+    # `deleted_at` เป็น ISO "YYYY-MM-DD HH:MM:SS" ค.ศ. (shared.py:359) — รูปแบบนี้
+    # เรียงเป็นข้อความได้ถูกต้องตามเวลาจริง เพราะหน่วยใหญ่อยู่ซ้ายสุด ต่างจาก
+    # DD-MM-YYYY ของชื่อโฟลเดอร์ที่วันมาก่อนเดือน
+    #
+    # ไฟล์เก่าที่ยังไม่มีคีย์นี้ได้ "" → ตกไปท้ายสุด ดีกว่าโยน TypeError ตอน
+    # เทียบ None กับ str
+    items.sort(key=lambda it: it.get("deleted_at") or "", reverse=True)
     return {"items": items, "total": len(items), "retention_days": DELETED_RETENTION_DAYS}
 
 
