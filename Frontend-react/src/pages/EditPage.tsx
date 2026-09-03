@@ -4,7 +4,7 @@ import { useToast } from "../components/Toast";
 import TrashCard from "../components/TrashCard";
 import LookupTables from "../components/LookupTables";
 import HistoryCard from "../components/HistoryCard";
-import { axisValue, offsetValue, xyPair } from "../components/measurementCells";
+import { axisValue, offsetValue, xyPair, DP_MM, DP_OFF } from "../components/measurementCells";
 import { useSessionState } from "../hooks/useSessionState";
 
 // EditPage — พอร์ตจาก Frontend/edit.html (Database Editor) แบบยึดโครงสร้าง/
@@ -62,23 +62,37 @@ interface Measurement {
   nominal_y?: number | null;
   upper_tol?: number | null;
   lower_tol?: number | null;
+  /** ผลตัดสินรายแกนจาก backend (`_ok_flags` ใน shared.py) — ⚠ **ต้องใช้ตัวนี้
+   *  ระบายสี ห้ามคำนวณ `nominal ± tol` เองที่หน้าเว็บ** เพราะ backend ปัด
+   *  ทศนิยมด้วย `_DP` ก่อนเทียบ ถ้าคำนวณเองแบบไม่ปัด ชิ้นที่ตกขอบพอดีจะขึ้น
+   *  สีแดงทั้งที่คอลัมน์ Result บอก OK · `null` = ตัดสินไม่ได้ ไม่ใช่ไม่ผ่าน */
+  ok_x?: boolean | null;
+  ok_y?: boolean | null;
+  /** แยกรายแกน — ใช้ระบายสีช่องตัวเลข Offset X / Y */
+  ok_opx?: boolean | null;
+  ok_opy?: boolean | null;
+  /** ⚠ ผลรวมของทั้ง 2 แกน — ห้ามเอาไประบายสีช่องรายแกน (ใช้ ok_opx/ok_opy แทน) */
+  ok_offset?: boolean | null;
 }
 
 /** catalog ของ Part Number — ผูก package_size/handler/nominal/tolerance ของตัวเองไว้แล้ว
  *  (ดู schema `part_number` ใน init.sql) ใช้แสดงกล่องค่า read-only ในฟอร์ม Part */
+/** ⚠ ไม่มี nominal/tolerance แล้ว — part_number ไม่ได้ถือเกณฑ์ตัดสินอีกต่อไป
+ *  ทุกโหมดใช้ของ package_size (ดู `_load_criteria` ฝั่ง backend) ค่าพวกนั้นจึง
+ *  ต้องอ่านจาก `PackageSizeRow` ของขนาดที่ part ตัวนี้ผูกอยู่แทน */
 interface PartNumberRow {
   part_number_name: string;
   package_size: string | null;
   handler: string | null;
-  nominal_x: number | null;
-  nominal_y: number | null;
-  upper_tol: number | null;
-  lower_tol: number | null;
 }
 
 interface PackageSizeRow {
   package_size: string;
   template_name: string | null;
+  nominal_x: number | null;
+  nominal_y: number | null;
+  upper_tol: number | null;
+  lower_tol: number | null;
 }
 
 interface EditContext {
@@ -121,10 +135,16 @@ function DerivedCell({ label, value }: { label: string; value: string }) {
   );
 }
 
+/** ตัวเลือกของ select ที่มาจาก lookup — ใช้ร่วมกันทุกช่องในหน้านี้
+ *
+ *  ⚠ `disabled hidden` บนตัวเลือกว่าง = โชว์ตอนยังไม่ได้เลือก แต่ไม่โผล่ในรายการ
+ *    ตอนกดเปิด (ไม่มีบรรทัด "-- เลือก --" ให้เลื่อนผ่าน) และเลือกกลับเป็นค่าว่าง
+ *    ไม่ได้ — ตั้งใจ เพราะทุกช่องที่ใช้ helper นี้เป็น field ที่ต้องมีค่า
+ */
 function renderOptions(items: string[]) {
   return (
     <>
-      <option value="">-- เลือก --</option>
+      <option value="" disabled hidden>-- เลือก --</option>
       {items.map((name) => (
         <option key={name} value={name}>
           {name}
@@ -192,8 +212,10 @@ export default function EditPage() {
   const sessionRunning = sessionState?.state === "running";
 
   // ── Dropdown lookups ─────────────────────────────────────────────────
-  // ⚠ ไม่มี Handler ในนี้แล้ว — Handler เป็นค่าที่ derive มาจาก Part Number ที่เลือก
-  //   ไม่ใช่ field ที่กรอกตรงๆ อีกต่อไป (ดู schema `part_number` ใน init.sql)
+  /* Handler กลับมาเป็น field ที่กรอกตรงๆ อีกครั้ง — `parts_specifications` เก็บ
+     `handler_id` ของตัวเองแล้ว ไม่ได้ derive จาก part_number อย่างเดียว
+     (คอมเมนต์เดิมตรงนี้บอกว่าไม่มี Handler แล้ว ซึ่งตกรุ่นไปตั้งแต่เพิ่มคอลัมน์) */
+  const [handlerOptions, setHandlerOptions] = useState<string[]>([]);
   const [vendorOptions, setVendorOptions] = useState<string[]>([]);
   const [ownerOptions, setOwnerOptions] = useState<string[]>([]);
   const [operatorOptions, setOperatorOptions] = useState<string[]>([]);
@@ -263,13 +285,18 @@ export default function EditPage() {
   }
 
   async function loadDropdownData() {
-    const [vendors, owners, packageSizes, partNumbers, operators] = await Promise.all([
+    /* ⚠ ลำดับชื่อทางซ้ายต้องตรงกับลำดับ promise ทางขวาเป๊ะ — แทรกตัวใหม่ตรงกลาง
+       แล้วลืมเติมชื่อ จะทำให้ทุกตัวหลังจากนั้นรับข้อมูลผิดชนิดโดยไม่มี error
+       (TypeScript จับให้ได้เพราะ type ต่างกัน แต่ถ้าบังเอิญเหมือนกันจะเงียบสนิท) */
+    const [vendors, handlers, owners, packageSizes, partNumbers, operators] = await Promise.all([
       apiGet<{ vendor_name: string }[]>("/api/vendors").catch(() => []),
+      apiGet<{ handler_name: string }[]>("/api/handlers").catch(() => []),
       apiGet<{ owner_name: string }[]>("/api/owners").catch(() => []),
       apiGet<PackageSizeRow[]>("/api/package-sizes").catch(() => []),
       apiGet<PartNumberRow[]>("/api/part-numbers/all").catch(() => []),
       apiGet<{ operator_name: string }[]>("/api/operators").catch(() => []),
     ]);
+    setHandlerOptions(handlers.map((h) => h.handler_name));
     setVendorOptions(vendors.map((v) => v.vendor_name));
     setOwnerOptions(owners.map((o) => o.owner_name));
     setOperatorOptions(operators.map((o) => o.operator_name));
@@ -467,11 +494,15 @@ export default function EditPage() {
       return;
     }
 
-    // ⚠ ไม่มี handler ใน record — backend derive จาก part_number ให้เอง
-    //   ถ้าส่งไปด้วยจะกลายเป็นมี 2 แหล่งความจริงที่ขัดกันได้
+    /* ⚠ คอมเมนต์เดิมตรงนี้บอกว่า "ไม่มี handler ใน record เพราะ backend derive
+       จาก part_number ให้เอง" — **ตกรุ่นแล้ว** ตอนนี้ parts_specifications เก็บ
+       handler_id ของตัวเอง เพราะ "ALPL ตัวนี้อยู่บนเครื่องไหน" เป็นข้อเท็จจริง
+       ของ ALPL ไม่ใช่ของ catalog (part เดียวกันอาจมี ALPL อยู่คนละเครื่อง)
+       ฝั่ง backend อ่านด้วย COALESCE(ของ ALPL, ของ part_number) เสมอ */
     const record: Record<string, unknown> = {
       number_alpl: nAlpl,
       part_number: pnValue,
+      handler: get("handler") || null,
       vendor: get("vendor") || null,
       description: get("description") || null,
       po_number: get("po_number") === "" ? null : Number(get("po_number")),
@@ -636,8 +667,11 @@ export default function EditPage() {
   // Tolerance มาจาก part_number ตรงๆ ส่วน Template ต้อง lookup ต่ออีกทอดจาก
   // package_size ของ part_number นั้น (ไม่ได้ผูกกับ part_number โดยตรง)
   const selectedPn = partNumberCatalog.find((x) => x.part_number_name === pnValue) ?? null;
+  /* เกณฑ์ตัดสินมาจาก package_size ของ part ตัวนั้น ไม่ใช่จาก part_number เอง */
+  const selectedPkg =
+    packageSizeCatalog.find((ps) => ps.package_size === selectedPn?.package_size) ?? null;
   const derivedTemplate =
-    packageSizeCatalog.find((ps) => ps.package_size === selectedPn?.package_size)?.template_name ?? "—";
+    selectedPkg?.template_name ?? "—";
 
   return (
     <div className="main-edit">
@@ -675,16 +709,19 @@ export default function EditPage() {
           <table>
             <thead>
               <tr>
-                {/* ⚠ ลำดับ/ชื่อคอลัมน์ต้องตรงกับ edit.html เป๊ะ — th-derived คือคอลัมน์
-                    read-only ที่ระบบ derive มาให้ (Handler มาจาก Part Number ·
-                    Template มาจาก Package Size) ทำให้ดูจางกว่าคอลัมน์ที่แก้ได้จริง
-                    เพื่อสื่อว่าเป็นข้อมูลอ้างอิงให้ดูเฉยๆ
+                {/* ⚠ `th-derived` (มีกุญแจ 🔒 ต่อท้าย + สีจาง) = คอลัมน์ read-only ที่
+                    ระบบ derive มาให้ แก้ที่ตารางนี้ไม่ได้
+                    เหลือแค่ Template (มาจาก Package Size) ตัวเดียว
                     Nominal/Tol ไม่อยู่ในตารางนี้ (ต้นฉบับไม่มี) — มันเป็นค่าของ
-                    package_size/part_number ไปดูที่การ์ด Lookup Tables แทน */}
+                    package_size ไปดูที่การ์ด Lookup Tables แทน
+
+                    ⚠ **Handler ไม่ใช่ derived แล้ว** — `parts_specifications` เก็บ
+                      `handler_id` ของตัวเอง และฟอร์มมี dropdown ให้แก้ได้จริง
+                      (ค่าที่โชว์คือ COALESCE ของ ALPL ก่อน ถ้าไม่มีค่อยของ part_number) */}
                 <th>Part ID</th>
                 <th>ALPL</th>
                 <th>Part Number</th>
-                <th className="th-derived">Handler</th>
+                <th>Handler</th>
                 <th>Package Size</th>
                 <th className="th-derived">Template</th>
                 <th>Vendor</th>
@@ -708,7 +745,7 @@ export default function EditPage() {
                       <strong>{p.number_alpl}</strong>
                     </td>
                     <td>{p.part_number ?? ""}</td>
-                    <td className="td-derived">{p.handler ?? ""}</td>
+                    <td>{p.handler ?? ""}</td>
                     <td>{p.package_size ?? ""}</td>
                     <td className="td-derived">{p.template_name ?? ""}</td>
                     <td>{p.vendor ?? ""}</td>
@@ -838,12 +875,12 @@ export default function EditPage() {
                       </td>
                       <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
                         {m.nominal_x != null && m.nominal_y != null
-                          ? `${Number(m.nominal_x).toFixed(3)} / ${Number(m.nominal_y).toFixed(3)}`
+                          ? `${Number(m.nominal_x).toFixed(DP_MM)} / ${Number(m.nominal_y).toFixed(DP_MM)}`
                           : "—"}
                       </td>
                       <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
                         {m.upper_tol != null && m.lower_tol != null
-                          ? `+${Number(m.upper_tol).toFixed(3)} / -${Number(m.lower_tol).toFixed(3)}`
+                          ? `+${Number(m.upper_tol).toFixed(DP_MM)} / -${Number(m.lower_tol).toFixed(DP_MM)}`
                           : "—"}
                       </td>
                       {/* IPM ไม่เอา offset มาตัดสิน → คอลัมน์นี้กับ Offset X/Y เป็น "—"
@@ -851,20 +888,20 @@ export default function EditPage() {
                           แสดงเพราะไม่มีส่วนร่วมกับผล OK/NG ของแถวนั้นเลย */}
                       <td className="td-derived">
                         {isIpm ? "—"
-                          : m.offset_tol != null ? Number(m.offset_tol).toFixed(3)
+                          : m.offset_tol != null ? Number(m.offset_tol).toFixed(DP_OFF)
                           : "ยังไม่ตั้ง"}
                       </td>
                       <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
                         {xyPair(
-                          axisValue(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol),
-                          axisValue(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol),
+                          axisValue(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol, m.ok_x),
+                          axisValue(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol, m.ok_y),
                         )}
                       </td>
                       <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
                         {isIpm ? "—"
                           : xyPair(
-                              offsetValue(m.offset_opx, m.offset_tol),
-                              offsetValue(m.offset_opy, m.offset_tol),
+                              offsetValue(m.offset_opx, m.offset_tol, m.ok_opx),
+                              offsetValue(m.offset_opy, m.offset_tol, m.ok_opy),
                             )}
                       </td>
                       <td>
@@ -1037,10 +1074,21 @@ export default function EditPage() {
                         fieldErrors.part_number
                       ) : (
                         <span className="field-locked-note">
-                          Handler/Nominal/Tolerance/Template ผูกมากับ Part Number ที่เลือกอัตโนมัติ — ไม่ต้องกรอกแยก
+                          Nominal/Tolerance/Template ผูกมากับ Package Size ที่เลือกอัตโนมัติ — ไม่ต้องกรอกแยก
                         </span>
                       )}
                     </div>
+                  </div>
+                  {/* Handler — เลือกได้เอง ไม่ผูกกับ Part Number แล้ว
+                      (ALPL ตัวเดียวกันย้ายเครื่องได้ ส่วน part_number เป็นแค่แคตตาล็อก)
+                      เว้นว่างได้ = ยังไม่ระบุ */}
+                  <div className="form-group">
+                    <label htmlFor="f-handler">Handler</label>
+                    <select id="f-handler" name="handler" defaultValue={pv("handler")}>
+                      <option value="">-- ยังไม่ระบุ --</option>
+                      {handlerOptions.map((h) => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                    <div className="field-error">{fieldErrors.handler}</div>
                   </div>
                   <div className="form-group">
                     <label htmlFor="f-vendor">Vendor {reqMark}</label>
@@ -1085,14 +1133,18 @@ export default function EditPage() {
                   {/* กล่องค่า read-only ที่ derive มาจาก Part Number ที่เลือก —
                       โชว์ให้เห็นว่าเลือกตัวนี้แล้วได้เกณฑ์อะไรตามมา แต่แก้ที่นี่ไม่ได้ */}
                   <div className="form-group span-2">
-                    <label>🔒 ค่าที่ผูกมากับ Part Number (แก้ที่นี่ไม่ได้)</label>
+                    <label>🔒 ค่าที่ผูกมากับ Part Number / Package Size (แก้ที่นี่ไม่ได้)</label>
                     <div className="derived-preview">
                       {selectedPn ? (
                         <>
                           <DerivedCell label="Handler" value={selectedPn.handler ?? "—"} />
                           <DerivedCell label="Template" value={derivedTemplate} />
-                          <DerivedCell label="Nominal X / Y" value={`${selectedPn.nominal_x} / ${selectedPn.nominal_y}`} />
-                          <DerivedCell label="Tol (+/-)" value={`+${selectedPn.upper_tol} / -${selectedPn.lower_tol}`} />
+                          {/* ⚠ เกณฑ์มาจาก Package Size ไม่ใช่ Part Number — ถ้าอ่านจาก
+                              selectedPn จะได้ undefined เพราะ endpoint เลิกส่งมาแล้ว */}
+                          <DerivedCell label="Nominal X / Y"
+                            value={selectedPkg ? `${selectedPkg.nominal_x} / ${selectedPkg.nominal_y}` : "—"} />
+                          <DerivedCell label="Tol (+/-)"
+                            value={selectedPkg ? `+${selectedPkg.upper_tol} / -${selectedPkg.lower_tol}` : "—"} />
                         </>
                       ) : (
                         <span style={{ color: "var(--muted)" }}>

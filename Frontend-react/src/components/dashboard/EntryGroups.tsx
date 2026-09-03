@@ -8,9 +8,12 @@ export type GroupValues = Record<string, string>;
 
 const FIELD_DEFS: Record<
   string,
-  { label: string; type: "text" | "datalist" | "part_number" | "select" | "date"; placeholder?: string }
+  { label: string; type: "text" | "datalist" | "part_number" | "handler" | "select" | "date"; placeholder?: string }
 > = {
-  number_alpl:  { label: "ALPL", type: "text", placeholder: "เช่น 201, 202, 203 (คั่นด้วยจุลภาค)" },
+  // ⚠ ยังรับหลายตัวคั่นด้วยจุลภาคได้เหมือนเดิม — แค่ตัดคำอธิบายออกจาก
+  //   placeholder เพราะช่องแคบเกินกว่าจะแสดงจนจบ (ถูกตัดกลางคำ)
+  //   ตัวอย่าง "201, 202, 203" สื่อเรื่องจุลภาคอยู่แล้วในตัว
+  number_alpl:  { label: "ALPL", type: "text", placeholder: "เช่น 201, 202, 203" },
   package_size: { label: "Package Size", type: "datalist" },
   part_number:  { label: "Part Number", type: "part_number" },
   description:  { label: "Description", type: "text" },
@@ -18,13 +21,16 @@ const FIELD_DEFS: Record<
   vendor:       { label: "Vendor", type: "select" },
   owner:        { label: "Owner", type: "select" },
   receive_date: { label: "Receive Date", type: "date" },
+  /** เครื่องทดสอบที่ ALPL ตัวนี้ติดตั้งอยู่ — cascade จาก Package Size เหมือน
+   *  Part Number แต่คนละแหล่ง (package_size_handler ไม่ใช่ part_number) */
+  handler:      { label: "Handler", type: "handler" },
 };
 
 /**
  * ⚠ ลำดับใน GROUP_FIELDS คือลำดับที่ช่องจะเรียงบนจอ (grid ไหลซ้าย→ขวา บน→ล่าง)
  *   จับคู่กับ `cols` แล้วได้ผังตามนี้ **ห้ามสลับลำดับโดยไม่ดูผังก่อน**
  *
- *     IPM (2 คอลัมน์)      [ ALPL | Package Size ]
+ *     IPM (3 คอลัมน์)      [ ALPL | Package Size | Handler ]
  *
  *     New/Rework (3 คอลัมน์)
  *       แถว 1  [ ALPL      | Package Size | Part Number ]
@@ -33,9 +39,17 @@ const FIELD_DEFS: Record<
  *
  * IPM ต้องมี Package Size ด้วย (ไม่ใช่ optional) — เกณฑ์ตัดสินและ template ของ
  * โหมด IPM มาจาก package_size ตรง ๆ ไม่ได้อ้อมผ่าน part_number
+ *
+ * ⚠ **Handler มีช่องให้กรอกเฉพาะ IPM** เพราะโหมดนั้นไม่มี part_number ให้ derive
+ *   ส่วน New/Rework `setField` เติมค่าให้เองตอนเลือก Part Number แล้วส่งไป
+ *   backend ด้วย — **แค่ไม่วาดช่องให้เห็น** เพราะเป็นช่องที่แก้ไม่ได้อยู่ดี
+ *   มีไว้ก็กินที่แล้วทำให้ผู้ใช้สงสัยว่าทำไมกดไม่ได้
+ *
+ *   ⚠ ห้ามลบตรรกะใน `setField` ทิ้งตาม — ถ้าไม่ส่ง handler ไป ALPL ที่ลงทะเบียน
+ *     ผ่าน New/Rework จะไม่มีเครื่องบันทึกไว้เลย (handler_id เป็น NULL)
  */
 export const GROUP_FIELDS: Record<EntryMode, string[]> = {
-  IPM: ["number_alpl", "package_size"],
+  IPM: ["number_alpl", "package_size", "handler"],
   New: ["number_alpl", "package_size", "part_number",
         "po_number", "vendor", "owner",
         "description", "receive_date"],
@@ -48,7 +62,7 @@ export const GROUP_FIELDS: Record<EntryMode, string[]> = {
 // ส่งเข้า CSS ผ่านตัวแปร --cols เพื่อให้ media query ยุบเหลือ 1 คอลัมน์บนจอแคบได้
 // (hardcode grid-template-columns ตรง ๆ จะ override ไม่ได้)
 const GROUP_LAYOUT: Record<EntryMode, { cols: number; span: Record<string, number> }> = {
-  IPM: { cols: 2, span: {} },
+  IPM: { cols: 3, span: {} },
   New: { cols: 3, span: { description: 2 } },
   Rework: { cols: 3, span: { description: 2 } },
 };
@@ -62,14 +76,28 @@ const GROUP_LAYOUT: Record<EntryMode, { cols: number; span: Record<string, numbe
  *  New    ไม่ล็อกอะไร — ALPL ต้องยังไม่มีในระบบอยู่แล้ว ไม่มีอะไรให้เติม
  */
 const LOCKED_FIELDS: Record<EntryMode, string[]> = {
-  IPM: ["package_size", "part_number", "vendor", "owner", "po_number", "description"],
+  // IPM ล็อก handler ด้วย **เฉพาะตอนที่ ALPL นั้นลงทะเบียนไว้แล้ว** (prefill เติมให้)
+  // ถ้าเป็น ALPL ใหม่ ช่องจะว่างและเลือกได้ตามปกติ — ดู prefillGroup
+  IPM: ["package_size", "part_number", "vendor", "owner", "po_number", "description", "handler"],
+  // ⚠ ไม่มี handler ใน New/Rework เพราะ **ไม่มีช่องนั้นให้ล็อกแล้ว** (ดู GROUP_FIELDS)
+  //   `setField` ยังเติมค่าให้เบื้องหลังอยู่ แต่ผู้ใช้ไม่เห็นและแตะไม่ได้ตั้งแต่ต้น
+  //   ถ้าใส่ไว้จะเป็นรายการที่ไม่มีผลอะไรเลย แล้วคนอ่านต่อจะเข้าใจผิดว่ามีช่องอยู่
   Rework: ["package_size", "part_number"],
   New: [],
 };
 
-/** field ที่เว้นว่างได้ — นอกจากนี้บังคับกรอกหมด */
+/** field ที่เว้นว่างได้ — นอกจากนี้บังคับกรอกหมด
+ *
+ *  ใช้ 2 ที่: ป้าย required ในฟอร์ม (`EntryGroups` บรรทัด ~371) และด่าน validate
+ *  ตอนกด Start (`PartEntryModal` บรรทัด ~161) — แก้ที่นี่ที่เดียวได้ทั้งคู่
+ *
+ *  ⚠ ตอนนี้ **ว่างทั้ง 3 โหมด = บังคับกรอกทุกช่อง** · `receive_date` เคยเว้นว่าง
+ *    ได้ในโหมด New แต่ถอดออกแล้ว เพราะ `_insert_part_row` ส่ง `NULL` ลง DB ตรง ๆ
+ *    เมื่อไม่ได้กรอก (ไม่ได้ตกไปใช้ `DEFAULT CURRENT_TIMESTAMP`) แถวนั้นจึงโชว์
+ *    Receive Date ว่างเปล่าในหน้า Edit ตลอดไป · ฝั่ง Rework บังคับอยู่แล้ว
+ */
 export const OPTIONAL_FIELDS: Record<EntryMode, string[]> = {
-  IPM: [], New: ["receive_date"], Rework: [],
+  IPM: [], New: [], Rework: [],
 };
 
 export function emptyGroup(mode: EntryMode): GroupValues {
@@ -90,6 +118,12 @@ interface Props {
     packageSize: string[];
     /** part number ที่เลือกได้ ขึ้นกับ package size ของกลุ่มนั้น */
     partNumbersFor: (packageSize: string) => string[];
+    /** เครื่องที่ package size นั้นลงได้ — มาจากตาราง package_size_handler
+     *  ใช้เป็นตัวเลือกของช่อง Handler ในโหมด IPM */
+    handlersFor: (packageSize: string) => string[];
+    /** เครื่องของ part number นั้น — ใช้เติมช่อง Handler ให้อัตโนมัติในโหมด
+     *  New/Rework คืน "" ถ้าไม่รู้จัก part number นั้น */
+    handlerOfPartNumber: (partNumber: string) => string;
   };
 }
 
@@ -201,7 +235,7 @@ export default function EntryGroups({ mode, groups, onChange, disabled, errors, 
     const overwritten: string[] = [];
     const nextAuto = new Set(auto);
 
-    for (const f of ["package_size", "part_number", "vendor", "owner", "po_number", "description"]) {
+    for (const f of ["package_size", "part_number", "vendor", "owner", "po_number", "description", "handler"]) {
       if (!fields.includes(f)) continue;        // โหมดนี้ไม่มีช่องนั้น
       const v = agreed(f);
       const wasAuto = auto.has(f);
@@ -249,8 +283,27 @@ export default function EntryGroups({ mode, groups, onChange, disabled, errors, 
   }
   useEffect(() => () => Object.values(timers.current).forEach((t) => window.clearTimeout(t)), []);
 
-  const setField = (gi: number, key: string, v: string) =>
-    onChange(groups.map((g, i) => (i === gi ? { ...g, [key]: v } : g)));
+  /** เปลี่ยนค่าช่องหนึ่ง — พร้อม cascade ที่ต้องเกิดตามทันที
+   *
+   *  New/Rework: เลือก Part Number แล้ว **Handler ต้องตามมาเอง** เพราะ
+   *  `part_number` ผูก `handler_id` ของตัวเองไว้ตั้งแต่ในตาราง catalog แล้ว
+   *  (ดู init.sql) การให้ผู้ใช้เลือกเองจะเปิดช่องให้ 2 แหล่งขัดกัน
+   *
+   *  ⚠ ต้องล้าง Handler ด้วยเมื่อ Part Number ถูกล้าง ไม่งั้นช่องจะค้างค่าของ
+   *    part ตัวเก่าไว้ทั้งที่ผู้ใช้เปลี่ยนไปแล้ว — เป็นค่าที่ผิดแบบเงียบสนิท
+   */
+  const setField = (gi: number, key: string, v: string) => {
+    const patch: Record<string, string> = { [key]: v };
+    if (key === "part_number" && mode !== "IPM") {
+      // ⚠ `handler` ไม่ได้อยู่ใน GROUP_FIELDS ของ New/Rework — จงใจไม่วาดช่อง
+      //   แต่ค่ายังต้องติดไปกับกลุ่มเพื่อส่งให้ backend (handleSave ส่ง `{...g}`
+      //   ทั้งก้อน ไม่ได้กรองตาม GROUP_FIELDS) **ห้ามลบบล็อกนี้ตามช่องที่หายไป**
+      //   ไม่งั้น ALPL ที่ลงทะเบียนผ่าน New/Rework จะได้ handler_id = NULL
+      patch.handler = v ? options.handlerOfPartNumber(v) : "";
+      // ไม่ต้องแตะ autoRef แล้ว — ไม่มีช่องให้ล็อก (ดู LOCKED_FIELDS)
+    }
+    onChange(groups.map((g, i) => (i === gi ? { ...g, ...patch } : g)));
+  };
 
   const addGroup = () => onChange([...groups, emptyGroup(mode)]);
 
@@ -263,6 +316,20 @@ export default function EntryGroups({ mode, groups, onChange, disabled, errors, 
       prev.forEach((i) => { if (i < gi) next.add(i); else if (i > gi) next.add(i - 1); });
       return next;
     });
+    /* ⚠ `autoRef` ก็ผูกกับ index เหมือนกัน ต้องเลื่อนตามด้วย — ตกหล่นแล้วกลุ่ม
+       ที่ไม่เกี่ยวจะถูกล็อกช่องแทน (อาการเดียวกับ collapsed ข้างบนเป๊ะ)
+       ลบกลุ่ม 1 จาก 3 กลุ่ม → กลุ่ม 2,3 เลื่อนเป็น 1,2 แต่ autoRef ยังชี้ที่เดิม */
+    const shifted: Record<number, Set<string>> = {};
+    Object.entries(autoRef.current).forEach(([k, v]) => {
+      const i = Number(k);
+      if (i < gi) shifted[i] = v;
+      else if (i > gi) shifted[i - 1] = v;
+    });
+    autoRef.current = shifted;
+    /* timer ของ debounce ก็เช่นกัน — ยกเลิกตัวที่ค้างของกลุ่มที่ลบทิ้ง ไม่งั้น
+       มันจะยิง prefill ด้วย index ที่ตอนนี้เป็นของกลุ่มอื่นไปแล้ว */
+    window.clearTimeout(timers.current[gi]);
+    delete timers.current[gi];
   };
 
   const toggle = (gi: number) =>
@@ -337,10 +404,40 @@ export default function EntryGroups({ mode, groups, onChange, disabled, errors, 
                           value={val}
                           onChange={(e) => setField(gi, f, e.target.value)}
                         >
-                          <option value="">-- เลือก {def.label} --</option>
+                          {/* disabled hidden = โชว์ตอนยังไม่ได้เลือก แต่ไม่โผล่
+                              ในรายการตอนกดเปิด · vendor/owner เป็น required
+                              ทุกโหมด (ดู OPTIONAL_FIELDS) จึงไม่ต้องเผื่อให้ล้างกลับ */}
+                          <option value="" disabled hidden>-- เลือก {def.label} --</option>
                           {(f === "vendor" ? options.vendor : options.owner).map((o) => (
                             <option key={o} value={o}>{o}</option>
                           ))}
+                        </select>
+                      ) : def.type === "handler" ? (
+                        /* Handler — ตัวเลือกมาจาก package_size_handler ของขนาดที่เลือกไว้
+                           ในกลุ่มนี้ (คนละแหล่งกับ Part Number ที่มาจากตาราง part_number)
+                           โหมด New/Rework ช่องนี้จะถูกล็อกเสมอเพราะ setField เติมให้เอง
+                           ตอนเลือก Part Number — ดู LOCKED_FIELDS */
+                        <select
+                          className={`${err ? "invalid" : ""}${locked ? " auto-locked" : ""}`.trim() || undefined}
+                          disabled={disabled || locked || !g.package_size}
+                          value={val}
+                          onChange={(e) => setField(gi, f, e.target.value)}
+                        >
+                          {/* 3 สาเหตุที่เลือกไม่ได้ ต้องบอกให้ต่างกัน ไม่งั้นผู้ใช้
+                              ไม่รู้ว่าต้องไปทำอะไรก่อน — โดยเฉพาะกรณีที่ 3 ที่ต้อง
+                              ไปผูกเครื่องให้ขนาดนั้นที่หน้า Edit ก่อน */}
+                          {!g.package_size ? (
+                            <option value="">-- เลือก Package Size ก่อน --</option>
+                          ) : options.handlersFor(g.package_size).length === 0 ? (
+                            <option value="">-- ขนาดนี้ยังไม่ได้ผูกเครื่อง (ตั้งที่หน้า Edit) --</option>
+                          ) : (
+                            <>
+                              <option value="" disabled hidden>-- เลือก Handler --</option>
+                              {options.handlersFor(g.package_size).map((o) => (
+                                <option key={o} value={o}>{o}</option>
+                              ))}
+                            </>
+                          )}
                         </select>
                       ) : def.type === "part_number" ? (
                         // Part Number ขึ้นกับ Package Size ของ "กลุ่มนี้" — ยังไม่เลือก
@@ -351,7 +448,10 @@ export default function EntryGroups({ mode, groups, onChange, disabled, errors, 
                           value={val}
                           onChange={(e) => setField(gi, f, e.target.value)}
                         >
-                          <option value="">
+                          {/* ⚠ ใส่ hidden เฉพาะตอนเลือก Package Size แล้ว — ตอนยังไม่เลือก
+                              ตัวเลือกนี้เป็น **ตัวเดียวในลิสต์** ถ้าซ่อนด้วยจะได้ dropdown
+                              ว่างเปล่าที่ไม่บอกอะไรเลย (select ถูก disabled อยู่แล้วตอนนั้น) */}
+                          <option value="" disabled hidden={!!g.package_size}>
                             {g.package_size ? "-- เลือก Part Number --" : "-- เลือก Package Size ก่อน --"}
                           </option>
                           {options.partNumbersFor(g.package_size ?? "").map((o) => (

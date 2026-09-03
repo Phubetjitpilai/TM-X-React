@@ -93,11 +93,16 @@ def check_parts(body: PartsCheckRequest):
             # ยิงทีเดียวได้ทั้งกลุ่ม แทนที่จะไล่ถาม /api/parts/{alpl} ทีละตัว
             cur.execute(
                 "SELECT p.number_alpl, pn.part_number_name, ps.package_size, "
+                "       h.handler_name, "
                 "       v.vendor_name, o.owner_name, p.po_number, p.description "
                 "FROM parts_specifications p "
                 "LEFT JOIN part_number pn ON p.part_number_id = pn.part_number_id "
                 "LEFT JOIN package_size ps "
                 "       ON ps.package_size_id = COALESCE(p.package_size_id, pn.package_size_id) "
+                # ⚠ COALESCE เหมือน package_size — handler ของ ALPL มาก่อน ถ้าไม่มี
+                #   ค่อยถอยไปใช้ของ part_number (ดู PARTS_SELECT)
+                "LEFT JOIN handler h "
+                "       ON h.handler_id = COALESCE(p.handler_id, pn.handler_id) "
                 "LEFT JOIN vendor v ON p.vendor_id = v.vendor_id "
                 "LEFT JOIN owner o  ON p.owner_id  = o.owner_id "
                 f"WHERE p.number_alpl IN ({placeholders})",
@@ -111,6 +116,10 @@ def check_parts(body: PartsCheckRequest):
         str(r["number_alpl"]): {
             "part_number":  r["part_number_name"],
             "package_size": r["package_size"],
+            # ⚠ คีย์ต้องชื่อ `handler` ให้ตรงกับชื่อ field ในฟอร์ม (GROUP_FIELDS)
+            #   เพราะ prefillGroup วนตามชื่อ field แล้วอ่าน detail[alpl][f] ตรงๆ
+            #   ถ้าตั้งชื่อไม่ตรง มันจะไม่พังแต่จะ "ไม่เติมให้" อย่างเงียบสนิท
+            "handler":      r["handler_name"],
             "vendor":       r["vendor_name"],
             "owner":        r["owner_name"],
             "po_number":    r["po_number"],
@@ -180,8 +189,19 @@ def list_parts(
     CAST เป็น CHAR ก่อนเทียบ LIKE เพื่อให้ค้นหาบางส่วนของตัวเลขได้ (เช่นพิมพ์
     "10" แล้วเจอทั้ง 1011, 1002 ที่ขึ้นต้นด้วย 10)
 
-    หมายเหตุ: เพิ่ม ORDER BY number_alpl เพื่อให้ลำดับของหน้าคงที่ (stable) —
-    ถ้าไม่กำหนด ORDER BY การไล่ LIMIT/OFFSET อาจได้ลำดับไม่แน่นอนข้ามหน้า
+    เรียงด้วย `p.part_id DESC` = **ตัวที่เพิ่งเพิ่มเข้าระบบอยู่บนสุด**
+    (เดิมเรียง `number_alpl` จากน้อยไปมาก ซึ่งเอา ALPL เลขน้อยขึ้นก่อนเสมอ
+    ALPL ที่เพิ่งลงทะเบียนจึงไปจมอยู่หน้าท้าย ๆ มองไม่เห็น)
+
+    ⚠ **ตั้งใจไม่ใช้ `recieve_date`** ทั้งที่เป็นคอลัมน์ที่โชว์อยู่บนหน้าจอ —
+      คอลัมน์นั้นผู้ใช้กรอกเองจากฟอร์มและปล่อยว่างได้ (`_insert_part_row` ส่ง
+      `NULL` ลงไปตรง ๆ เมื่อไม่ได้กรอก) แถวที่ไม่มีวันที่จึงจะตกไปอยู่ล่างสุด
+      และแถวที่ถูกแก้วันที่ย้อนหลังจะเด้งสลับที่โดยไม่มีใครเข้าใจ
+      ส่วน `part_id` เป็น AUTO_INCREMENT — ไม่มีวันเป็น NULL ไม่ซ้ำ และไม่มีใคร
+      แก้ได้ จึงเป็นลำดับ "ล่าสุด" ที่เชื่อถือได้จริง
+
+    ⚠ ORDER BY ต้องมีเสมอไม่ว่าจะเรียงด้วยอะไร — ถ้าไม่กำหนด การไล่
+      LIMIT/OFFSET อาจได้ลำดับไม่แน่นอนข้ามหน้า (แถวเดิมโผล่ซ้ำ/หายไป)
     """
     conditions, params = [], []
     if search:
@@ -200,7 +220,7 @@ def list_parts(
             )
             total = cur.fetchone()["total"]
             cur.execute(
-                f"{PARTS_SELECT} {where} ORDER BY p.number_alpl LIMIT %s OFFSET %s",
+                f"{PARTS_SELECT} {where} ORDER BY p.part_id DESC LIMIT %s OFFSET %s",
                 (*params, limit, offset),
             )
             items = cur.fetchall()
@@ -259,12 +279,18 @@ def update_part(part_id: int, data: Dict[str, Any] = Body(...)):
     # request → (คอลัมน์จริงใน parts_specifications, ตาราง lookup, id column,
     # name column)) — part_number ย้ายมาอยู่ตรงนี้แล้ว (ไม่ใช่ direct_fields
     # อีกต่อไป) เพราะตอนนี้ต้อง resolve เป็น part_number_id ก่อน ไม่ใช่คอลัมน์
-    # VARCHAR ตรงๆ — handler/package_size ไม่มีในนี้แล้ว เพราะ derive มาจาก
-    # part_number_id ทั้งคู่ ไม่ได้เก็บที่ parts_specifications โดยตรง
+    # VARCHAR ตรงๆ
+    #
+    # ⚠ `handler` กับ `package_size` **เก็บที่ parts_specifications จริง** (ไม่ได้
+    #   derive จาก part_number อย่างเดียวแล้ว) — ALPL ที่ลงทะเบียนจากโหมด IPM
+    #   ไม่มี part_number ให้ derive และ "ALPL ตัวนี้อยู่บนเครื่องไหน" เป็น
+    #   ข้อเท็จจริงของ ALPL เอง ไม่ใช่ของ catalog
     lookup_fields = {
-        "part_number": ("part_number_id", "part_number", "part_number_id", "part_number_name"),
-        "vendor":      ("vendor_id",      "vendor",      "vendor_id",      "vendor_name"),
-        "owner":       ("owner_id",       "owner",       "owner_id",       "owner_name"),
+        "part_number":  ("part_number_id",  "part_number",  "part_number_id",  "part_number_name"),
+        "package_size": ("package_size_id", "package_size", "package_size_id", "package_size"),
+        "handler":      ("handler_id",      "handler",      "handler_id",      "handler_name"),
+        "vendor":       ("vendor_id",       "vendor",       "vendor_id",       "vendor_name"),
+        "owner":        ("owner_id",        "owner",        "owner_id",        "owner_name"),
     }
     db = get_db()
     try:

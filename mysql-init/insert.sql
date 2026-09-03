@@ -80,31 +80,47 @@ INSERT IGNORE INTO export_template (name, kind, columns_json, is_default) VALUES
 -- package_size_id / handler_id หาให้อัตโนมัติผ่าน subquery จับคู่ชื่อ
 -- offset_tol เป็น NOT NULL เหมือนกัน (ดู init.sql) — ยังไม่มีค่าจริงจากหน้างาน
 -- ใส่ 0.03 ไว้ทุกแถวเป็นค่าชั่วคราวเช่นเดียวกับ package_size
-INSERT IGNORE INTO part_number (part_number_name, package_size_id, handler_id, nominal_x, nominal_y, upper_tol, lower_tol, offset_tol) VALUES
-  ('TL1400HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='3.25x7.40'), (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   3.28, 7.43, 0.02, 0.01, 0.03),
-  ('TL775HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='3.5x3.75'),  (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   3.53, 3.78, 0.02, 0.01, 0.03),
-  ('TL805HT-0500-F-A',  (SELECT package_size_id FROM package_size WHERE package_size='3.5x3.75'),  (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   3.53, 3.78, 0.03, 0.00, 0.03),
-  ('TL1010HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   3.02, 3.02, 0.02, 0.01, 0.03),
-  ('TL722HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   3.03, 3.02, 0.02, 0.01, 0.03),
-  ('TL733HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   3.03, 3.02, 0.02, 0.01, 0.03),
-  ('TL1009HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 3.02, 3.02, 0.02, 0.01, 0.03),
-  ('TL774HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 3.03, 3.02, 0.02, 0.01, 0.03),
-  ('TL391HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 3.03, 3.02, 0.02, 0.01, 0.03),
-  ('TL1384HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='3x4'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   3.03, 4.03, 0.02, 0.01, 0.03),
-  ('TL776HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='4x4'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   4.03, 4.03, 0.02, 0.01, 0.03),
-  ('TL777HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='4x4'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   4.03, 4.03, 0.02, 0.01, 0.03),
-  ('TL370HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='4x4'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 4.03, 4.03, 0.02, 0.01, 0.03),
-  ('TL778HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='5x5'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   5.03, 5.03, 0.02, 0.01, 0.03),
-  ('TL779HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='5x5'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   5.03, 5.03, 0.02, 0.01, 0.03),
-  ('TL1449HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='5x5'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 5.03, 5.03, 0.02, 0.01, 0.03),
-  ('TL371HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='5x5'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 5.03, 5.03, 0.02, 0.01, 0.03),
-  ('TL781HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='7x7'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   7.03, 7.03, 0.02, 0.01, 0.03),
-  ('TL1551HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='7x7'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 7.03, 7.03, 0.02, 0.01, 0.03),
-  ('TL392HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='7x7'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 7.03, 7.03, 0.02, 0.01, 0.03),
-  ('TL392HT-0501-P-B',  (SELECT package_size_id FROM package_size WHERE package_size='7x7'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 7.03, 7.03, 0.02, 0.01, 0.03),
-  ('TL782HT-0501-P-B',  (SELECT package_size_id FROM package_size WHERE package_size='8x8'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   8.03, 8.03, 0.02, 0.01, 0.03),
-  ('TL783HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='8x8'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   8.03, 8.03, 0.02, 0.01, 0.03),
-  ('TL393HT-0501-P-B1', (SELECT package_size_id FROM package_size WHERE package_size='8x8'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'), 8.03, 8.03, 0.02, 0.01, 0.03),
-  ('TL1383HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='9x9'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   9.03, 9.03, 0.02, 0.01, 0.03),
-  ('TL784HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='9x9'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046'),   9.03, 9.03, 0.02, 0.01, 0.03),
-  ('TL754HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='9x9'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'),9.03, 9.03, 0.02, 0.01, 0.03);
+-- ⚠ ไม่มี nominal/tolerance แล้ว — part_number เก็บแค่ ชื่อ + package_size + handler
+--   เกณฑ์ตัดสินทั้งหมดอยู่ที่ตาราง package_size ทุกโหมด (ดู _load_criteria)
+INSERT IGNORE INTO part_number (part_number_name, package_size_id, handler_id) VALUES
+  ('TL1400HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='3.25x7.40'), (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL775HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='3.5x3.75'),  (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL805HT-0500-F-A',  (SELECT package_size_id FROM package_size WHERE package_size='3.5x3.75'),  (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL1010HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL722HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL733HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL1009HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL774HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL391HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='3x3'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL1384HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='3x4'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL776HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='4x4'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL777HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='4x4'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL370HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='4x4'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL778HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='5x5'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL779HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='5x5'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL1449HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='5x5'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL371HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='5x5'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL781HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='7x7'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL1551HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='7x7'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL392HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='7x7'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL392HT-0501-P-B',  (SELECT package_size_id FROM package_size WHERE package_size='7x7'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL782HT-0501-P-B',  (SELECT package_size_id FROM package_size WHERE package_size='8x8'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL783HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='8x8'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL393HT-0501-P-B1', (SELECT package_size_id FROM package_size WHERE package_size='8x8'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX')),
+  ('TL1383HT-0501-P-A', (SELECT package_size_id FROM package_size WHERE package_size='9x9'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL784HT-0501-P-A1', (SELECT package_size_id FROM package_size WHERE package_size='9x9'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046')),
+  ('TL754HT-0501-P-A',  (SELECT package_size_id FROM package_size WHERE package_size='9x9'),       (SELECT handler_id FROM handler WHERE handler_name='HT9046MX'));
+
+-- ── Package Size ↔ Handler ───────────────────────────────────────────────
+-- 1 แถว = 1 คู่ที่ใช้ด้วยกันได้ · ขนาดที่ลงได้ 2 เครื่องจะมี 2 แถว
+--
+-- Seed ตั้งต้นดึงมาจากข้อมูลที่มีอยู่จริงในบล็อก part_number ข้างบน — part_number
+-- ทุกตัวบอกอยู่แล้วว่า "ขนาดนี้ ใช้เครื่องนี้" เอาคู่ที่ไม่ซ้ำมาใส่ตรงๆ ได้เลย
+-- ดีกว่าไล่พิมพ์เองทีละแถวเพราะไม่มีทางตกหล่นและไม่ต้องแก้ตามเวลามี part ใหม่
+--
+-- ⚠ ผลลัพธ์คือ "คู่ที่เคยมี part ใช้จริง" ไม่ใช่ "คู่ที่ลงได้ทางกายภาพทั้งหมด"
+--   ขนาดที่ยังไม่มี part_number ตัวไหนอ้างถึงจะไม่มีแถวเลย → dropdown Handler
+--   ของขนาดนั้นจะว่าง ต้องไปเติมเองที่หน้า Edit เมื่อรู้ของจริงจากหน้างาน
+INSERT IGNORE INTO package_size_handler (package_size_id, handler_id)
+SELECT DISTINCT pn.package_size_id, pn.handler_id
+FROM part_number pn;

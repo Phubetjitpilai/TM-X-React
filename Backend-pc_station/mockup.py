@@ -170,7 +170,7 @@ def random_offset(offset_max):
 def random_offsets(offset_max):
     """สุ่มค่า offset ให้ครบทุกช่องที่ `MeasurementCreate` บังคับ
 
-    คืน `(offset_opx, offset_opy, tr_op, tl_op, bl_op, br_op)` — **6 ค่า**
+    คืน `(offset_opx, offset_opy, horizon_left, horizon_right, vertical_bottom, vertical_top)` — **6 ค่า**
 
     ⚠ เดิม mock ส่งแค่ `offset` ตัวเดียว ซึ่งเป็นชื่อฟิลด์สมัยก่อนถอด GH ออก
       พอ model เปลี่ยนเป็นบังคับ 8 ฟิลด์ (`value_x/value_y` + 4 มุม + offset 2 แกน)
@@ -193,7 +193,7 @@ def random_offsets(offset_max):
 
 
 def post_measurement(session_id, number_alpl, value_x, value_y,
-                     offset_opx, offset_opy, tr_op, tl_op, bl_op, br_op):
+                     offset_opx, offset_opy, horizon_left, horizon_right, vertical_bottom, vertical_top):
     """ส่งผลวัด 1 ชิ้นไปที่ Backend (POST /api/measurements)
 
     number_alpl ที่ส่งไปเป็นแค่ค่า fallback — Backend จะเพิกเฉยแล้วใช้ ALPL ตาม
@@ -215,10 +215,10 @@ def post_measurement(session_id, number_alpl, value_x, value_y,
         "offset_opx":  offset_opx,
         "offset_opy":  offset_opy,
         # ── ค่ามุม 4 จุดของ OP (backend หา "มุมที่แคบที่สุด" จากชุดนี้) ──
-        "tr_op":       tr_op,
-        "tl_op":       tl_op,
-        "bl_op":       bl_op,
-        "br_op":       br_op,
+        "horizon_left":       horizon_left,
+        "horizon_right":       horizon_right,
+        "vertical_bottom":       vertical_bottom,
+        "vertical_top":       vertical_top,
     }
     try:
         r = httpx.post(f"{BACKEND_URL}/api/measurements", json=payload, timeout=10)
@@ -383,8 +383,9 @@ def _mock_stage(mode: str, event: str, detail: str, session_id, piece, target) -
 def judge(value_x, value_y, offset_opx, offset_opy, limits):
     """ตัดสิน OK/NG แบบเดียวกับที่ Pi ตัวจริงจะทำ — เทียบกับขอบเขตตรงๆ
 
-    ไม่มี `_TOL_EPS` ที่นี่โดยตั้งใจ: backend บวก/ลบให้เรียบร้อยแล้วตอนสร้าง
-    `limits` (ดู `_limits_of`) ถ้ามาเผื่อซ้ำอีกรอบจะกลายเป็นเผื่อ 2 เท่า
+    ไม่ปัดทศนิยมซ้ำที่นี่โดยตั้งใจ: backend ปัดขอบให้เรียบร้อยแล้วตอนสร้าง
+    `limits` (ดู `_limits_of`) และค่าที่ mock สุ่มมาก็เป็น double ปกติที่ไม่เคย
+    ผ่านคอลัมน์ FLOAT จึงไม่มีหางให้ต้องจัดการ — ต้องมีพฤติกรรมตรงกับ `Pi.py`
 
     ⚠ ต้องตรวจ offset **ทั้ง 2 แกน** ให้ตรงกับ `_judge` ฝั่ง backend
       (`ok_opx and ok_opy`) — ถ้าตรวจแกนเดียว จะมีชิ้นที่ mock บอก OK แต่
@@ -500,13 +501,13 @@ def measurement_flow(session_id, groups, target_count):
         force_ng = random.random() < NG_RATE
         value_x = random_value(limits["x_lo"], limits["x_hi"], force_ng)
         value_y = random_value(limits["y_lo"], limits["y_hi"], force_ng)
-        offset_opx, offset_opy, tr_op, tl_op, bl_op, br_op = \
+        offset_opx, offset_opy, horizon_left, horizon_right, vertical_bottom, vertical_top = \
             random_offsets(limits.get("offset_max"))
         verdict = judge(value_x, value_y, offset_opx, offset_opy, limits)
 
         print(f"\n🔍 ชิ้นที่ {piece}/{target_count} (ALPL {alpl}) — "
               f"X={value_x}  Y={value_y}  offset=({offset_opx}, {offset_opy})"
-              f"  มุม tr/tl/bl/br=({tr_op}, {tl_op}, {bl_op}, {br_op})"
+              f"  มุม tr/tl/bl/br=({horizon_left}, {horizon_right}, {vertical_bottom}, {vertical_top})"
               f"  → Pi ตัดสิน: {verdict}"
               f"{'  (จงใจให้ NG)' if force_ng else ''}")
 
@@ -525,7 +526,7 @@ def measurement_flow(session_id, groups, target_count):
             print("   📥 ผู้ใช้เลือกรับค่าจาก Pi — บันทึกโดยไม่มีรูป")
 
         d = post_measurement(session_id, alpl, value_x, value_y,
-                             offset_opx, offset_opy, tr_op, tl_op, bl_op, br_op)
+                             offset_opx, offset_opy, horizon_left, horizon_right, vertical_bottom, vertical_top)
         # ⚠ จุดที่ควรจับตา: ถ้า Pi กับ Backend ตัดสินไม่ตรงกัน แปลว่า `limits`
         #   ที่ส่งมากับเกณฑ์ที่ backend ใช้ query ตอนบันทึกไม่ใช่ชุดเดียวกัน
         #   (เคสนี้คือสิ่งที่ _build_groups พยายามกันไว้ — เห็นตรงนี้ถือว่าหลุด)

@@ -19,6 +19,7 @@
  */
 
 import type { CSSProperties } from "react";
+import { DP_OFF } from "../measurementCells";
 
 /** เวกเตอร์ทิศของแต่ละรหัส — y เป็นบวกลงล่างตามระบบพิกัดของ SVG */
 const DIRS: Record<string, { ux: number; uy: number; th: string }> = {
@@ -34,7 +35,7 @@ const DIRS: Record<string, { ux: number; uy: number; th: string }> = {
 };
 
 const fmt = (v?: number | null) =>
-  v != null && !isNaN(Number(v)) ? Math.abs(Number(v)).toFixed(3) : "—";
+  v != null && !isNaN(Number(v)) ? Math.abs(Number(v)).toFixed(DP_OFF) : "—";
 
 interface Props {
   offsetX?: number | null;
@@ -42,6 +43,14 @@ interface Props {
   /** รหัส 9 ค่าจาก backend เช่น "TOP RIGHT" — ดู _get_min_position_label */
   posCode?: string | null;
   offsetTol?: number | null;
+  /** ผลตัดสิน offset ที่ backend คำนวณให้ (`ok_offset`)
+   *
+   *  ⚠ **ห้ามคำนวณ `Math.abs(v) <= tol` เองในนี้อีก** — backend ปัดทศนิยม
+   *    ด้วย `_DP` ก่อนเทียบ (`_offset_ok` ใน shared.py) ถ้าที่นี่คำนวณเอง
+   *    แบบไม่ปัด ค่าที่ตกขอบพอดีจะขึ้นแดงทั้งที่ Result บอก OK
+   *
+   *  `null`/ไม่ส่งมา = ตัดสินไม่ได้ → ไม่ระบายสี ไม่ขึ้นป้าย OK/NG */
+  ok?: boolean | null;
   measureType?: string | null;
   /** ชื่อการ์ด — ใส่แล้วป้าย OK/NG จะย้ายขึ้นไปอยู่บรรทัดเดียวกับชื่อ
    *  (Live Telemetry ใช้ "Offset Opening" · ReportModal ไม่ต้องใส่) */
@@ -51,7 +60,7 @@ interface Props {
 }
 
 export default function OffsetMap({
-  offsetX, offsetY, posCode, offsetTol, measureType, title, compact = false,
+  offsetX, offsetY, posCode, offsetTol, ok: okProp, measureType, title, compact = false,
 }: Props) {
   // โหมด IPM ไม่เอา offset มาตัดสิน OK/NG เลย (ดู _offset_limit ฝั่ง backend)
   // ค่ายังอยู่ใน DB ครบ ดูได้จาก Export/Power BI แค่ไม่เอามารกหน้าจอที่คนหน้า
@@ -100,9 +109,12 @@ export default function OffsetMap({
 
   // ⚠ ok เป็น null ได้ — "ยังไม่ได้ตั้งเกณฑ์" ต่างจาก "ตรวจแล้วผ่าน"
   //   วาดวงประ/ป้าย OK ให้ทั้งที่ไม่มีเกณฑ์จะชวนอ่านว่าผ่าน ทั้งที่ไม่เคยตรวจ
-  const ok = !hasValue || tol == null
-    ? null
-    : Math.abs(Number(offsetX)) <= tol && Math.abs(Number(offsetY)) <= tol;
+  //
+  // ⚠⚠ **มาจาก backend เท่านั้น ห้ามคำนวณเอง** (เดิมบรรทัดนี้เทียบ
+  //   `Math.abs(offsetX) <= tol` เองโดยไม่ปัดทศนิยม ซึ่งไม่ตรงกับ `_offset_ok`
+  //   ฝั่ง backend ที่ปัดด้วย `_DP` — ค่าที่ตกขอบพอดีจึงขึ้นแดงทั้งที่ Result
+  //   บอก OK) · ยังต้องเช็ค hasValue ด้วยเพราะไม่มีค่าก็ไม่ควรขึ้นป้าย
+  const ok = !hasValue ? null : (okProp ?? null);
 
   // ⚠⚠ ต้องใช้ตัวแปรสีของโปรเจกต์นี้เท่านั้น (`--ok` / `--ng` / `--muted` …
   //   ดู :root ใน index.css) **ห้ามใช้ชื่อจาก design system อื่น** เช่น
@@ -234,7 +246,7 @@ export default function OffsetMap({
             <div>
               <div style={capStyle}>Tolerance</div>
               <div style={{ ...numStyle(false, false), color: "var(--muted)" }}>
-                {tol != null ? tol.toFixed(3) : "—"}
+                {tol != null ? tol.toFixed(DP_OFF) : "—"}
               </div>
             </div>
           </div>

@@ -10,6 +10,7 @@ DROP TABLE IF EXISTS export_template;
 DROP TABLE IF EXISTS measurements;
 DROP TABLE IF EXISTS sessions;
 DROP TABLE IF EXISTS parts_specifications;
+DROP TABLE IF EXISTS package_size_handler;
 DROP TABLE IF EXISTS part_number;
 DROP TABLE IF EXISTS package_size;
 DROP TABLE IF EXISTS template;
@@ -73,11 +74,32 @@ CREATE TABLE part_number (
   part_number_name VARCHAR(50) NOT NULL UNIQUE,
   package_size_id  INT NOT NULL,
   handler_id       INT NOT NULL,
-  nominal_x        FLOAT NOT NULL,
-  nominal_y        FLOAT NOT NULL,
-  upper_tol        FLOAT NOT NULL,
-  lower_tol        FLOAT NOT NULL,
-  offset_tol       FLOAT NOT NULL,
+  FOREIGN KEY (package_size_id) REFERENCES package_size(package_size_id),
+  FOREIGN KEY (handler_id)      REFERENCES handler(handler_id)
+);
+
+-- package_size_handler: ขนาด package หนึ่งลงเครื่องทดสอบได้หลายเครื่อง และ
+-- เครื่องหนึ่งก็รับได้หลายขนาด — เป็นความสัมพันธ์ "หลายต่อหลาย" ซึ่ง**ยัดลง
+-- ตารางใดตารางหนึ่งไม่ได้** เพราะช่องเดียวเก็บได้ค่าเดียว
+--
+--     ใส่ handler_id ใน package_size  → 1 ขนาดได้ 1 เครื่อง  ❌
+--     ใส่ package_size_id ใน handler  → 1 เครื่องได้ 1 ขนาด  ❌
+--     ตารางเชื่อมนี้                   → ได้ทั้งสองทาง         ✅
+--
+-- 1 แถว = 1 คู่ที่ใช้ด้วยกันได้ · "3x3 ลงได้ทั้ง HT9046 และ HT9046MX" = 2 แถว
+--
+-- PRIMARY KEY รวม 2 คอลัมน์ กันใส่คู่เดิมซ้ำ แต่ยังใส่ (3x3, HT9046) กับ
+-- (3x3, HT9046MX) ได้เพราะเป็นคนละคู่
+--
+-- ⚠ ตารางนี้ตอบได้แค่ "ขนาดนี้ลงเครื่องไหนได้บ้าง" — **ไม่ได้บอกว่าชิ้นงาน
+--   ถูกวัดบนเครื่องไหนจริง** ถ้าต้องการข้อมูลนั้นในรายงาน ต้องเก็บแยกที่
+--   `sessions` (เครื่องที่ใช้เป็นคุณสมบัติของรอบการวัด ไม่ใช่ของ package)
+--   ตอนนี้คอลัมน์ Handler ในรายงาน derive มาจาก `part_number.handler_id`
+--   ซึ่งแปลว่า "ตามแคตตาล็อก" และเป็นค่าว่างเสมอในโหมด IPM (ไม่มี part_number)
+CREATE TABLE package_size_handler (
+  package_size_id INT NOT NULL,
+  handler_id      INT NOT NULL,
+  PRIMARY KEY (package_size_id, handler_id),
   FOREIGN KEY (package_size_id) REFERENCES package_size(package_size_id),
   FOREIGN KEY (handler_id)      REFERENCES handler(handler_id)
 );
@@ -92,15 +114,22 @@ CREATE TABLE parts_specifications (
   part_id          INT AUTO_INCREMENT PRIMARY KEY,
   number_alpl      INT UNIQUE,
   part_number_id   INT,
-  package_size_id   INT,
+  package_size_id  INT,
+  -- เครื่องทดสอบที่ ALPL ตัวนี้ติดตั้งอยู่ — เป็นข้อเท็จจริงถาวรของ ALPL เอง
+  -- ไม่ใช่ของการวัดครั้งใดครั้งหนึ่ง
+  --
+  -- ⚠ NULL ได้ เพราะ ALPL ที่ลงทะเบียนไว้ก่อนหน้านี้ยังไม่มีค่านี้ — โค้ดที่อ่าน
+  --   ต้อง COALESCE ไปหา part_number.handler_id เป็นตัวสำรอง
+  handler_id       INT,
   vendor_id        INT,
   owner_id         INT,
   po_number        BIGINT,
   description      TEXT,
   recieve_date     DATETIME DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (part_number_id)  REFERENCES part_number(part_number_id),
-  FOREIGN KEY (package_size_id)  REFERENCES package_size(package_size_id),
+  FOREIGN KEY (package_size_id) REFERENCES package_size(package_size_id),
   FOREIGN KEY (vendor_id)       REFERENCES vendor(vendor_id),
+  FOREIGN KEY (handler_id)      REFERENCES handler(handler_id),
   FOREIGN KEY (owner_id)        REFERENCES owner(owner_id)
 );
 

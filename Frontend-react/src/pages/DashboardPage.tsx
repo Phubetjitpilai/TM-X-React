@@ -5,7 +5,7 @@ import { useSessionState, sessionStateLabel } from "../hooks/useSessionState";
 import { useToast } from "../components/Toast";
 import { useDialog } from "../components/Dialog";
 import AlplIcon from "../components/AlplIcon";
-import { axisValue, offsetValue, xyPair } from "../components/measurementCells";
+import { axisValue, offsetValue, xyPair, DP_MM, DP_OFF } from "../components/measurementCells";
 import { ReportAxis } from "../components/dashboard/ReportAxis";
 import OffsetMap from "../components/dashboard/OffsetMap";
 import IpmSummaryModal, { type IpmSummaryRow } from "../components/dashboard/IpmSummaryModal";
@@ -72,6 +72,23 @@ interface Measurement {
   offset_pos_op?: string | null;
   offset_tol?: number | null;
   measure_type?: string | null;
+  /** ผลตัดสินรายแกนที่ backend คำนวณให้ (`_ok_flags` ใน shared.py)
+   *
+   *  ⚠ **ต้องใช้ค่าพวกนี้ระบายสี ห้ามคำนวณ `nominal ± tol` เองในหน้าเว็บ** —
+   *    backend ปัดทศนิยมด้วย `_DP` ก่อนเทียบ ถ้าที่นี่คำนวณเองแบบไม่ปัด
+   *    ชิ้นที่ตกขอบพอดีจะขึ้นสีแดงทั้งที่คอลัมน์ Result บอก OK (เคยเกิดจริง)
+   *
+   *  `null` = ตัดสินไม่ได้ (ยังไม่ผูก package_size / โหมด IPM ที่ไม่ตรวจ offset)
+   *  ต่างจาก `false` ที่แปลว่าตรวจแล้วไม่ผ่าน — null ต้องไม่ระบายสี */
+  ok_x?: boolean | null;
+  ok_y?: boolean | null;
+  /** แยกรายแกน — ใช้ระบายสีช่องตัวเลข Offset X / Y */
+  ok_opx?: boolean | null;
+  ok_opy?: boolean | null;
+  /** ⚠ **ผลรวมของทั้ง opx และ opy** — ใช้กับผัง OffsetMap / ป้าย OK-NG ของทั้ง
+   *  การ์ดเท่านั้น **ห้ามเอาไประบายสีช่องรายแกน** (เคยพลาด: opx หลุดแล้วช่อง
+   *  opy ที่ผ่านอยู่โดนแดงไปด้วย) — ช่องรายแกนต้องใช้ `ok_opx` / `ok_opy` */
+  ok_offset?: boolean | null;
 }
 
 interface Telemetry {
@@ -116,7 +133,7 @@ function axisInfo(
       ? value >= nominal - lower && value <= nominal + upper
       : null;
   const range = nominal != null && upper != null && lower != null
-    ? `รับได้ ${(nominal - lower).toFixed(3)} – ${(nominal + upper).toFixed(3)}`
+    ? `รับได้ ${(nominal - lower).toFixed(DP_MM)} – ${(nominal + upper).toFixed(DP_MM)}`
     : "";
   return { ok, range };
 }
@@ -288,7 +305,13 @@ export default function DashboardPage() {
   const [ownerOptions, setOwnerOptions] = useState<string[]>([]);
   const [vendorOptions, setVendorOptions] = useState<string[]>([]);
   const [packageSizeOptions, setPackageSizeOptions] = useState<string[]>([]);
-  const [partNumberCatalog, setPartNumberCatalog] = useState<{ part_number_name: string; package_size: string }[]>([]);
+  /** แถวเต็มของ package_size — ต้องเก็บทั้งก้อนเพราะช่อง Handler ในฟอร์ม
+   *  ต้องใช้ `handlers` ที่แนบมาด้วย ถ้าเก็บแค่ชื่อเหมือนเดิมจะต้องยิง API
+   *  เพิ่มทุกครั้งที่เปลี่ยน Package Size */
+  const [packageSizeCatalog, setPackageSizeCatalog] =
+    useState<{ package_size: string; handlers: string[] }[]>([]);
+  const [partNumberCatalog, setPartNumberCatalog] =
+    useState<{ part_number_name: string; package_size: string; handler: string }[]>([]);
 
   // ── Part Entry queues ────────────────────────────────────────────────
   /** คิวเดียวใช้ทั้ง 3 โหมด — โครง groups[] เหมือนกันหมด ต่างแค่ field ในกลุ่ม
@@ -487,15 +510,16 @@ export default function DashboardPage() {
       apiGet<{ operator_name: string }[]>("/api/operators").catch(() => []),
       apiGet<{ owner_name: string }[]>("/api/owners").catch(() => []),
       apiGet<{ vendor_name: string }[]>("/api/vendors").catch(() => []),
-      apiGet<{ package_size: string }[]>("/api/package-sizes").catch(() => []),
+      apiGet<{ package_size: string; handlers: string[] }[]>("/api/package-sizes").catch(() => []),
       // catalog part number พร้อม package size — ใช้กรอง Part Number ตามขนาด
       // ที่เลือกในกลุ่มนั้น (cascade) ดู partNumbersFor ที่ส่งให้ PartEntryModal
-      apiGet<{ part_number_name: string; package_size: string }[]>("/api/part-numbers/all").catch(() => []),
+      apiGet<{ part_number_name: string; package_size: string; handler: string }[]>("/api/part-numbers/all").catch(() => []),
     ]);
     setOperatorOptions(operators.map((o) => o.operator_name));
     setOwnerOptions(owners.map((o) => o.owner_name));
     setVendorOptions(vendors.map((v) => v.vendor_name));
     setPackageSizeOptions(packageSizes.map((p) => p.package_size));
+    setPackageSizeCatalog(packageSizes);
     setPartNumberCatalog(partNumbers);
   }
 
@@ -1140,9 +1164,9 @@ export default function DashboardPage() {
                   กด Start ว่าเครื่องพร้อมไหม ซ่อนตอนไม่มี session ก็หมดความหมาย */}
               <div className="session-chip">
                 <span className="sc-label">Raspberry Pi</span>
-                {/* ⚠ ต้องตรงกับ SessionControl.tsx เป๊ะ — ชิปนี้มี 2 ที่ในโค้ด
-                    แก้ที่เดียวแล้วอีกที่จะเพี้ยนโดยไม่มีอะไรเตือน
-                    (ไม่มีอีโมจิแล้ว ป้ายมีสีพื้นหลังอยู่แล้ว) */}
+                {/* 3 สถานะไม่ใช่ 2 — "Connecting" (piStatus เป็น null) คือ "ยังไม่เคย
+                    ได้ heartbeat เลย" ต่างจาก "Offline" ที่แปลว่ารู้ว่าเงียบเกินเกณฑ์
+                    ห้ามยุบรวมกัน ตอนไล่หาสาเหตุคนละเรื่องกัน */}
                 <span className={`sc-value sc-pi ${piOnline ? "online" : piStatus === false ? "offline" : "unknown"}`}>
                   {piOnline ? "Online" : piStatus === false ? "Offline" : "Connecting"}
                 </span>
@@ -1209,7 +1233,7 @@ export default function DashboardPage() {
                       {axX.ok != null && <span className={`tc-axis ${axX.ok ? "ok" : "ng"}`}>{axX.ok ? "OK" : "NG"}</span>}
                     </div>
                     <div className="tc-value">
-                      {telemetry ? telemetry.value_x.toFixed(3) : "—"}
+                      {telemetry ? telemetry.value_x.toFixed(DP_MM) : "—"}
                       <span> mm</span>
                     </div>
                     <div className="tc-range">{telemetry ? axX.range : ""}</div>
@@ -1220,7 +1244,7 @@ export default function DashboardPage() {
                       {axY.ok != null && <span className={`tc-axis ${axY.ok ? "ok" : "ng"}`}>{axY.ok ? "OK" : "NG"}</span>}
                     </div>
                     <div className="tc-value">
-                      {telemetry ? telemetry.value_y.toFixed(3) : "—"}
+                      {telemetry ? telemetry.value_y.toFixed(DP_MM) : "—"}
                       <span> mm</span>
                     </div>
                     <div className="tc-range">{telemetry ? axY.range : ""}</div>
@@ -1266,6 +1290,7 @@ export default function DashboardPage() {
                       offsetY={telemetry?.offset_opy}
                       posCode={telemetry?.offset_pos_op}
                       offsetTol={telemetry?.offset_tol}
+                      ok={telemetry?.ok_offset}
                       measureType={telemetry?.measure_type}
                     />
                   </div>
@@ -1491,12 +1516,12 @@ export default function DashboardPage() {
                           <td>{m.number_alpl}</td>
                           <td className="td-spec">
                             {m.nominal_x != null && m.nominal_y != null
-                              ? `${Number(m.nominal_x).toFixed(3)} / ${Number(m.nominal_y).toFixed(3)}`
+                              ? `${Number(m.nominal_x).toFixed(DP_MM)} / ${Number(m.nominal_y).toFixed(DP_MM)}`
                               : "—"}
                           </td>
                           <td className="td-spec">
                             {m.upper_tol != null && m.lower_tol != null
-                              ? `+${Number(m.upper_tol).toFixed(3)} / -${Number(m.lower_tol).toFixed(3)}`
+                              ? `+${Number(m.upper_tol).toFixed(DP_MM)} / -${Number(m.lower_tol).toFixed(DP_MM)}`
                               : "—"}
                           </td>
                           {/* ── โหมด IPM ไม่เอา offset มาตัดสิน → 2 คอลัมน์นี้เป็น "—"
@@ -1509,13 +1534,13 @@ export default function DashboardPage() {
                                 session ปัจจุบัน — ตารางแสดงข้อมูลย้อนหลังปนกันทุกโหมด */}
                           <td className="td-spec">
                             {isIpm ? "—"
-                              : m.offset_tol != null ? Number(m.offset_tol).toFixed(3)
+                              : m.offset_tol != null ? Number(m.offset_tol).toFixed(DP_OFF)
                               : "ยังไม่ตั้ง"}
                           </td>
                           <td style={{ whiteSpace: "nowrap" }}>
                             {xyPair(
-                              axisValue(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol),
-                              axisValue(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol),
+                              axisValue(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol, m.ok_x),
+                              axisValue(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol, m.ok_y),
                             )}
                           </td>
                           {/* ⚠ ตั้งใจไม่ใส่ผัง <OffsetMap compact> ตรงนี้ — ตารางนี้มี
@@ -1525,8 +1550,8 @@ export default function DashboardPage() {
                           <td style={{ whiteSpace: "nowrap" }}>
                             {isIpm ? "—"
                               : xyPair(
-                                  offsetValue(m.offset_opx, m.offset_tol),
-                                  offsetValue(m.offset_opy, m.offset_tol),
+                                  offsetValue(m.offset_opx, m.offset_tol, m.ok_opx),
+                                  offsetValue(m.offset_opy, m.offset_tol, m.ok_opy),
                                 )}
                           </td>
                           <td>
@@ -1682,13 +1707,14 @@ export default function DashboardPage() {
                     )}
                   </div>
                   <div className="report-axes">
-                    <ReportAxis axis="X" value={m.value_x} nominal={nomX} upperTol={upTol} lowerTol={loTol} />
-                    <ReportAxis axis="Y" value={m.value_y} nominal={nomY} upperTol={upTol} lowerTol={loTol} />
+                    <ReportAxis axis="X" value={m.value_x} nominal={nomX} upperTol={upTol} lowerTol={loTol} ok={m.ok_x} />
+                    <ReportAxis axis="Y" value={m.value_y} nominal={nomY} upperTol={upTol} lowerTol={loTol} ok={m.ok_y} />
                     <OffsetMap
                       offsetX={m.offset_opx}
                       offsetY={m.offset_opy}
                       posCode={m.offset_pos_op}
                       offsetTol={m.offset_tol}
+                      ok={m.ok_offset}
                       measureType={m.measure_type}
                     />
                   </div>
@@ -1753,7 +1779,27 @@ export default function DashboardPage() {
               ),
             ).sort()
           }
+          /* เครื่องที่ขนาดนี้ลงได้ — มาจาก `handlers` ที่ /api/package-sizes แนบมา
+             ให้แล้ว **ไม่ต้องยิง API เพิ่มตอนเปลี่ยน dropdown** (แบบเดียวกับ
+             partNumbersFor ข้างบน) catalog พวกนี้เล็กและแทบไม่เปลี่ยนระหว่างวัน */
+          handlersFor={(pkg) => packageSizeCatalog.find((p) => p.package_size === pkg)?.handlers ?? []}
+          /* เครื่องของ part number นั้น — ใช้เติมช่อง Handler ให้อัตโนมัติในโหมด
+             New/Rework คืน "" ถ้าไม่รู้จัก (ฟอร์มจะปล่อยช่องว่างไว้) */
+          handlerOfPartNumber={(pn) =>
+            partNumberCatalog.find((r) => r.part_number_name === pn)?.handler ?? ""
+          }
           onNotify={showToast}
+          /* ถามก่อนสลับโหมดเมื่อฟอร์มมีข้อมูลค้าง — ยกข้อความมาจาก confirmDiscard
+             ของ vanilla เดิม (index.html) ที่หายไปตอนย้ายเป็น React */
+          confirmSwitch={(target, current) =>
+            dialog.confirm(
+              <>
+                หากเปลี่ยนไป <strong>{target}</strong> ข้อมูลที่กรอกไว้ในฟอร์ม{" "}
+                <strong>{current}</strong> จะหายไป
+              </>,
+              { title: "เปลี่ยนโหมด", okLabel: "เปลี่ยนโหมด", danger: true },
+            )
+          }
           confirmRegister={async (items) =>
             dialog.confirm(
               <>

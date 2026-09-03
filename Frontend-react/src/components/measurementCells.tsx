@@ -7,43 +7,88 @@ import type { ReactNode } from "react";
      เขียว/แดง คือ "สิ่งที่คนหน้างานเชื่อ" ถ้าสองหน้าคิดไม่ตรงกันเมื่อไหร่
      จะกลายเป็นแถวเดียวกันแต่คนละสีในสองหน้าจอ แล้วไม่มีใครรู้ว่าอันไหนถูก
 
-   ⚠ สูตรตรงนี้ต้องตรงกับ `_within_tolerance` / `_offset_ok` ฝั่ง backend
-     ฝั่งนั้นบวก `_TOL_EPS` (1e-6) เผื่อความคลาดเคลื่อนของ float ไว้ด้วย
-     ตรงนี้ยังไม่ได้บวก — ค่าที่อยู่ "ตรงขอบเป๊ะ" จึงมีโอกาสขึ้นสีแดงบนจอ
-     ทั้งที่คอลัมน์ Result (ซึ่งมาจาก DB) บอกว่า OK
-     ยังไม่แก้เพราะ Result เป็นตัวตัดสินจริงอยู่แล้ว สีเป็นแค่ตัวช่วยอ่าน   */
+   ⚠⚠ **ห้ามคำนวณ OK/NG เองที่นี่อีก** — รับ `ok` ที่ backend ตัดสินมาแล้ว
+     เท่านั้น (`ok_x` / `ok_y` / `ok_offset` จาก `/api/measurements` และจาก
+     SSE event `measurement`)
 
-const EPS = 0;   // ← เปลี่ยนเป็น 1e-6 ถ้าอยากให้ตรงกับ backend เป๊ะ
+     เดิมไฟล์นี้คำนวณ `nominal ± tol` ใหม่เองโดยไม่ปัดทศนิยม ส่วน backend ปัด
+     ด้วย `_DP` ผลคือชิ้นที่ตกขอบพอดีขึ้น **สีแดงบนจอแต่คอลัมน์ Result บอก OK**
+     (เกิดจริงกับ ALPL ที่วัดได้ 8.05 บนเกณฑ์ 8.03 +0.02 — ขอบที่คำนวณจาก
+     FLOAT ได้ 8.049999732… ซึ่งต่ำกว่า 8.050000190… ที่อ่านกลับมา)
 
-/** ค่าที่วัดได้ 1 แกน — เขียว = อยู่ในเกณฑ์ · แดง = หลุด · ไม่มีเกณฑ์ = สีปกติ */
+     ค่าที่ส่งมาให้ยังเป็น `nominal`/`tol` อยู่ แต่ **ใช้แค่โชว์ช่วงใน tooltip
+     เท่านั้น ห้ามเอาไปเทียบ** — ถ้าต้องเปลี่ยนกฎการตัดสิน ให้แก้ที่
+     `_within_tolerance` / `_offset_ok` ใน `shared.py` ที่เดียว แล้วที่นี่
+     ตามเองอัตโนมัติ                                                       */
+
+/* ── จำนวนทศนิยมที่แสดงบนจอ ────────────────────────────────────────────────
+   **แยกเป็น 2 ระดับโดยตั้งใจ ห้ามยุบเหลือค่าเดียว**
+
+   `DP_MM`  ขนาดชิ้นงาน / nominal / tolerance — TM-X ถูกตั้งให้ออก 2 ตำแหน่ง
+            แล้ว หลักที่ 3 จึงเป็น 0 ที่เติมให้เปล่า ๆ ทุกแถว สื่อความละเอียด
+            ที่เครื่องไม่ได้ให้
+
+   `DP_OFF` ระยะเยื้อง (offset_opx/opy) กับ offset_tol — อยู่ระดับ 0.0xx
+            ⚠ ตัดเหลือ 2 ตำแหน่งเมื่อไหร่ `0.018` กับ `0.024` จะกลายเป็น
+              `0.02` เท่ากันทั้งคู่ แล้วผัง OffsetMap ที่สเกลด้วย offset_tol
+              จะอ่านไม่ได้เลยว่าใกล้หลุดแค่ไหน — คนละเรื่องกับความละเอียด
+              ของ TM-X เพราะค่าพวกนี้เป็นผลต่างที่คำนวณมา ไม่ใช่ค่าที่อ่านตรง
+
+   ⚠ ตัวเลขพวกนี้กระทบ **การแสดงผลอย่างเดียว** ไม่แตะเกณฑ์ตัดสิน OK/NG
+     (ตัวตัดสินคือคอลัมน์ `result` จาก backend) — ค่าที่ปัดขึ้นบนจอแล้ว
+     ดูเหมือนหลุดเกณฑ์ จึงยังขึ้นเขียวได้ตามปกติ ไม่ใช่บั๊ก                */
+export const DP_MM  = 2;
+export const DP_OFF = 2;
+
+/** ค่าที่วัดได้ 1 แกน — เขียว = อยู่ในเกณฑ์ · แดง = หลุด · `ok` เป็น null = ไม่ระบายสี
+ *
+ *  `ok` มาจาก backend (`ok_x` / `ok_y`) — ⚠ **ห้ามคำนวณเอง** ดูหัวไฟล์
+ *  `nominal`/`upper`/`lower` ใช้แค่เขียน tooltip บอกช่วงที่รับได้เท่านั้น
+ */
 export function axisValue(
   v?: number | null,
   nominal?: number | null,
   upper?: number | null,
   lower?: number | null,
+  ok?: boolean | null,
 ): ReactNode {
   if (v == null) return "—";
-  const txt = Number(v).toFixed(3);
-  if (nominal == null || upper == null || lower == null) return txt;
-  const lo = nominal - lower;
-  const hi = nominal + upper;
-  const ok = v >= lo - EPS && v <= hi + EPS;
+  const txt = Number(v).toFixed(DP_MM);
+  // ⚠ `ok == null` = backend ตัดสินไม่ได้ (ALPL ยังไม่ผูก package_size)
+  //   ต่างจาก false ที่แปลว่าตรวจแล้วไม่ผ่าน — ห้ามระบายสีในกรณีนี้
+  //   วาดเขียวให้ทั้งที่ไม่เคยตรวจจะชวนอ่านผิดว่าผ่าน
+  if (ok == null) return txt;
+  const range = nominal != null && upper != null && lower != null
+    ? `รับได้ ${(nominal - lower).toFixed(DP_MM)} – ${(nominal + upper).toFixed(DP_MM)}`
+    : undefined;
   return (
-    <span className={ok ? "val-ok" : "val-ng"} title={`รับได้ ${lo.toFixed(3)} – ${hi.toFixed(3)}`}>
+    <span className={ok ? "val-ok" : "val-ng"} title={range}>
       {txt}
     </span>
   );
 }
 
-/** ระยะเยื้อง 1 แกน — เทียบกับเพดาน offset_tol (ไม่ใช่ช่วง nominal ± tol) */
-export function offsetValue(v?: number | null, tol?: number | null): ReactNode {
+/** ระยะเยื้อง 1 แกน — ⚠ ห้ามคำนวณเอง รับ `ok` จาก backend
+ *
+ *  ⚠⚠ **ต้องส่ง `ok_opx` / `ok_opy` (แยกรายแกน) ห้ามส่ง `ok_offset`** ซึ่งเป็น
+ *    ผลรวมของทั้ง 2 แกน · เคยพลาดมาแล้ว: opx หลุด (0.05 > 0.03) แล้วช่อง opy
+ *    ที่ผ่านอยู่ (0.03 ตกขอบพอดี) โดนแดงไปด้วยทั้งที่ตัวมันไม่ผิดอะไร
+ *    `ok_offset` มีไว้ใช้กับผัง OffsetMap / ป้าย OK-NG ของทั้งการ์ดเท่านั้น
+ */
+export function offsetValue(
+  v?: number | null,
+  tol?: number | null,
+  ok?: boolean | null,
+): ReactNode {
   if (v == null) return "—";
-  const txt = Number(v).toFixed(3);
-  // tol เป็น null = โหมด IPM ที่ไม่เอา offset มาตัดสิน → ไม่ระบายสี
-  if (tol == null) return txt;
-  const ok = Math.abs(v) <= tol + EPS;
+  const txt = Number(v).toFixed(DP_OFF);
+  // ok เป็น null = โหมด IPM ที่ไม่เอา offset มาตัดสิน หรือยังไม่ตั้ง tol
+  if (ok == null) return txt;
   return (
-    <span className={ok ? "val-ok" : "val-ng"} title={`ไม่เกิน ${Number(tol).toFixed(3)}`}>
+    <span
+      className={ok ? "val-ok" : "val-ng"}
+      title={tol != null ? `ไม่เกิน ${Number(tol).toFixed(DP_OFF)}` : undefined}
+    >
       {txt}
     </span>
   );

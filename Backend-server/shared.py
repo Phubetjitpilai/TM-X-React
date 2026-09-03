@@ -92,29 +92,75 @@ ALPL_IMAGE_DIR = os.getenv("ALPL_IMAGE_DIR", os.path.join(_PROJECT_ROOT, "image_
 if not os.path.isabs(ALPL_IMAGE_DIR):
     ALPL_IMAGE_DIR = os.path.abspath(os.path.join(_PROJECT_ROOT, ALPL_IMAGE_DIR))
 
+# ⚠⚠ **ไม่ได้ใช้ตัดสิน OK/NG อีกแล้ว** — ย้ายไปใช้ `_DP` ปัดทศนิยมแทน (ก.ย. 2569)
+#   เหลือใช้ที่เดียวคือ `_tolerance_spec()` (:1230) เพื่อถามว่า nominal X กับ Y
+#   เป็นเลขตัวเดียวกันไหม ซึ่งเป็นเรื่อง **การจัดรูปแบบข้อความในรายงาน**
+#   ไม่ใช่เกณฑ์การวัด — ตั้งใจไม่ยุบรวมกับ `_DP` เพราะถ้าวันหลังมีคนปรับ `_DP`
+#   ด้วยเหตุผลเรื่องเกณฑ์ รูปแบบรายงานจะเปลี่ยนตามไปด้วยโดยไม่มีใครคาดคิด
 _TOL_EPS = 1e-6
+
+# จำนวนทศนิยมที่ปัดก่อนเทียบเกณฑ์ OK/NG ทุกที่ในระบบ
+#
+# ทำไมต้องปัด: คอลัมน์ `value_x` / `nominal_x` / `upper_tol` เป็น `FLOAT` (4 ไบต์)
+#   ซึ่งเก็บเลขฐานสิบอย่าง `8.03` ไม่ได้เป๊ะ อ่านกลับได้ `8.029999732971191`
+#   พอเอา `nominal + upper_tol` มาบวกกันได้ขอบ `8.049999732…` ซึ่ง **ต่ำกว่า**
+#   ค่าที่วัดได้ `8.05` (อ่านกลับได้ `8.050000190…`) — สองตัวปัดคนละทาง
+#   ผลคือชิ้นที่ตกขอบพอดีกลายเป็น NG ราว 70% ของเกณฑ์ที่เป็นไปได้
+#
+# ⚠⚠ **ห้ามลดเหลือ 2 — มี package_size จริงในระบบที่พังทันที**
+#
+#   `3.255x3.255` มี `nominal_x = 3.285` ซึ่งเป็น 3 ตำแหน่ง (ดู insert.sql:50)
+#   ช่วงที่ถูกต้องคือ 3.275–3.305 แต่ถ้าปัดที่ 2 ตำแหน่งจะได้ 3.28–3.31
+#   → ชิ้นที่ยาว 3.31 ซึ่งเกินเกณฑ์จริง จะถูก **Pi ปล่อยผ่านและ DB บันทึก OK**
+#   (อีก 21 แถวมี nominal 2 ตำแหน่งจึงไม่กระทบ — แถวเดียวก็พอ และเป็นแถวที่
+#    หาสาเหตุยากที่สุดเพราะเกิดกับ package นี้ตัวเดียว)
+#
+#   เหตุผลรอง: `offset_tol` อยู่ระดับ 0.0xx ปัดที่ 2 ตำแหน่งจะทำให้ `0.025`
+#   กลายเป็น `0.03` (หลวมขึ้น 20%) และ `0.005` หายไปทั้งค่า
+#
+# ⚠ ถ้าวันหนึ่งมีคนกรอก tolerance 4 ตำแหน่งผ่านหน้า Edit ต้องเพิ่มค่านี้ตาม —
+#   ไม่มีอะไรใน DB บังคับความละเอียดไว้ (คอลัมน์เป็น FLOAT เฉย ๆ) และจะไม่มี
+#   error ให้เห็น เกณฑ์จะแค่หลวมขึ้นเงียบ ๆ
+_DP = 3
 
 def _within_tolerance(value: float, nominal: float, upper_tol: float, lower_tol: float) -> bool:
     """เช็คว่าค่าที่วัดได้ของแกนหนึ่งอยู่ในช่วง nominal -lower_tol .. +upper_tol ไหม
-    (นับค่าที่ตกขอบพอดีว่าผ่าน — ดู _TOL_EPS)
+    (นับค่าที่ตกขอบพอดีว่าผ่าน — ดู `_DP`)
+
+    ⚠ **ต้องปัดครบทั้ง 3 ตัว** ตัวไหนไม่ได้ปัด หางของมันจะโผล่มาชนะทันที
+      เคยพลาดมาแล้วตอนปัดเฉพาะขอบไม่ปัด `value` → ยังผิด 48% ของเคสที่ตกขอบ
+
+    ⚠⚠ **ห้ามเปลี่ยนเป็น `Decimal(str(x))`** — `str()` คืนสตริงที่แปลงกลับได้ค่า
+      เดิมเป๊ะ หางของ FLOAT จึงติดมาด้วยทั้งดุ้น (`str(8.050000190734863)` ได้
+      `'8.050000190734863'`) **ไม่ได้ถูกล้าง** ตัวที่ปัดจริงคือ `f"{x:.3f}"`
+      ต่างหาก ไม่ใช่ `Decimal()` · เคยลองแล้วผิด 42% ของเคสที่ตกขอบพอดี
+      (เทสต์ด้วย literal อย่าง `_within_tolerance(8.05, 8.03, …)` จะผ่าน เพราะ
+      literal เป็น double สะอาด — ต้องเทสต์ด้วยค่าที่ผ่านคอลัมน์ FLOAT มาแล้ว)
     """
-    return (nominal - lower_tol - _TOL_EPS) <= value <= (nominal + upper_tol + _TOL_EPS)
+    return (round(nominal - lower_tol, _DP)
+            <= round(value, _DP)
+            <= round(nominal + upper_tol, _DP))
 
 # ══════════════════════════════════════════════════════════════════════════════
-# เกณฑ์ตัดสิน OK/NG — แยกแหล่งตามโหมด
+# เกณฑ์ตัดสิน OK/NG
 # ══════════════════════════════════════════════════════════════════════════════
 # | โหมด        | nominal/tolerance จาก | offset นับเป็นเกณฑ์ |
 # |-------------|-----------------------|---------------------|
 # | IPM         | package_size          | ❌ เก็บค่าไว้ แต่ไม่ตัดสิน |
-# | New/Rework  | part_number           | ✅ ใช้                |
+# | New/Rework  | package_size          | ✅ ใช้                |
 #
-# ทำไม IPM ต้องใช้ package_size: IPM คือการวัดซ้ำของ ALPL ที่ลงทะเบียนไว้แล้ว
-# ซึ่ง "อาจยังไม่ได้ตั้ง part_number" (ฟอร์ม IPM กรอกแค่ ALPL + Package Size)
-# ถ้าบังคับให้หาเกณฑ์ผ่าน part_number เหมือนโหมดอื่น ALPL พวกนี้จะวัดไม่ได้เลย
+# ⚠ **ทุกโหมดใช้ `package_size` เหมือนกันหมดแล้ว** — เดิม New/Rework ใช้
+#   `part_number` แต่เปลี่ยนแล้ว (ก.ย. 2569) ถ้าเห็นคอมเมนต์เก่าที่ไหนยังเขียนว่า
+#   "New/Rework ใช้ part_number" แปลว่าตกรุ่น
 #
-# ทำไม IPM ไม่เอา offset มาตัดสิน: offset เป็นค่าเฉพาะของ part นั้นๆ (ผูกกับ
-# part_number) ไม่ใช่ค่าของ "ขนาด package" — เอา offset_tol ของ package_size
-# มาตัดสินจะเป็นการเทียบกับเกณฑ์ที่ไม่ใช่ของชิ้นงานตัวนั้นจริง
+# ทำไมถึงเป็น package_size: IPM คือการวัดซ้ำของ ALPL ที่ลงทะเบียนไว้แล้ว ซึ่ง
+# "อาจยังไม่ได้ตั้ง part_number" (ฟอร์ม IPM กรอกแค่ ALPL + Package Size) พอ
+# ต้องรองรับกรณีนั้นอยู่แล้ว การให้ทุกโหมดอ่านจากที่เดียวกันจึงตัดปัญหา
+# "เกณฑ์สองชุดที่ต้องคอยทำให้ตรงกัน" ทิ้งไปเลย
+#
+# ทำไม IPM ยังไม่เอา offset มาตัดสิน: offset คือความเยื้องของ opening ซึ่งเป็น
+# คนละเรื่องกับขนาดชิ้นงาน · โหมด IPM เป็นการวัดซ้ำเพื่อดูขนาดอย่างเดียว
+# (ฟอร์ม IPM ไม่มีช่องอะไรที่เกี่ยวกับ offset ให้กรอกด้วยซ้ำ)
 #
 # ⚠ ต้องตรงกับฝั่ง Pi ที่ตัดสินเองผ่าน GM (ดู PLAN_criteria_and_multigroup.md F2)
 #   — Backend ส่ง `offset_max: null` ให้ Pi เมื่อไหร่ ที่นี่ก็ต้องไม่ตรวจเมื่อนั้น
@@ -131,44 +177,107 @@ def _offset_limit(measure_type: Optional[str], row) -> Optional[float]:
         return None
     return row.get("offset_tol") if row else None
 
-def _load_criteria(cur, number_alpl: int, measure_type: str):
-    """ดึง nominal/tolerance ที่จะใช้ตัดสิน ALPL ตัวนี้ ตามโหมดที่กำลังวัด
 
-    คืน dict ที่มี nominal_x/nominal_y/upper_tol/lower_tol/offset_tol เหมือนกัน
-    ทั้ง 2 โหมด ผู้เรียกจึงใช้ต่อได้โดยไม่ต้องรู้ว่ามาจากตารางไหน
+def _offset_ok(offset: Optional[float], offset_tol: Optional[float]) -> bool:
+    """offset ผ่านเกณฑ์ไหม — เทียบกับ `offset_tol` ของ **package_size**
+
+    ตัวที่ตัดสินว่าโหมดนี้ต้องตรวจไหมคือ `_offset_limit()` ไม่ใช่ฟังก์ชันนี้ —
+    ที่นี่ผูกกับ "ตั้งค่าไว้ไหม" อย่างเดียว (`None` = ไม่ตรวจ = ผ่าน)
+
+    ⚠ ปัดด้วย `_DP` ให้เหมือน `_within_tolerance` เป๊ะ ห้ามใช้จำนวนทศนิยม
+      คนละตัว ไม่งั้น offset ที่ตกขอบพอดีจะตัดสินไม่ตรงกับขนาดชิ้นงานที่
+      ตกขอบพอดี ทั้งที่เป็นกฎเดียวกัน
+
+    ⚠ อยู่ที่ `shared.py` ไม่ใช่ `routers/measurements.py` แล้ว (ย้ายมา ก.ย. 2569)
+      เพราะ `_offset_state()` ท้ายไฟล์นี้ต้องใช้ด้วย แต่ `shared.py` import
+      `measurements.py` ไม่ได้ (ทิศทางเดียว) เดิมจึงต้องลอกสูตรไปเขียนซ้ำ
+      **ห้ามย้ายกลับ** ไม่งั้นจะกลับไปมี 2 สูตรที่ต้องคอยทำให้ตรงกันอีก
+    """
+    if offset is None or offset_tol is None:
+        return True
+    return round(abs(offset), _DP) <= round(offset_tol, _DP)
+
+
+def _ok_flags(row) -> Dict[str, Optional[bool]]:
+    """แปะผลตัดสินรายแกนให้ 1 แถวของ measurements
+    — `{ok_x, ok_y, ok_opx, ok_opy, ok_offset}`
+
+    **มีไว้ให้หน้าเว็บเลิกคำนวณเอง** — เดิม `axisValue()` / `offsetValue()` /
+    `OffsetMap` / `ReportAxis` ต่างคนต่างคำนวณ `nominal ± tol` ใหม่จากค่าที่ API
+    ส่งมา โดยไม่ปัดทศนิยมเลย ผลคือชิ้นที่ตกขอบพอดีขึ้น **สีแดงบนจอแต่คอลัมน์
+    Result บอก OK** (เกิดจริงกับ ALPL ที่วัดได้ 8.05 บนเกณฑ์ 8.03 +0.02)
+
+    ค่าที่คืนตรงกับ `_judge()` เสมอ เพราะเรียกฟังก์ชันชุดเดียวกัน — เปลี่ยนสูตร
+    ที่ `_within_tolerance` / `_offset_ok` แล้วหน้าเว็บตามเองอัตโนมัติ
+
+    `None` = **ตัดสินไม่ได้** ต่างจาก `False` ที่แปลว่าตรวจแล้วไม่ผ่าน:
+      · `ok_x`/`ok_y` เป็น None เมื่อ ALPL ยังไม่ผูก package_size (ไม่มีเกณฑ์)
+      · `ok_op*` เป็น None ในโหมด IPM (ไม่เอา offset มาตัดสิน) หรือยังไม่ตั้ง tol
+    หน้าเว็บต้องไม่ระบายสีเมื่อได้ None — วาดเขียวให้ทั้งที่ไม่เคยตรวจจะชวนอ่าน
+    ผิดว่าผ่าน
+
+    ⚠⚠ **`ok_opx` / `ok_opy` แยกรายแกน ส่วน `ok_offset` เป็นผลรวม — ใช้ผิดตัว
+      แล้วสีจะเพี้ยน** เคยพลาดมาแล้ว: ส่ง `ok_offset` ตัวเดียวไประบายทั้งสองช่อง
+      พอ opx หลุด (0.05 > 0.03) ช่อง opy ที่ผ่านอยู่ (0.03 ตกขอบพอดี) เลยโดน
+      แดงไปด้วย
+        · ช่องตัวเลขรายแกน  → ใช้ `ok_opx` / `ok_opy`
+        · ผัง OffsetMap / ป้าย OK-NG ของทั้งการ์ด → ใช้ `ok_offset`
+    """
+    nom_x, nom_y = row.get("nominal_x"), row.get("nominal_y")
+    up, lo       = row.get("upper_tol"), row.get("lower_tol")
+    has_spec     = None not in (up, lo)
+
+    def axis(val, nom):
+        if val is None or nom is None or not has_spec:
+            return None
+        return _within_tolerance(val, nom, up, lo)
+
+    # ⚠ `offset_tol` ที่ MEASUREMENTS_SELECT คืนมาเป็น NULL อยู่แล้วเมื่อเป็นโหมด
+    #   IPM (มี CASE WHEN ใน SQL) จึงไม่ต้องเช็ค measure_type ซ้ำที่นี่อีก
+    otol = row.get("offset_tol")
+
+    def off(val):
+        if val is None or otol is None:
+            return None
+        return _offset_ok(val, otol)
+
+    ok_opx, ok_opy = off(row.get("offset_opx")), off(row.get("offset_opy"))
+    # ⚠ ต้องตรงกับ `_judge()` เป๊ะ (`ok_opx and ok_opy`) — ถ้าตัวใดเป็น None
+    #   แปลว่าตัดสินไม่ได้ทั้งก้อน ไม่ใช่ "ผ่าน"
+    ok_offset = (None if ok_opx is None or ok_opy is None
+                 else ok_opx and ok_opy)
+
+    return {
+        "ok_x":      axis(row.get("value_x"), nom_x),
+        "ok_y":      axis(row.get("value_y"), nom_y),
+        "ok_opx":    ok_opx,
+        "ok_opy":    ok_opy,
+        "ok_offset": ok_offset,
+    }
+
+
+def _load_criteria(cur, number_alpl: int):
+    """ดึง nominal/tolerance ที่จะใช้ตัดสิน ALPL ตัวนี้ — **จาก `package_size` ทุกโหมด**
+
     (offset_tol ที่คืนมาเป็นค่า "ตามตาราง" เฉยๆ — จะเอามาตัดสินจริงไหมให้ถาม
-    `_offset_limit()` อีกที)
+    `_offset_limit()` อีกที ซึ่งเป็นตัวเดียวที่ยังแยกตามโหมด)
+
+    ⚠ `measure_type` ยังรับไว้แต่ **ไม่มีผลต่อการเลือกตาราง** — ผู้เรียกส่งมา
+      อยู่แล้วและยังต้องใช้ต่อกับ `_offset_limit()` จึงไม่ได้ถอดพารามิเตอร์ทิ้ง
+
+    ⚠ `COALESCE(p.package_size_id, pn.package_size_id)` ห้ามเอาออก — ALPL ที่
+      ลงทะเบียนสมัยก่อนมีแต่ `part_number_id` ยังไม่มี `package_size_id` ของ
+      ตัวเอง ถ้าตัดออกข้อมูลเก่าทั้งหมดจะวัดไม่ได้ทันทีที่ deploy
 
     ไม่พบ → raise HTTPException พร้อมบอกว่าขาดตรงไหนและไปแก้ที่หน้าไหน
     """
-    if (measure_type or "").upper() == "IPM":
-        # COALESCE: ALPL ที่ลงทะเบียนสมัยก่อนมีแต่ part_number_id ยังไม่มี
-        # package_size_id ของตัวเอง — ยอมไล่ต่อผ่าน part_number ให้ ไม่งั้น
-        # ข้อมูลเก่าทั้งหมดจะวัดไม่ได้ทันทีที่ deploy
-        cur.execute(
-            "SELECT ps.nominal_x, ps.nominal_y, ps.upper_tol, ps.lower_tol, ps.offset_tol, "
-            "       ps.package_size "
-            "FROM parts_specifications p "
-            "LEFT JOIN part_number pn  ON p.part_number_id = pn.part_number_id "
-            "JOIN package_size ps      ON ps.package_size_id = "
-            "                             COALESCE(p.package_size_id, pn.package_size_id) "
-            "WHERE p.number_alpl = %s",
-            (number_alpl,),
-        )
-        row = cur.fetchone()
-        if not row:
-            raise HTTPException(
-                404,
-                f"ALPL {number_alpl} หาเกณฑ์ตัดสินไม่เจอ — ยังไม่ได้ผูก Package Size "
-                f"ให้ ALPL นี้ (แก้ที่หน้า Edit › Parts)",
-            )
-        return row
-
     cur.execute(
-        "SELECT pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol, pn.offset_tol, "
-        "       pn.part_number_name "
+        "SELECT ps.nominal_x, ps.nominal_y, ps.upper_tol, ps.lower_tol, ps.offset_tol, "
+        "       ps.package_size "
         "FROM parts_specifications p "
-        "JOIN part_number pn ON p.part_number_id = pn.part_number_id "
+        "LEFT JOIN part_number pn  ON p.part_number_id = pn.part_number_id "
+        "JOIN package_size ps      ON ps.package_size_id = "
+        "                             COALESCE(p.package_size_id, pn.package_size_id) "
         "WHERE p.number_alpl = %s",
         (number_alpl,),
     )
@@ -176,10 +285,11 @@ def _load_criteria(cur, number_alpl: int, measure_type: str):
     if not row:
         raise HTTPException(
             404,
-            f"ALPL {number_alpl} หาเกณฑ์ตัดสินไม่เจอ — ยังไม่ได้ตั้ง Part Number "
-            f"ให้ ALPL นี้ (โหมด New/Rework ใช้เกณฑ์จาก Part Number)",
+            f"ALPL {number_alpl} หาเกณฑ์ตัดสินไม่เจอ — ยังไม่ได้ผูก Package Size "
+            f"ให้ ALPL นี้ (แก้ที่หน้า Edit › Parts)",
         )
     return row
+
 
 def _thai_date_str(dt: Optional[datetime] = None) -> str:
     """คืนวันที่รูปแบบ DD-MM-YYYY โดยปีเป็น พ.ศ. (ค.ศ. + 543) เช่น 22-07-2569
@@ -831,7 +941,10 @@ class PackageSizeCreate(BaseModel):
     upper_tol:     float
     lower_tol:     float
     offset_tol:    float
-    template_name: Optional[str] = None
+    template_name: str
+    # เครื่องทดสอบที่ขนาดนี้ลงได้ → ตาราง package_size_handler (หลายต่อหลาย)
+    # ไม่บังคับตอนสร้าง เพราะตอนเพิ่มขนาดใหม่มักยังไม่รู้ว่าลงเครื่องไหนได้บ้าง
+    handlers:      List[str] = []
 
 class PackageSizeUpdate(BaseModel):
     package_size:  Optional[str] = None
@@ -841,33 +954,27 @@ class PackageSizeUpdate(BaseModel):
     lower_tol:     Optional[float] = None
     offset_tol:    Optional[float] = None
     template_name: Optional[str] = None
+    # ⚠ `None` กับ `[]` คนละความหมาย — None = ไม่ได้ส่งมา ห้ามแตะของเดิม ·
+    #   [] = ตั้งใจล้างให้ไม่เหลือเครื่องเลย ต้องแยกสองกรณีนี้ให้ขาด ไม่งั้น
+    #   แก้แค่ชื่อ package size จะเผลอลบ handler ทิ้งไปด้วยทั้งหมด
+    handlers:      Optional[List[str]] = None
 
 _PKG_NUM_FIELDS = ("nominal_x", "nominal_y", "upper_tol", "lower_tol", "offset_tol")
-# part_number มีฟิลด์ตัวเลขชุดเดียวกับ package_size — ประกาศชื่อของตัวเองไว้
-# เพื่อให้โค้ดฝั่ง part_number อ่านแล้วรู้ว่าหมายถึงอะไร และแยกทางกันได้ทีหลัง
-# ถ้าวันหนึ่งสองตารางนี้มีฟิลด์ไม่เหมือนกัน (อย่าเผลอใช้ตัวของอีกตารางข้ามกัน)
-_PN_NUM_FIELDS = _PKG_NUM_FIELDS
+# ⚠ `_PN_NUM_FIELDS` ถูกถอดออกแล้ว — part_number **ไม่มีฟิลด์ตัวเลขของตัวเอง
+#   อีกต่อไป** เกณฑ์ตัดสินทั้งหมดอยู่ที่ package_size ทุกโหมด (ดู `_load_criteria`)
+#   ถ้าเห็นชื่อนี้ที่ไหนอีก แปลว่าตกค้างจากก่อนหน้านี้
 
+# part_number = "ชื่อ + ผูกกับ package_size ตัวไหน + ใช้ handler ตัวไหน" เท่านั้น
+# ไม่มี nominal/tolerance แล้ว — แก้เกณฑ์ต้องไปแก้ที่ Package Size
 class PartNumberCreate(BaseModel):
     part_number_name: str
     package_size:     str
     handler:          str
-    nominal_x:        float
-    nominal_y:        float
-    upper_tol:        float
-    lower_tol:        float
-    # มี default 0 เพื่อให้ payload เก่าที่ยังไม่ส่ง offset_tol มา ยัง POST ผ่านได้
-    offset_tol:       float = 0
 
 class PartNumberUpdate(BaseModel):
     part_number_name: Optional[str] = None
     package_size:     Optional[str] = None
     handler:          Optional[str] = None
-    nominal_x:        Optional[float] = None
-    nominal_y:        Optional[float] = None
-    upper_tol:        Optional[float] = None
-    lower_tol:        Optional[float] = None
-    offset_tol:       Optional[float] = None
 
 PARTS_SELECT = """
     SELECT p.part_id, p.number_alpl, pn.part_number_name AS part_number,
@@ -877,11 +984,18 @@ PARTS_SELECT = """
            v.vendor_name    AS vendor,
            o.owner_name     AS owner,
            ps.package_size  AS package_size,
-           pn.nominal_x     AS nominal_x,
-           pn.nominal_y     AS nominal_y,
-           pn.upper_tol     AS upper_tol,
-           pn.lower_tol     AS lower_tol,
-           pn.offset_tol    AS offset_tol,
+           -- ⚠ เกณฑ์มาจาก package_size ทุกโหมดแล้ว (เดิมชุดนี้ดึงจาก pn) —
+           --    ต้องตรงกับ `_load_criteria()` ที่ใช้ตัดสินจริง เพราะหน้า Report
+           --    ใช้ค่าชุดนี้เป็นตัวสำรองตอนแถว measurement เก่าไม่มีเกณฑ์ติดมา
+           --    (ดู DashboardPage.tsx — `m.nominal_x ?? part?.nominal_x`)
+           ps.nominal_x     AS nominal_x,
+           ps.nominal_y     AS nominal_y,
+           ps.upper_tol     AS upper_tol,
+           ps.lower_tol     AS lower_tol,
+           ps.offset_tol    AS offset_tol,
+           -- ชุด `_pkg` เคยมีไว้ให้เทียบว่าเกณฑ์ของ part กับของ package ต่างกันไหม
+           -- ตอนนี้ซ้ำกับชุดข้างบนเป๊ะ ๆ แล้ว **ไม่มีใครอ่านเลยทั้ง backend และ
+           -- หน้าเว็บ** เหลือไว้กัน payload เปลี่ยนรูปกะทันหัน ลบได้เมื่อพร้อม
            ps.nominal_x     AS nominal_x_pkg,
            ps.nominal_y     AS nominal_y_pkg,
            ps.upper_tol     AS upper_tol_pkg,
@@ -890,7 +1004,10 @@ PARTS_SELECT = """
            t.template_name  AS template_name
     FROM parts_specifications p
     LEFT JOIN part_number pn  ON p.part_number_id = pn.part_number_id
-    LEFT JOIN handler h       ON pn.handler_id = h.handler_id
+    -- ⚠ COALESCE: handler ที่ผูกกับ ALPL ตัวนั้นมาก่อนเสมอ ถ้าไม่มีค่อยถอยไป
+    --   ใช้ของ part_number — ALPL ที่ลงทะเบียนจากโหมด IPM ไม่มี part_number
+    --   ถ้า join ผ่าน pn อย่างเดียว คอลัมน์ Handler จะว่างทุกแถวของ IPM
+    LEFT JOIN handler h       ON h.handler_id = COALESCE(p.handler_id, pn.handler_id)
     LEFT JOIN vendor v        ON p.vendor_id = v.vendor_id
     LEFT JOIN owner o         ON p.owner_id = o.owner_id
     LEFT JOIN package_size ps ON ps.package_size_id =
@@ -953,13 +1070,14 @@ def _block_if_session_running(cur, action: str) -> None:
         )
 
 class PartCreate(BaseModel):
-    # schema: parts_specifications ไม่เก็บ handler/package_size/nominal/
-    # tolerance/template_name ตรงๆ เลย — ทั้งหมด derive มาจาก part_number_id
-    # ตัวเดียว (ดู init.sql: part_number ผูก package_size_id + handler_id +
-    # nominal/tolerance ของตัวเองไว้แล้ว) เลือก part_number ก็ map ค่าพวกนี้
-    # ให้อัตโนมัติหมด ไม่ต้องส่ง handler/package_size แยกมาที่ endpoint นี้อีก
-    # (frontend ยังส่ง package_size มาด้วยเพื่อใช้ cascade dropdown Part Number
-    # เฉยๆ — เป็นแค่ field ส่วนเกินที่ endpoint นี้เพิกเฉยไม่ได้ใช้)
+    # ⚠ **คอมเมนต์เดิมตรงนี้บอกว่า parts_specifications ไม่เก็บ handler/package_size
+    #   ของตัวเอง — ตกรุ่นไปแล้ว** ตอนนี้เก็บทั้งคู่ (ดู init.sql) เพราะ:
+    #     package_size_id  ALPL ที่ลงทะเบียนจากโหมด IPM ไม่มี part_number ให้ derive
+    #     handler_id       "ALPL ตัวนี้ติดตั้งอยู่บนเครื่องไหน" เป็นข้อเท็จจริงของ
+    #                      ALPL เอง — part เดียวกันอาจมี ALPL อยู่คนละเครื่องได้
+    #
+    # โค้ดที่อ่านค่าพวกนี้ใช้ COALESCE(ของ ALPL, ของ part_number) เสมอ — ของ ALPL
+    # มาก่อน ถ้าไม่มีค่อยถอยไปใช้ของ catalog (ดู PARTS_SELECT / _EXPORT_FROM)
     #
     # part_number เป็น Optional เพราะตอน IPM เจอ ALPL ที่ยังไม่เคยลงทะเบียน
     # (ดู POST /api/session/start) จะลงทะเบียน part ใหม่แบบขั้นต่ำผ่าน endpoint
@@ -978,7 +1096,10 @@ class PartCreate(BaseModel):
     description:   Optional[str] = None
     vendor:        Optional[str] = None
     po_number:     Optional[int] = None
-    package_size:  Optional[str] = None  # ไม่ได้ใช้ resolve อะไรที่นี่ (เก็บไว้เผื่อ frontend ส่งมา)
+    package_size:  Optional[str] = None
+    # เครื่องที่ ALPL ตัวนี้ติดตั้งอยู่ — ส่งมาเป็น "ชื่อ" แล้ว _insert_part_row
+    # resolve เป็น handler_id เอง · None = ไม่ระบุ (ลงทะเบียนจาก IPM ที่ยังไม่รู้)
+    handler:       Optional[str] = None
     owner:         Optional[str] = None
     recieve_date:  Optional[str] = None
 
@@ -1003,9 +1124,9 @@ def _insert_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
     part_number/vendor/owner รับมาเป็น "ชื่อ" (ตรงกับค่าที่เลือกจาก dropdown
     ฝั่ง frontend) แล้ว resolve เป็น id ก่อน insert
 
-    หมายเหตุ: handler/package_size ไม่ได้ resolve/insert ตรงนี้แล้ว เพราะ
-    schema ใหม่ derive ค่าพวกนี้มาจาก part_number_id ทั้งหมด (part_number
-    catalog ผูก package_size_id + handler_id ของตัวเองไว้แล้ว — ดู init.sql)
+    หมายเหตุ: handler/package_size **เก็บที่แถว Part เองด้วย** (ไม่ derive ผ่าน
+    part_number อย่างเดียว) เพราะโหมด IPM ลงทะเบียนจากฟอร์มที่ไม่มี part_number
+    เลย ถ้าไม่เก็บไว้ตรงนี้จะหาเกณฑ์/เครื่องให้ ALPL พวกนั้นไม่ได้
 
     ใช้ร่วมกันทั้งจาก endpoint POST /api/parts ปกติ, จาก flow ของ New queue ที่
     ALPL หลายตัวใช้ config เดียวกันซ้ำ, และจากการลงทะเบียน part แบบขั้นต่ำตอน
@@ -1018,17 +1139,22 @@ def _insert_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
     # เหมือนเดิม) เพราะโหมด IPM ลงทะเบียน Part จากฟอร์มที่มีแค่ ALPL + Package Size
     # ยังไม่รู้ Part Number — ถ้าไม่เก็บไว้ตรงนี้จะหา template/เกณฑ์ให้มันไม่ได้เลย
     package_size_id = _lookup_id(cur, "package_size", "package_size_id", "package_size", config.get("package_size"))
+    # เครื่องที่ ALPL ตัวนี้ติดตั้งอยู่
+    #   IPM        — ผู้ใช้เลือกเองจาก dropdown ที่กรองด้วย package_size_handler
+    #   New/Rework — ฟอร์มเติมให้อัตโนมัติจาก part_number แล้วล็อกช่องไว้
+    # ทั้งสองทางส่งมาเป็น "ชื่อ" ในคีย์ handler เหมือนกัน โค้ดตรงนี้จึงไม่ต้องรู้โหมด
+    handler_id = _lookup_id(cur, "handler", "handler_id", "handler_name", config.get("handler"))
 
     # recieve_date: ใส่คอลัมน์นี้ใน INSERT เสมอ แม้จะเป็นค่าว่าง (จะได้ NULL) —
     # ตั้งใจให้ "เว้นว่างแล้วว่างจริง" ไม่ใช่เติมวันที่ปัจจุบันให้อัตโนมัติ
     # (ถ้าไม่ใส่คอลัมน์นี้เลย DEFAULT CURRENT_TIMESTAMP ของ schema จะทำงานแทน
     # ซึ่งไม่ใช่พฤติกรรมที่ต้องการ)
     columns = [
-        "number_alpl", "part_number_id", "package_size_id", "description",
+        "number_alpl", "part_number_id", "package_size_id", "handler_id", "description",
         "vendor_id", "po_number", "owner_id", "recieve_date",
     ]
     values: List[Any] = [
-        number_alpl, part_number_id, package_size_id, config.get("description"),
+        number_alpl, part_number_id, package_size_id, handler_id, config.get("description"),
         vendor_id, config.get("po_number"), owner_id,
         config.get("recieve_date") or None,
     ]
@@ -1041,11 +1167,14 @@ def _insert_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
 
 MEASUREMENTS_SELECT = """
     SELECT m.*, op.operator_name AS operator_name,
-           CASE WHEN m.measure_type = 'IPM' THEN ips.nominal_x  ELSE pn.nominal_x  END AS nominal_x,
-           CASE WHEN m.measure_type = 'IPM' THEN ips.nominal_y  ELSE pn.nominal_y  END AS nominal_y,
-           CASE WHEN m.measure_type = 'IPM' THEN ips.upper_tol  ELSE pn.upper_tol  END AS upper_tol,
-           CASE WHEN m.measure_type = 'IPM' THEN ips.lower_tol  ELSE pn.lower_tol  END AS lower_tol,
-           CASE WHEN m.measure_type = 'IPM' THEN NULL           ELSE pn.offset_tol END AS offset_tol
+           -- ⚠ nominal/tolerance มาจาก package_size **ทุกโหมด** — ต้องตรงกับ
+           --    `_load_criteria()` ที่ใช้ตัดสินจริง ไม่งั้นตัวเลขที่โชว์ข้างคอลัมน์
+           --    Result จะมาจากคนละตารางกับที่ใช้ตัดสิน แล้วผู้ใช้จะเห็นค่าที่อยู่
+           --    ในสเปกแต่ผลเป็น NG โดยไม่มีทางรู้ว่าทำไม
+           ips.nominal_x, ips.nominal_y, ips.upper_tol, ips.lower_tol,
+           -- offset ยังแยกตามโหมดอยู่ (IPM ไม่เอา offset มาตัดสิน — ดู `_offset_limit`)
+           -- NULL ตรงนี้คือตัวที่ทำให้หน้าเว็บขึ้น "—" แทนค่าในคอลัมน์ Offset
+           CASE WHEN m.measure_type = 'IPM' THEN NULL ELSE ips.offset_tol END AS offset_tol
     FROM measurements m
     LEFT JOIN operator op ON m.operator_id = op.operator_id
     LEFT JOIN parts_specifications p ON m.number_alpl = p.number_alpl
@@ -1066,11 +1195,23 @@ class MeasurementCreate(BaseModel):
     offset_opx:  float 
     offset_opy:  float 
 
-    # ── ค่า Offset 4 มุมของ OP ───────────────────────
-    tr_op:       float 
-    tl_op:       float 
-    br_op:       float 
-    bl_op:       float 
+    # ── ระยะ opening 4 ด้าน (idx 2-5 ของ GM) ─────────
+    # จับเป็น 2 คู่แกน ไม่ใช่ 4 มุม:
+    #   horizon_left / horizon_right     คู่แนวนอน  (GM idx 2, 3)
+    #   vertical_top / vertical_bottom   คู่แนวตั้ง  (GM idx 5, 4)
+    #
+    # ⚠ ชื่อเดิมคือ tr_op / tl_op / br_op / bl_op (ย่อจาก top-right, top-left,
+    #   bottom-right, bottom-left) — เปลี่ยนแล้ว **ต้องแก้พร้อมกันทั้ง 4 ฝั่งที่
+    #   ส่ง payload มา** (Pi.py · Data-receiver.py · Recieve_tm-x.py · mockup.py)
+    #   ไม่งั้น POST จะตกด้วย 422 ทันทีเพราะ Pydantic หาฟิลด์ไม่เจอ
+    #
+    # ⚠ **ไม่มีคอลัมน์พวกนี้ในตาราง `measurements`** — ค่าเข้ามาเพื่อคำนวณ
+    #   `offset_pos_op` แล้วถูกทิ้ง (ดู create_measurement) การเปลี่ยนชื่อจึงไม่
+    #   ต้อง migrate ฐานข้อมูล
+    horizon_left:    float
+    horizon_right:   float
+    vertical_top:    float
+    vertical_bottom: float
 
     note:        Optional[str] = None
 
@@ -1099,7 +1240,7 @@ _EXPORT_FROM = f"""
     LEFT JOIN operator op             ON m.operator_id = op.operator_id
     LEFT JOIN parts_specifications p  ON m.number_alpl = p.number_alpl
     LEFT JOIN part_number pn          ON p.part_number_id = pn.part_number_id
-    LEFT JOIN handler h               ON pn.handler_id = h.handler_id
+    LEFT JOIN handler h               ON h.handler_id = COALESCE(p.handler_id, pn.handler_id)
     LEFT JOIN package_size ps         ON ps.package_size_id = {COALESCE_PKG}
     LEFT JOIN template t              ON ps.template_id = t.template_id
     LEFT JOIN vendor v                ON p.vendor_id = v.vendor_id
@@ -1120,11 +1261,12 @@ EXPORT_SELECT = """
            m.result, m.note, m.measure_type, m.timestamp,
            op.operator_name,
            pn.part_number_name,
-           CASE WHEN m.measure_type = 'IPM' THEN ps.nominal_x  ELSE pn.nominal_x  END AS nominal_x,
-           CASE WHEN m.measure_type = 'IPM' THEN ps.nominal_y  ELSE pn.nominal_y  END AS nominal_y,
-           CASE WHEN m.measure_type = 'IPM' THEN ps.upper_tol  ELSE pn.upper_tol  END AS upper_tol,
-           CASE WHEN m.measure_type = 'IPM' THEN ps.lower_tol  ELSE pn.lower_tol  END AS lower_tol,
-           CASE WHEN m.measure_type = 'IPM' THEN NULL          ELSE pn.offset_tol END AS offset_tol,
+           -- ⚠ เหมือน MEASUREMENTS_SELECT — nominal/tolerance มาจาก package_size
+           --    ทุกโหมด ต้องตรงกับ `_load_criteria()` เสมอ
+           ps.nominal_x, ps.nominal_y, ps.upper_tol, ps.lower_tol,
+           -- offset ยังแยกตามโหมด · NULL ในโหมด IPM คือสิ่งที่ `_offset_state()`
+           -- ใช้ตัดสินว่าจะไม่ระบายสีช่อง Offset (ดูคอมเมนต์ในฟังก์ชันนั้น)
+           CASE WHEN m.measure_type = 'IPM' THEN NULL ELSE ps.offset_tol END AS offset_tol,
            h.handler_name, ps.package_size, t.template_name,
            v.vendor_name, o.owner_name,
            p.po_number, p.description, p.recieve_date
@@ -1175,13 +1317,13 @@ def _offset_state(r) -> str:
       แล้วจะระเบิดเป็น NameError ตอน render คอลัมน์ Offset เท่านั้น ไม่ใช่ตอน import
       ทำให้ซ่อนตัวอยู่ได้นาน (บั๊ก SQL เรื่องคอลัมน์ `offset` บังไว้อีกชั้นด้วย)
 
-    เทียบด้วย _TOL_EPS เหมือน _offset_ok ทุกประการ — ห้ามให้สองที่คิดไม่ตรงกัน
-    ไม่งั้นสีในไฟล์ export จะขัดกับคอลัมน์ Result ที่มาจาก DB
+    เรียก `_offset_ok()` ตัวเดียวกับที่ `_judge()` ใช้ — **ห้ามลอกสูตรมาเขียนซ้ำ
+    ที่นี่อีก** ไม่งั้นสีในไฟล์ export จะขัดกับคอลัมน์ Result ที่มาจาก DB
     """
     off, tol = r.get("offset"), r.get("offset_tol")
     if off is None or tol is None:
         return ""           # IPM (tol เป็น NULL) หรือยังไม่มีค่า → ไม่ตัดสิน
-    return "OK" if abs(off) <= tol + _TOL_EPS else "NG"
+    return "OK" if _offset_ok(off, tol) else "NG"
 
 def _tolerance_spec(r) -> str:
     """สเปกขนาดชิ้นงานแบบย่อบรรทัดเดียว — ใช้ในรายงาน PDF/Excel เท่านั้น
@@ -1506,12 +1648,17 @@ __all__ = [
     "_GROUP_MATCH_FIELDS",
     "_LEGACY_COLUMN_ALIASES",
     "_PKG_NUM_FIELDS",
-    "_PN_NUM_FIELDS",
     "_PROJECT_ROOT",
     "_RANGE_PART_RE",
     "_TABLE_DISPLAY_NAME",
     "_TIME_FORMATS",
     "_TOL_EPS",
+    # ⚠ ต้องอยู่ในลิสต์นี้ — `measurements.py` กับ `session.py` ใช้
+    #   `from shared import *` ถ้าตกหล่นจะเป็น NameError ตอน runtime เท่านั้น
+    #   (ไม่ใช่ตอน import) ซึ่งซ่อนตัวได้นานจนกว่าจะมีคนกดวัดจริง
+    "_DP",
+    "_offset_ok",
+    "_ok_flags",
     "_archive_before_delete",
     "log_edit",
     "_db_identity",

@@ -1,4 +1,9 @@
-const fmt = (v?: number | null) => (v != null && !isNaN(Number(v)) ? Number(v).toFixed(3) : "—");
+import { DP_MM } from "../measurementCells";
+
+/** ⚠ ตัวนี้ใช้ `DP_MM` (ขนาดชิ้นงาน) — `ReportOffset` ท้ายไฟล์ซึ่งเป็น
+ *  **โค้ดตายแล้ว** ก็เรียก `fmt` ตัวนี้อยู่ ถ้าวันไหนเอากลับมาใช้ ต้องแยกไปใช้
+ *  `DP_OFF` แทน ไม่งั้นค่าระดับ 0.0xx จะถูกปัดจนกลืนกันหมด (ดู measurementCells) */
+const fmt = (v?: number | null) => (v != null && !isNaN(Number(v)) ? Number(v).toFixed(DP_MM) : "—");
 
 /**
  * การ์ดแสดงค่ารายแกนในรายงาน พร้อมแถบ 3 โซน (ต่ำกว่า / รับได้ / สูงกว่าสเปค)
@@ -7,13 +12,22 @@ const fmt = (v?: number | null) => (v != null && !isNaN(Number(v)) ? Number(v).t
  * ทำให้เห็นทันทีว่าเกินไปนิดเดียวหรือหลุดไปไกล โดยไม่ต้องคำนวณในหัว
  */
 export function ReportAxis({
-  axis, value, nominal, upperTol, lowerTol,
+  axis, value, nominal, upperTol, lowerTol, ok: okProp,
 }: {
   axis: string;
   value?: number | null;
   nominal?: number | null;
   upperTol?: number | null;
   lowerTol?: number | null;
+  /** ผลตัดสินแกนนี้จาก backend (`ok_x` / `ok_y`)
+   *
+   *  ⚠ **ห้ามคำนวณ `value >= lo && value <= hi` เองอีก** — backend ปัดทศนิยม
+   *    ด้วย `_DP` ก่อนเทียบ (`_within_tolerance` ใน shared.py) ที่นี่คำนวณเอง
+   *    แบบไม่ปัดแล้วชิ้นที่ตกขอบพอดีจะขึ้นแดงทั้งที่ Result บอก OK
+   *
+   *  ⚠ `lo`/`hi` ที่คำนวณข้างล่าง **ยังต้องมี** เพราะใช้วางตำแหน่งจุดบนแถบ
+   *    3 โซน (เรขาคณิตล้วน ๆ) — แต่ห้ามเอาไปตัดสิน OK/NG */
+  ok?: boolean | null;
 }) {
   const hasSpec = value != null && nominal != null && upperTol != null && lowerTol != null;
 
@@ -32,10 +46,14 @@ export function ReportAxis({
     );
   }
 
+  // lo/hi ใช้วางตำแหน่งจุดบนแถบเท่านั้น — **ไม่ได้ใช้ตัดสิน OK/NG**
   const lo = Number(nominal) - Number(lowerTol);
   const hi = Number(nominal) + Number(upperTol);
   const span = hi - lo;
-  const ok = value! >= lo && value! <= hi;
+  // ⚠ มาจาก backend · fallback คำนวณเองไว้เผื่อ event/แถวเก่าที่ยังไม่มี ok_x
+  //   ซึ่งจะเพี้ยนที่ชิ้นตกขอบพอดี — ยอมรับได้เพราะเป็นแค่ข้อมูลเก่าที่ค้างใน
+  //   หน้าจอ ไม่ใช่ค่าที่เพิ่งวัด · **ห้ามลบ `okProp ??` ทิ้ง**
+  const ok = okProp ?? (value! >= lo && value! <= hi);
 
   // โซน "รับได้" กินพื้นที่ 25%–75% ของแถบ · นอกนั้นคือหลุดสเปค
   let pos: number;

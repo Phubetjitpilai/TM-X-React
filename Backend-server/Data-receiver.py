@@ -34,6 +34,36 @@ _IMAGE_DIR_NAME = "head-a"
 TXT_WAIT_TIMEOUT = 5.0
 SESSION_POLL_INTERVAL = 3.0
 
+# ── ตำแหน่งของแต่ละค่าในบรรทัดของไฟล์ .txt ────────────────────────────────
+# ⚠⚠ **ใช้คีย์ชุดเดียวกับ `Pi.py` (`GM_IDX_*`) โดยตั้งใจ ห้ามแยกเป็นคีย์ของตัวเอง**
+#   TM-X เรียงค่าตามลำดับเครื่องมือชุดเดียวกันทั้งตอนตอบ `GM` ทาง TCP (Pi อ่าน)
+#   และตอนเขียนไฟล์ `.txt` ทาง FTP (ไฟล์นี้อ่าน) — ถ้าแยกเป็นคนละคีย์ จะมีวันที่
+#   คนแก้ไปแค่ฝั่งเดียว แล้วชิ้นเดียวกันที่เข้ามาคนละเส้นทางจะได้ TOP/BOTTOM
+#   สลับกันโดยไม่มี error ให้เห็นเลย (เคยเกิดมาแล้วตอนที่ไฟล์นี้ hardcode index ไว้)
+#
+# ⚠ ค่า default ข้างล่างนี้ **ไม่ใช่ค่าที่ใช้จริง** ถ้า `.env` ตั้งไว้ — `.env` ชนะเสมอ
+#   ไล่บั๊กเรื่องตำแหน่งเมื่อไหร่ให้เปิด `.env` ดูก่อนอ่านบรรทัดพวกนี้
+def _idx(name: str, default: str) -> int:
+    return int(os.getenv(name, default))
+
+
+IDX_X               = _idx("GM_IDX_X", "0")
+IDX_Y               = _idx("GM_IDX_Y", "1")
+IDX_HORIZON_LEFT    = _idx("GM_IDX_HORIZON_LEFT", "2")
+IDX_HORIZON_RIGHT   = _idx("GM_IDX_HORIZON_RIGHT", "3")
+IDX_VERTICAL_TOP    = _idx("GM_IDX_VERTICAL_TOP", "4")
+IDX_VERTICAL_BOTTOM = _idx("GM_IDX_VERTICAL_BOTTOM", "5")
+IDX_OFFSET_X        = _idx("GM_IDX_OFFSET_X", "6")
+IDX_OFFSET_Y        = _idx("GM_IDX_OFFSET_Y", "7")
+
+# บรรทัดต้องมีอย่างน้อยกี่ช่องถึงจะอ่านได้ครบ — คิดจาก index ที่ตั้งไว้จริง
+# ⚠ ห้าม hardcode 8 กลับมา ถ้ามีคนย้าย index ไปช่องที่ 9 แล้วบรรทัดมี 9 ช่องพอดี
+#   การเช็ค `< 8` จะผ่านแล้วไประเบิด IndexError ตอน index จริงแทน
+_MIN_FIELDS = max(
+    IDX_X, IDX_Y, IDX_HORIZON_LEFT, IDX_HORIZON_RIGHT,
+    IDX_VERTICAL_TOP, IDX_VERTICAL_BOTTOM, IDX_OFFSET_X, IDX_OFFSET_Y,
+) + 1
+
 _txt_paths = []
 _txt_lock = threading.Lock()
 
@@ -63,31 +93,34 @@ def _parse_measurement_line(line: str):
     items = [item.strip() for item in line.split(",")]
 
     # แก้ไข: เทียบเป็น String หรือ แปลงเป็น float เพื่อเปรียบเทียบ
-    filtered_items = [item for item in items if item != "-9999.999"]
+    filtered_items = [item for item in items if not item.startswith("-")]
 
-    if len(filtered_items) < 8:
+    if len(filtered_items) < _MIN_FIELDS:
         #clear_temp_dir(wait_timeout=0)
         return None
 
     try:
-        value_x = float(filtered_items[0])
-        value_y = float(filtered_items[1])
-        tr_op = float(filtered_items[2])
-        tl_op = float(filtered_items[3])
-        bl_op = float(filtered_items[4])
-        br_op = float(filtered_items[5])
-        offset_opx = float(filtered_items[6])
-        offset_opy = float(filtered_items[7])
-    except ValueError:
+        value_x = float(filtered_items[IDX_X])
+        value_y = float(filtered_items[IDX_Y])
+        horizon_left = float(filtered_items[IDX_HORIZON_LEFT])
+        horizon_right = float(filtered_items[IDX_HORIZON_RIGHT])
+        vertical_top = float(filtered_items[IDX_VERTICAL_TOP])
+        vertical_bottom = float(filtered_items[IDX_VERTICAL_BOTTOM])
+        offset_opx = float(filtered_items[IDX_OFFSET_X])
+        offset_opy = float(filtered_items[IDX_OFFSET_Y])
+    except (ValueError, IndexError):
         return None
 
+    # ⚠ ลำดับของ tuple นี้เรียง `vertical_bottom` มาก่อน `vertical_top`
+    #   ซึ่ง **กลับกับ `get_measurement_tmx` ใน Pi.py** ที่เรียง top ก่อน
+    #   ทั้งคู่ถูกในตัวเอง (ผู้เรียกแกะตรงลำดับกัน) แต่ห้ามก๊อป tuple ข้ามไฟล์
     return (
         value_x,
         value_y,
-        tr_op,
-        tl_op,
-        bl_op,
-        br_op,
+        horizon_left,
+        horizon_right,
+        vertical_bottom,
+        vertical_top,
         offset_opx,
         offset_opy,
     )
@@ -145,7 +178,7 @@ def get_current_session():
 def post_to_backend(
     session_id,
     value_x, value_y,
-    tr_op, tl_op, bl_op, br_op,
+    horizon_left, horizon_right, vertical_bottom, vertical_top,
     offset_opx, offset_opy
 ):
     """POST ค่าเข้า backend — format ตรงตาม MeasurementCreate ใน main.py
@@ -162,10 +195,10 @@ def post_to_backend(
             "value_y":     value_y,
 
             # ── กลุ่มค่าตัวเทียบ Pos OP ──
-            "tr_op":       tr_op,
-            "tl_op":       tl_op,
-            "bl_op":       bl_op,
-            "br_op":       br_op,
+            "horizon_left":       horizon_left,
+            "horizon_right":       horizon_right,
+            "vertical_bottom":       vertical_bottom,
+            "vertical_top":       vertical_top,
 
             # ── กลุ่มค่า Offset ──
             "offset_opx":  offset_opx,
@@ -304,7 +337,7 @@ def _handle_capture_inner(image_path):
     
     (
     value_x, value_y,
-    tr_op, tl_op, bl_op, br_op,
+    horizon_left, horizon_right, vertical_bottom, vertical_top,
     offset_opx, offset_opy
     ) = pair
 
@@ -320,14 +353,14 @@ def _handle_capture_inner(image_path):
     print(
     f"✅ {name} ({size_mb:.1f} MB) → "
     f"value_x={value_x} value_y={value_y} "
-    f"tr_op={tr_op} tl_op={tl_op} bl_op={bl_op} br_op={br_op} "
+    f"horizon_left={horizon_left} horizon_right={horizon_right} vertical_bottom={vertical_bottom} vertical_top={vertical_top} "
     f"offset_opx={offset_opx} offset_opy={offset_opy}"
     )
     try:
         resp = post_to_backend(
         session_id,
         value_x, value_y,
-        tr_op, tl_op, bl_op, br_op,
+        horizon_left, horizon_right, vertical_bottom, vertical_top,
         offset_opx, offset_opy
         )
     except Exception as exc:

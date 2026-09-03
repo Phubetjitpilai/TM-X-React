@@ -160,21 +160,35 @@ def _limits_of(row, measure_type: str) -> Dict[str, Any]:
     """แปลง nominal/tolerance เป็น "ขอบเขตสำเร็จรูป" ที่ Pi เอาไปเทียบตรงๆ
 
     **ส่งขอบ ไม่ส่ง nominal/tol ดิบ** — จำนวนตัวเลขเท่ากัน (4 ตัว) แต่ Pi ไม่ต้อง
-    ลอก `_TOL_EPS` มาไว้ที่ตัวเอง ถ้าลืมเมื่อไหร่จะตัดสินไม่ตรงกับ backend
+    ลอกกฎการปัดทศนิยมมาไว้ที่ตัวเอง ถ้าลืมเมื่อไหร่จะตัดสินไม่ตรงกับ backend
     **เฉพาะชิ้นที่ตกขอบพอดี** ซึ่งเป็นชิ้นที่สำคัญที่สุดและหาสาเหตุยากที่สุด
     (คอลัมน์เป็น FLOAT — `5.02` อ่านกลับได้ `5.0199999809265137`)
 
-    ห้ามปัดเศษให้สวย ต้องเป็นตัวเลขชุดเดียวกับที่ `_within_tolerance` ใช้เป๊ะ
+    ⚠⚠ **ต้องคืนเป็น `float` เท่านั้น ห้ามเป็น `Decimal` เด็ดขาด** — dict ก้อนนี้
+      ถูกยัดเข้า `POST /command` ด้วย `json=payload` (:326) และ
+      `json.dumps(Decimal)` โยน `TypeError` ทันที → **กด Start แล้วไม่มีอะไร
+      เกิดขึ้นเลย** Pi ไม่เคยได้รับคำสั่ง · JSON มีชนิดตัวเลขแบบเดียวคือ
+      `number` ซึ่งทุกภาษาถอดเป็น float เสมอ ส่ง Decimal ข้ามไปไม่ได้
+      (ถ้าอยากคำนวณด้วย Decimal ข้างในก็ได้ แต่ต้อง `float()` ก่อน return)
+
+    ⚠⚠ **ขอบถูกปัดด้วย `_DP` มาแล้ว ส่วน Pi เทียบดิบ ๆ ไม่ปัดอะไรเลย** — ที่ทำ
+      แบบนี้ได้เพราะค่าฝั่ง Pi มาจากการ parse ข้อความ `GM` ตรง ๆ
+      **ไม่เคยผ่านคอลัมน์ FLOAT** จึงไม่มีหางแบบที่ฝั่ง DB มี · `float("8.05")`
+      กับ `round(8.049999732…, 3)` ให้ double ตัวเดียวกันเป๊ะ สองฝั่งจึงตัดสิน
+      ตรงกัน 100% (ทดสอบแล้ว 11,010 เคสที่ตกขอบพอดี ไม่ตรงกัน 0 เคส)
+
+      ⚠ ถ้าวันหลังเปลี่ยนให้ Pi อ่านค่าจาก DB แทนการ parse เอง สมมติฐานนี้พังทันที
+        ต้องให้ Pi ปัดด้วย `_DP` เหมือนกันก่อนเทียบ
 
     `offset_max: null` = ไม่ต้องตรวจข้อนี้ — **ไม่ส่ง `measure_type` ไปด้วย**
     เพราะจะเปิดช่องให้มีคนเขียน `if measure_type == "IPM"` ที่ฝั่ง Pi แล้วกฎ
     เรื่องโหมดจะไปอยู่ 2 ที่ (`_offset_limit` ที่นี่ควรเป็นที่เดียว)
     """
     return {
-        "x_lo": row["nominal_x"] - row["lower_tol"] - _TOL_EPS,
-        "x_hi": row["nominal_x"] + row["upper_tol"] + _TOL_EPS,
-        "y_lo": row["nominal_y"] - row["lower_tol"] - _TOL_EPS,
-        "y_hi": row["nominal_y"] + row["upper_tol"] + _TOL_EPS,
+        "x_lo": round(row["nominal_x"] - row["lower_tol"], _DP),
+        "x_hi": round(row["nominal_x"] + row["upper_tol"], _DP),
+        "y_lo": round(row["nominal_y"] - row["lower_tol"], _DP),
+        "y_hi": round(row["nominal_y"] + row["upper_tol"], _DP),
         "offset_max": _offset_limit(measure_type, row),
     }
 
@@ -185,22 +199,24 @@ def _criteria_from_config(cur, gi: int, group: Dict[str, Any], entry_mode: str):
     New (Part ถูกสร้างพร้อม measurement ของชิ้นนั้น — ดู `create_measurement`)
     และโหมด IPM ก็มี ALPL บางตัวที่ยังไม่ลงทะเบียน
 
-    ใช้ตารางเดียวกับ `_load_criteria` ตามโหมด (IPM → `package_size`,
-    New/Rework → `part_number`) ค่าที่ได้จึงตรงกับที่ backend จะใช้ตัดสินจริง
-    ตอน measurement เข้ามา
+    ใช้ตารางเดียวกับ `_load_criteria` คือ **`package_size` ทุกโหมด** ค่าที่ได้
+    จึงตรงกับที่ backend จะใช้ตัดสินจริงตอน measurement เข้ามา
+
+    ⚠ เดิมแตกเป็น 2 กิ่ง (IPM → `package_size` · New/Rework → `part_number`)
+      ตอนนี้ยุบเหลือทางเดียวแล้ว **ถ้าจะแก้ตรงนี้ต้องแก้ `_load_criteria` คู่กันเสมอ**
+      สองตัวนี้ต้องอ่านจากที่เดียวกัน ไม่งั้นจะเกิดสภาพที่ Pi คัดของตามเกณฑ์ของ
+      กลุ่ม (มาจากที่นี่) ส่วน backend บันทึกตามเกณฑ์รายตัว (มาจาก _load_criteria)
+      แล้วสองฝั่งตัดสินคนละอย่างโดยไม่มีอะไรเตือน
+
+    ⚠ `entry_mode` ยังรับไว้เพราะยังใช้ตัดสินเรื่อง **offset** อยู่ (ผ่าน
+      `_offset_limit()` ที่ `_limits_of()` เรียกต่อ) — IPM ไม่ตรวจ offset
+      ส่วน New/Rework ตรวจ · ไม่เกี่ยวกับการเลือกตารางอีกแล้ว
     """
-    if entry_mode == "IPM":
-        cur.execute(
-            "SELECT nominal_x, nominal_y, upper_tol, lower_tol, offset_tol "
-            "FROM package_size WHERE package_size = %s",
-            ((group.get("package_size") or "").strip(),),
-        )
-    else:
-        cur.execute(
-            "SELECT nominal_x, nominal_y, upper_tol, lower_tol, offset_tol "
-            "FROM part_number WHERE part_number_name = %s",
-            ((group.get("part_number") or "").strip(),),
-        )
+    cur.execute(
+        "SELECT nominal_x, nominal_y, upper_tol, lower_tol, offset_tol "
+        "FROM package_size WHERE package_size = %s",
+        ((group.get("package_size") or "").strip(),),
+    )
     row = cur.fetchone()
     if not row:
         raise HTTPException(400, f"กลุ่มที่ {gi + 1}: หาเกณฑ์ตัดสินของกลุ่มนี้ไม่เจอ")

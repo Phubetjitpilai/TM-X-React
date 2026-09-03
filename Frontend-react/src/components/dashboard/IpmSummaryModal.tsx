@@ -1,12 +1,16 @@
 import { useToast } from "../Toast";
+import { DP_MM } from "../measurementCells";
 
 export interface IpmSummaryRow {
   x: number | null;
   y: number | null;
 }
 
-/** ทศนิยม 3 ตำแหน่งเสมอ — ให้ตรงกับความละเอียดที่ TM-X ส่งมา (+0005.047) */
-const fmtMm = (v: number | null) => (v == null ? "" : Number(v).toFixed(3));
+/** ทศนิยมคงที่เสมอ — ให้ตรงกับความละเอียดที่ TM-X ส่งมา
+ *  ⚠ TM-X ถูกตั้งเป็น **2 ตำแหน่ง** แล้ว (เดิม 3 · `+0005.047` → `+0005.05`)
+ *    ตัวเลขนี้จึงมาจาก `DP_MM` ที่เดียว ไม่ hardcode ซ้ำ — ค่าในตารางนี้ถูก
+ *    ก๊อปไปวางใน Excel ต่อ ถ้าไม่ตรงกับที่แสดงบนหน้าจออื่นจะงงกันทั้งกะ */
+const fmtMm = (v: number | null) => (v == null ? "" : Number(v).toFixed(DP_MM));
 
 /**
  * สรุปผล IPM ตอนวัดครบ — ตารางสำหรับคัดลอกไปวางใน Excel

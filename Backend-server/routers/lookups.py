@@ -61,14 +61,17 @@ def list_handlers():
 @router.get("/api/package-sizes")
 def list_package_sizes():
     """คืนรายการ package_size ทั้งหมด พร้อม nominal/tolerance + template_name
-    — ใช้เติม datalist ของช่อง Package Size ใน index.html/edit.html และเป็น
-    แหล่งข้อมูลของตาราง Lookup Tables → Package Size
+    + รายชื่อ handler ที่ขนาดนี้ลงได้ — ใช้เติม datalist ของช่อง Package Size
+    และเป็นแหล่งข้อมูลของตาราง Lookup Tables → Package Size
 
-    nominal/tolerance ถูกเก็บไว้ 2 ที่โดยตั้งใจ (ไม่ใช่ข้อมูลซ้ำที่ลืมลบ):
-      • package_size — ค่ากลางของ "ขนาด" นั้น ใช้ตอนยังไม่รู้ part_number
-      • part_number  — ค่าเฉพาะของ part นั้น (part_number เดียวกันอาจมี
-        tolerance ต่างกันได้แม้ package_size เดียวกัน) ดู GET /api/part-numbers
-    ทั้ง 5 คอลัมน์เป็น NOT NULL ทั้งคู่ (ดู init.sql)
+    **package_size เป็นแหล่งเกณฑ์ OK/NG เดียวของทั้งระบบ** ทุกโหมด (ดู
+    `_load_criteria` ใน shared.py) — ทั้ง 5 คอลัมน์ตัวเลขเป็น NOT NULL
+
+    ⚠ `handlers` คืนเป็น **ลิสต์ของสตริง** ไม่ใช่สตริงคั่นคอมมา — แตกที่นี่
+      ไม่ปล่อยให้ฝั่ง React ไป `split(",")` เอง เพราะวันหลังถ้ามีชื่อ handler
+      ที่มีคอมมาอยู่ข้างใน มันจะแตกผิดแบบเงียบๆ โดยไม่มีอะไรเตือน
+      ขนาดที่ยังไม่ผูกเครื่องไหนเลยได้ `[]` (ไม่ใช่ null) ฝั่งหน้าเว็บจะได้
+      ไม่ต้องเช็ค 2 แบบ
     """
     db = get_db()
     try:
@@ -76,12 +79,21 @@ def list_package_sizes():
             cur.execute(
                 "SELECT ps.package_size_id, ps.package_size, "
                 "       ps.nominal_x, ps.nominal_y, ps.upper_tol, ps.lower_tol, ps.offset_tol, "
-                "       t.template_name "
+                "       t.template_name, "
+                # LEFT JOIN + GROUP BY: ขนาดที่ไม่มี handler เลยต้องยังอยู่ในผลลัพธ์
+                # (ถ้าใช้ JOIN ธรรมดาจะหายไปทั้งแถว แล้วแก้ฟิลด์อื่นของมันไม่ได้เลย)
+                "       GROUP_CONCAT(h.handler_name ORDER BY h.handler_name) AS handlers "
                 "FROM package_size ps "
                 "LEFT JOIN template t ON ps.template_id = t.template_id "
+                "LEFT JOIN package_size_handler psh ON psh.package_size_id = ps.package_size_id "
+                "LEFT JOIN handler h ON h.handler_id = psh.handler_id "
+                "GROUP BY ps.package_size_id "
                 "ORDER BY ps.package_size"
             )
-            return cur.fetchall()
+            rows = cur.fetchall()
+            for r in rows:
+                r["handlers"] = r["handlers"].split(",") if r["handlers"] else []
+            return rows
     finally:
         db.close()
 
@@ -126,18 +138,20 @@ def list_templates():
 
 @router.get("/api/part-numbers/all")
 def list_all_part_numbers():
-    """คืนรายการ part_number ทั้งหมดพร้อมรายละเอียดครบ (package_size/handler/
-    nominal/tolerance) — ใช้โดย Database Editor (edit.html) ต่างจาก
-    GET /api/part-numbers (คืนแค่ชื่อ กรองด้วย package_size — ใช้เป็น cascading
-    dropdown ของฟอร์ม Part Entry)
+    """คืนรายการ part_number ทั้งหมด — ใช้โดย Database Editor หน้า Edit
+    ต่างจาก GET /api/part-numbers (คืนแค่ชื่อ กรองด้วย package_size — ใช้เป็น
+    cascading dropdown ของฟอร์ม Part Entry)
+
+    ⚠ **ไม่มี nominal/tolerance แล้ว** — part_number ไม่ได้ถือเกณฑ์ตัดสินอีกต่อไป
+      ทุกโหมดใช้ของ `package_size` (ดู `_load_criteria` ใน shared.py)
+      ถ้าอยากรู้เกณฑ์ของ part ตัวไหน ให้ดูที่ `package_size` ที่มันผูกอยู่
     """
     db = get_db()
     try:
         with db.cursor() as cur:
             cur.execute(
                 "SELECT pn.part_number_id, pn.part_number_name, ps.package_size, "
-                "h.handler_name AS handler, pn.nominal_x, pn.nominal_y, "
-                "pn.upper_tol, pn.lower_tol, pn.offset_tol "
+                "h.handler_name AS handler "
                 "FROM part_number pn "
                 "JOIN package_size ps ON pn.package_size_id = ps.package_size_id "
                 "JOIN handler h       ON pn.handler_id = h.handler_id "
@@ -280,9 +294,17 @@ def rename_handler(handler_id: int, body: LookupUpdate):
 
 @router.delete("/api/handlers/{handler_id}")
 def delete_handler(handler_id: int):
-    # handler ถูกอ้างอิงจาก part_number.handler_id เท่านั้น (parts_specifications
-    # ไม่มี handler_id ตรงๆ แล้ว — derive ผ่าน part_number)
-    _delete_lookup("handler", "handler_id", handler_id, [("part_number", "handler_id")])
+    # ⚠ ต้องครบทุกตารางที่มี FK ชี้มาที่ handler — ตกหล่นตัวไหน MySQL จะโยน
+    #   FK constraint error ดิบออกมาเป็น **500 ที่ไม่มี CORS header** หน้าเว็บ
+    #   อ่านข้อความไม่ได้เลย (ต่างจาก 409 ที่ _delete_lookup ทำให้อ่านรู้เรื่อง)
+    #
+    #   เดิมเช็คแค่ part_number เพราะสมัยนั้น parts_specifications ยังไม่มี
+    #   handler_id และยังไม่มีตาราง package_size_handler
+    _delete_lookup("handler", "handler_id", handler_id, [
+        ("part_number", "handler_id"),
+        ("parts_specifications", "handler_id"),
+        ("package_size_handler", "handler_id"),
+    ])
     return {"ok": True}
 
 @router.post("/api/templates", status_code=201)
@@ -306,6 +328,9 @@ def create_package_size(body: PackageSizeCreate):
     try:
         with db.cursor() as cur:
             template_id = _lookup_id(cur, "template", "template_id", "template_name", body.template_name)
+            if template_id is None:
+                raise HTTPException(400, "ต้องเลือก Template — Package Size ที่ไม่มี "
+                                         "Template จะกด Start วัดไม่ได้")
             try:
                 cur.execute(
                     "INSERT INTO package_size "
@@ -319,14 +344,45 @@ def create_package_size(body: PackageSizeCreate):
                 )
             except pymysql.MySQLError as exc:
                 raise HTTPException(409, f"เพิ่ม Package Size ไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
+            new_id = cur.lastrowid
+            if body.handlers:
+                _set_package_handlers(cur, new_id, body.handlers)
             log_edit("package_size", "add", body.package_size, after={
                 "package_size": body.package_size,
                 **{f: getattr(body, f) for f in _PKG_NUM_FIELDS},
                 "template_name": body.template_name,
+                "handlers": ", ".join(body.handlers) or "—",
             })
-            return {"package_size_id": cur.lastrowid}
+            return {"package_size_id": new_id}
     finally:
         db.close()
+
+def _set_package_handlers(cur, package_size_id: int, names: List[str]) -> None:
+    """เขียนชุด handler ของ package size นี้ใหม่ทั้งชุด — ลบของเดิมแล้วใส่ที่ส่งมา
+
+    ทำไมลบทิ้งแล้วใส่ใหม่ ไม่ใช่หาว่าอันไหนเพิ่ม/อันไหนลบ: ชุดนี้มีสมาชิกไม่กี่ตัว
+    การเทียบ diff เขียนยากกว่าและพลาดง่ายกว่ามาก โดยไม่ได้เร็วขึ้นเลยในทางปฏิบัติ
+
+    ⚠ **ไม่ได้อยู่ใน transaction** — `shared.py` ตั้ง `autocommit=True` ไว้ แปลว่า
+      `DELETE` คอมมิตทันที ถ้า `INSERT` พังกลางทาง (เช่นชื่อ handler ไม่มีจริง)
+      package size นั้นจะเหลือ 0 เครื่องแทนที่จะคงของเดิมไว้
+      → จึงต้อง **แปลงชื่อเป็น id ให้ครบก่อน** แล้วค่อยแตะตาราง เพื่อให้กรณี
+        ชื่อผิดตกม้าตายตั้งแต่ยังไม่ได้ลบอะไร (เป็นสาเหตุที่เป็นไปได้มากที่สุด)
+    """
+    ids = []
+    for name in names:
+        hid = _lookup_id(cur, "handler", "handler_id", "handler_name", name)
+        if hid is None:
+            raise HTTPException(400, f"ไม่พบเครื่อง '{name}' ในระบบ")
+        ids.append(hid)
+
+    cur.execute("DELETE FROM package_size_handler WHERE package_size_id = %s", (package_size_id,))
+    for hid in ids:
+        cur.execute(
+            "INSERT INTO package_size_handler (package_size_id, handler_id) VALUES (%s, %s)",
+            (package_size_id, hid),
+        )
+
 
 @router.patch("/api/package-sizes/{package_size_id}")
 def update_package_size(package_size_id: int, body: PackageSizeUpdate):
@@ -346,24 +402,38 @@ def update_package_size(package_size_id: int, body: PackageSizeUpdate):
                 template_id = _lookup_id(cur, "template", "template_id", "template_name", body.template_name)
                 set_parts.append("template_id = %s")
                 values.append(template_id)
-            if not set_parts:
+            # ⚠ แก้ handler อย่างเดียวโดยไม่แตะฟิลด์อื่นต้องผ่านได้ — จึงเช็ค
+            #   `body.handlers is None` ด้วย ไม่ใช่ดูแค่ set_parts ว่างไหม
+            if not set_parts and body.handlers is None:
                 raise HTTPException(400, "No valid fields provided")
             # อ่านค่าเดิม (พร้อมชื่อ template ที่ join มาแล้ว) ก่อน UPDATE
             # เก็บเป็น "ชื่อ" ไม่ใช่ id เพราะประวัติต้องอ่านรู้เรื่องด้วยตาเปล่า
             old = _fetch_one(cur,
                 "SELECT ps.package_size, ps.nominal_x, ps.nominal_y, ps.upper_tol, "
-                "       ps.lower_tol, ps.offset_tol, t.template_name "
-                "FROM package_size ps LEFT JOIN template t ON ps.template_id = t.template_id "
-                "WHERE ps.package_size_id = %s", (package_size_id,))
-            try:
-                cur.execute(
-                    f"UPDATE package_size SET {', '.join(set_parts)} WHERE package_size_id = %s",
-                    (*values, package_size_id),
-                )
-            except pymysql.MySQLError as exc:
-                raise HTTPException(409, f"แก้ไข Package Size ไม่สำเร็จ (ชื่อใหม่นี้อาจมีอยู่แล้ว): {exc}")
-            if cur.rowcount == 0:
+                "       ps.lower_tol, ps.offset_tol, t.template_name, "
+                "       GROUP_CONCAT(h.handler_name ORDER BY h.handler_name) AS handlers "
+                "FROM package_size ps "
+                "LEFT JOIN template t ON ps.template_id = t.template_id "
+                "LEFT JOIN package_size_handler psh ON psh.package_size_id = ps.package_size_id "
+                "LEFT JOIN handler h ON h.handler_id = psh.handler_id "
+                "WHERE ps.package_size_id = %s "
+                "GROUP BY ps.package_size_id", (package_size_id,))
+            if old and old.get("handlers") is None:
+                old["handlers"] = "—"          # ให้ประวัติอ่านรู้เรื่องแทนช่องว่าง
+            if set_parts:
+                try:
+                    cur.execute(
+                        f"UPDATE package_size SET {', '.join(set_parts)} WHERE package_size_id = %s",
+                        (*values, package_size_id),
+                    )
+                except pymysql.MySQLError as exc:
+                    raise HTTPException(409, f"แก้ไข Package Size ไม่สำเร็จ (ชื่อใหม่นี้อาจมีอยู่แล้ว): {exc}")
+                if cur.rowcount == 0 and not old:
+                    raise HTTPException(404, "Package Size not found")
+            elif not old:
                 raise HTTPException(404, "Package Size not found")
+            if body.handlers is not None:
+                _set_package_handlers(cur, package_size_id, body.handlers)
             if old:
                 # ส่งเฉพาะฟิลด์ที่ผู้ใช้ส่งมาจริง (ที่เหลือ = ไม่ได้แตะ)
                 new = {k: v for k, v in old.items()}
@@ -371,6 +441,7 @@ def update_package_size(package_size_id: int, body: PackageSizeUpdate):
                 for f in _PKG_NUM_FIELDS:
                     if getattr(body, f) is not None: new[f] = getattr(body, f)
                 if body.template_name is not None: new["template_name"] = body.template_name
+                if body.handlers is not None: new["handlers"] = ", ".join(body.handlers) or "—"
                 log_edit("package_size", "edit", new.get("package_size") or str(package_size_id),
                          before=old, after=new)
         return {"ok": True}
@@ -379,8 +450,13 @@ def update_package_size(package_size_id: int, body: PackageSizeUpdate):
 
 @router.delete("/api/package-sizes/{package_size_id}")
 def delete_package_size(package_size_id: int):
-    # package_size ถูกอ้างอิงจาก part_number.package_size_id เท่านั้น
-    _delete_lookup("package_size", "package_size_id", package_size_id, [("part_number", "package_size_id")])
+    # ⚠ เหตุผลเดียวกับ delete_handler — ต้องครบทุกตารางที่มี FK ชี้มา ไม่งั้นได้
+    #   500 ดิบแทน 409 ที่อ่านรู้เรื่อง (เดิมเช็คแค่ part_number)
+    _delete_lookup("package_size", "package_size_id", package_size_id, [
+        ("part_number", "package_size_id"),
+        ("parts_specifications", "package_size_id"),
+        ("package_size_handler", "package_size_id"),
+    ])
     return {"ok": True}
 
 @router.post("/api/part-numbers", status_code=201)
@@ -392,24 +468,21 @@ def create_part_number(body: PartNumberCreate):
             handler_id      = _lookup_id(cur, "handler",      "handler_id",      "handler_name",  body.handler)
             if package_size_id is None or handler_id is None:
                 raise HTTPException(400, "ต้องระบุ package_size และ handler ที่มีอยู่จริงในระบบ")
+            # ⚠ ไม่มี nominal/tolerance แล้ว — part_number เหลือแค่ "ชื่อ + ผูกกับ
+            #   package_size ตัวไหน + ใช้ handler ตัวไหน" เกณฑ์ตัดสินทั้งหมดอยู่ที่
+            #   package_size ทุกโหมด (ดู `_load_criteria` ใน shared.py)
             try:
                 cur.execute(
                     "INSERT INTO part_number "
-                    "(part_number_name, package_size_id, handler_id, nominal_x, nominal_y, "
-                    " upper_tol, lower_tol, offset_tol) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
-                    (
-                        body.part_number_name, package_size_id, handler_id,
-                        body.nominal_x, body.nominal_y, body.upper_tol, body.lower_tol,
-                        body.offset_tol,
-                    ),
+                    "(part_number_name, package_size_id, handler_id) "
+                    "VALUES (%s, %s, %s)",
+                    (body.part_number_name, package_size_id, handler_id),
                 )
             except pymysql.MySQLError as exc:
                 raise HTTPException(409, f"เพิ่ม Part Number ไม่สำเร็จ (ชื่อนี้อาจมีอยู่แล้ว): {exc}")
             log_edit("part_number", "add", body.part_number_name, after={
                 "part_number_name": body.part_number_name,
                 "package_size": body.package_size, "handler": body.handler,
-                **{f: getattr(body, f, None) for f in _PN_NUM_FIELDS},
             })
             return {"part_number_id": cur.lastrowid}
     finally:
@@ -432,16 +505,12 @@ def update_part_number(part_number_id: int, body: PartNumberUpdate):
                 handler_id = _lookup_id(cur, "handler", "handler_id", "handler_name", body.handler)
                 set_parts.append("handler_id = %s")
                 values.append(handler_id)
-            for field_name in ("nominal_x", "nominal_y", "upper_tol", "lower_tol", "offset_tol"):
-                value = getattr(body, field_name)
-                if value is not None:
-                    set_parts.append(f"{field_name} = %s")
-                    values.append(value)
+            # ⚠ เดิมมีลูปเติม nominal/tolerance ตรงนี้ — ถอดออกแล้วเพราะ part_number
+            #   ไม่ได้ถือเกณฑ์อีกต่อไป แก้เกณฑ์ให้ไปแก้ที่ Package Size แทน
             if not set_parts:
                 raise HTTPException(400, "No valid fields provided")
             old = _fetch_one(cur,
-                "SELECT pn.part_number_name, ps.package_size, h.handler_name AS handler, "
-                "       pn.nominal_x, pn.nominal_y, pn.upper_tol, pn.lower_tol, pn.offset_tol "
+                "SELECT pn.part_number_name, ps.package_size, h.handler_name AS handler "
                 "FROM part_number pn "
                 "LEFT JOIN package_size ps ON pn.package_size_id = ps.package_size_id "
                 "LEFT JOIN handler h       ON pn.handler_id = h.handler_id "
@@ -458,8 +527,6 @@ def update_part_number(part_number_id: int, body: PartNumberUpdate):
                 if body.part_number_name is not None: new["part_number_name"] = body.part_number_name
                 if body.package_size is not None: new["package_size"] = body.package_size
                 if body.handler is not None: new["handler"] = body.handler
-                for f in _PN_NUM_FIELDS:
-                    if getattr(body, f, None) is not None: new[f] = getattr(body, f)
                 log_edit("part_number", "edit",
                          new.get("part_number_name") or str(part_number_id), before=old, after=new)
             if cur.rowcount == 0:

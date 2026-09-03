@@ -47,6 +47,10 @@ interface Props {
   owners: string[];
   packageSizes: string[];
   partNumbersFor: (packageSize: string) => string[];
+  /** เครื่องที่ package size นั้นลงได้ (ตาราง package_size_handler) */
+  handlersFor: (packageSize: string) => string[];
+  /** เครื่องของ part number นั้น — ใช้เติมช่อง Handler อัตโนมัติใน New/Rework */
+  handlerOfPartNumber: (partNumber: string) => string;
   onSave: (queue: EntryQueue) => void;
   onClose: () => void;
   /** ให้หน้าแม่ถามยืนยันก่อนลงทะเบียน ALPL ใหม่ (โหมด IPM)
@@ -55,6 +59,11 @@ interface Props {
   confirmRegister: (items: { alpl: number; package_size: string }[]) => Promise<boolean>;
   /** แจ้งเตือนทั่วไป (toast) — ใช้ตอน autofill เขียนทับค่าที่ผู้ใช้พิมพ์เอง */
   onNotify: (message: string) => void;
+  /** ถามยืนยันก่อนสลับโหมดตอนฟอร์มมีข้อมูลค้าง — คืน false = ยกเลิก อยู่โหมดเดิม
+   *
+   *  ให้หน้าแม่เป็นคนถาม (ไม่ใช่ window.confirm ในนี้) เพราะ dialog ของโปรเจกต์
+   *  อยู่ที่ DashboardPage ผ่าน useDialog — แบบเดียวกับ confirmRegister */
+  confirmSwitch: (target: EntryMode, current: EntryMode) => Promise<boolean>;
   /** คิวเดิมที่จะเอามาเติมในฟอร์ม — `undefined` = เปิดฟอร์มเปล่า
    *
    *  ปุ่ม "✎ Edit" กับ "+ New Entry" ใช้ฟังก์ชันเปิด modal ตัวเดียวกัน แต่ปุ่มแรก
@@ -87,8 +96,8 @@ function toFormGroups(q: EntryQueue): GroupValues[] {
 }
 
 export default function PartEntryModal({
-  operators, vendors, owners, packageSizes, partNumbersFor,
-  onSave, onClose, confirmRegister, onNotify, initial,
+  operators, vendors, owners, packageSizes, partNumbersFor, handlersFor, handlerOfPartNumber,
+  onSave, onClose, confirmRegister, confirmSwitch, onNotify, initial,
 }: Props) {
   /* ตั้งค่าเริ่มต้นจาก `initial` ครั้งเดียวตอน mount — พอเพียงเพราะหน้าแม่วาด
      modal นี้แบบ `{peModalOpen && <PartEntryModal .../>}` ทุกครั้งที่เปิดใหม่
@@ -106,13 +115,32 @@ export default function PartEntryModal({
   const [operatorError, setOperatorError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // เปลี่ยนโหมด = ล้างกลุ่มทิ้ง เพราะ field คนละชุดกัน — เก็บของเดิมไว้แล้วโชว์
-  // ในโหมดใหม่จะได้ค่าที่ไม่มีความหมาย (เช่น Part Number ที่ IPM ไม่ได้ใช้)
-  function switchMode(next: EntryMode) {
+  /** ฟอร์มมีข้อมูลที่จะหายไหม — ใช้ตัดสินว่าต้องถามยืนยันก่อนสลับโหมดไหม
+   *
+   *  ⚠ **ไม่นับ Operator** เพราะมันไม่ถูกล้างตอนสลับโหมด (ดู switchMode)
+   *    ถ้านับด้วย จะกลายเป็นถามทุกครั้งหลังเลือก Operator แล้วทั้งที่ยังไม่ได้
+   *    กรอกอะไรที่จะหายจริง
+   */
+  const formHasData = () =>
+    groups.some((g) => Object.values(g).some((v) => (v ?? "").trim() !== ""));
+
+  /** เปลี่ยนโหมด = ล้างกลุ่มทิ้ง เพราะ field คนละชุดกัน — เก็บของเดิมไว้แล้วโชว์
+   *  ในโหมดใหม่จะได้ค่าที่ไม่มีความหมาย (เช่น Part Number ที่ IPM ไม่ได้ใช้)
+   *
+   *  ⚠ **ไม่ล้าง Operator** — คนที่ยืนวัดยังเป็นคนเดิม สลับโหมดไม่ได้แปลว่า
+   *    เปลี่ยนคน (ฝั่ง vanilla เดิมล้างด้วย ซึ่งทำให้ต้องเลือกซ้ำทุกครั้ง
+   *    โดยไม่ได้ประโยชน์ — ตั้งใจไม่ทำตาม)
+   *
+   *  ⚠ ถามเฉพาะตอนฟอร์มมีข้อมูลจริง ถ้ายังว่างให้สลับได้เลย — ไม่งั้นน่ารำคาญมาก
+   *    ตอนคนแค่กดดูว่าโหมดไหนมีช่องอะไรบ้าง (ยกกติกานี้มาจาก vanilla ตรงๆ)
+   */
+  async function switchMode(next: EntryMode) {
     if (next === mode) return;
+    if (formHasData() && !(await confirmSwitch(next, mode))) return;   // ยกเลิก = อยู่โหมดเดิม
     setMode(next);
     setGroups([emptyGroup(next)]);
     setErrors({});
+    setOperatorError("");
   }
 
   async function handleSave() {
@@ -214,7 +242,10 @@ export default function PartEntryModal({
               key={m}
               type="button"
               className={`entry-toggle-btn${mode === m ? " active" : ""}`}
-              onClick={() => switchMode(m)}
+              /* ⚠ switchMode เป็น async (รอคำตอบจาก dialog) — ต้อง catch เอง
+                 ไม่งั้นถ้ามันโยน exception จะกลายเป็น unhandled rejection ที่
+                 ไม่มีอะไรแสดงบนจอเลย ผู้ใช้เห็นแค่ปุ่มกดแล้วไม่เกิดอะไรขึ้น */
+              onClick={() => { switchMode(m).catch((e) => console.error("switchMode:", e)); }}
             >
               {m}
             </button>
@@ -234,19 +265,30 @@ export default function PartEntryModal({
             value={operator}
             onChange={(e) => setOperator(e.target.value)}
           >
-            <option value="">-- เลือก Operator --</option>
+            {/* disabled hidden = โชว์ตอนยังไม่ได้เลือก แต่ไม่โผล่ในรายการตอนกดเปิด */}
+            <option value="" disabled hidden>-- เลือก Operator --</option>
             {operators.map((o) => <option key={o} value={o}>{o}</option>)}
           </select>
           <div className="field-error">{operatorError}</div>
         </div>
 
         <EntryGroups
+          /* ⚠ key ผูกกับ mode — บังคับให้ component เกิดใหม่ทั้งตัวเมื่อสลับโหมด
+             เพราะ EntryGroups ถือ state ภายในที่ผู้เรียกล้างให้ไม่ได้:
+               autoRef   ช่องไหนถูกระบบเติมค่าให้แล้วล็อกไว้
+               collapsed กลุ่มไหนถูกย่อ
+               timers    debounce ของ prefill
+             ถ้าไม่ใส่ ช่องที่ล็อกไว้ตอน IPM จะยังล็อกอยู่ในโหมด New ทั้งที่ค่าว่าง
+             → กรอกไม่ได้ → Save ไม่ผ่าน และไม่มีอะไรมาปลดล็อกให้ด้วย เพราะ
+             prefillGroup ออกตั้งแต่บรรทัดแรกเมื่อ mode === "New" */
+          key={mode}
           mode={mode}
           groups={groups}
           onChange={setGroups}
           errors={errors}
           onOverwrite={onNotify}
-          options={{ vendor: vendors, owner: owners, packageSize: packageSizes, partNumbersFor }}
+          options={{ vendor: vendors, owner: owners, packageSize: packageSizes,
+                     partNumbersFor, handlersFor, handlerOfPartNumber }}
         />
 
         <div className="entry-actions">

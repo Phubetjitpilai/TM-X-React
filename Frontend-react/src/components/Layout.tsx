@@ -122,7 +122,7 @@ export default function Layout() {
 
   // ล็อกทั้งหน้าเฉพาะ Edit/Export — หน้า Home ไม่ล็อกเพราะโอเปอเรเตอร์ต้องดู
   // Live Telemetry ระหว่างวัดต่อไปได้ (ปุ่มที่เขียน DB อย่าง Start ถูกล็อก
-  // แยกอยู่แล้วใน SessionControl)
+  // แยกอยู่แล้วในการ์ด Session Control)
   const lockPage = dbOffline && location.pathname !== "/";
 
   return (

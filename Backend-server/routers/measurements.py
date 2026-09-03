@@ -11,11 +11,14 @@ from shared import *  # noqa: F401,F403
 router = APIRouter()
 
 
-def _offset_ok(offset: Optional[float], offset_tol: Optional[float]) -> bool:
-    """offset ผ่านเกณฑ์ไหม — เทียบกับ offset_tol ของ part_number"""
-    if offset is None or offset_tol is None:
-        return True
-    return abs(offset) <= offset_tol + _TOL_EPS
+# ⚠ `_offset_ok` ย้ายไปอยู่ `shared.py` แล้ว (ก.ย. 2569) — มาถึงไฟล์นี้ผ่าน
+#   `from shared import *` ข้างบน **ห้ามประกาศซ้ำที่นี่** เพราะจะไปบัง
+#   (shadow) ตัวจริง แล้ว `_offset_state()` ใน shared.py จะใช้คนละสูตรกับ
+#   `_judge()` ที่นี่โดยไม่มี error ให้เห็นเลย
+#
+#   เหตุผลที่ต้องย้าย: `_offset_state()` ใน shared.py ต้องใช้ตัวนี้ด้วย แต่
+#   shared.py import measurements.py ไม่ได้ (ทิศทางเดียว) เดิมจึงต้องลอกสูตร
+#   ไปเขียนซ้ำ แล้วสองที่ก็เพี้ยนกันจนได้
 
 
 def _judge(
@@ -99,13 +102,16 @@ def _update_part_row(cur, number_alpl: int, config: Dict[str, Any]) -> None:
     vendor_id      = _lookup_id(cur, "vendor",      "vendor_id",      "vendor_name",      config.get("vendor"))
     owner_id       = _lookup_id(cur, "owner",       "owner_id",       "owner_name",       config.get("owner"))
     package_size_id = _lookup_id(cur, "package_size", "package_size_id", "package_size", config.get("package_size"))
+    # ⚠ ต้องเขียน handler_id ด้วย ให้ตรงกับ `_insert_part_row` — ถ้าตกหล่นที่นี่
+    #   การแก้ผ่านโหมด Rework จะไม่อัปเดตเครื่อง ทั้งที่ฟอร์มแสดงว่าเปลี่ยนแล้ว
+    handler_id = _lookup_id(cur, "handler", "handler_id", "handler_name", config.get("handler"))
     cur.execute(
         "UPDATE parts_specifications SET part_number_id = %s, package_size_id = %s, "
-        "description = %s, vendor_id = %s, po_number = %s, owner_id = %s, "
+        "handler_id = %s, description = %s, vendor_id = %s, po_number = %s, owner_id = %s, "
         "recieve_date = %s "
         "WHERE number_alpl = %s",
         (
-            part_number_id, package_size_id, config.get("description"),
+            part_number_id, package_size_id, handler_id, config.get("description"),
             vendor_id, config.get("po_number"), owner_id,
             config.get("recieve_date") or None, number_alpl,
         ),
@@ -134,53 +140,46 @@ _POS_TOP, _POS_BOTTOM, _POS_LEFT, _POS_RIGHT = "TOP", "BOTTOM", "LEFT", "RIGHT"
 _POS_CENTER = "CENTER"
 
 
-def _get_min_position_label(tr: float, tl: float, br: float, bl: float) -> str:
-    """หา "ชิ้นงานเบียดไปทางไหน" จากค่า 4 มุม — คืนรหัส 1 ใน 9 ค่า
+def _get_position_label(
+    horizon_left: float, horizon_right: float,
+    vertical_top: float, vertical_bottom: float,
+) -> str:
+    """หา "ชิ้นงานเบียดไปทางไหน" จากระยะ opening 4 ด้าน — คืนรหัส 1 ใน 9 ค่า
 
-        TOP_LEFT     TOP        TOP_RIGHT
-        LEFT         CENTER     RIGHT
-        BOTTOM_LEFT  BOTTOM     BOTTOM_RIGHT
+    คิดเป็น **2 คู่แกน** (ไม่ใช่ 4 มุมแบบตรรกะเดิม) — เทียบผลต่างของแต่ละคู่
+    แล้วดูแค่ *เครื่องหมาย* ของผลต่าง ไม่ได้ดูว่าค่าไหนน้อยที่สุด
 
-    หลักการ: **มุมที่ค่าน้อยที่สุดคือมุมที่แคบที่สุด** = ด้านที่ชิ้นงานเบียดไป
-    ถ้ามีหลายมุมน้อยเท่า ๆ กัน แปลว่าเบียดไปทาง "ด้าน" ไม่ใช่ "มุม"
+        dx = horizon_left  - horizon_right     → แกนซ้าย/ขวา
+        dy = vertical_top  - vertical_bottom   → แกนบน/ล่าง
 
-        เบียดมุมบนขวา          เบียดขอบบน            อยู่กลาง
-        tr น้อยอยู่ตัวเดียว     tr = tl น้อยเท่ากัน     ทั้ง 4 เท่ากัน
-        → TOP_RIGHT           → TOP                 → CENTER
+    ตารางผลลัพธ์ (ตามผัง Flowchart ที่ตกลงกันไว้):
 
-    ⚠ กรณี "เสมอแบบทแยง" (tr = bl แต่ tl/br ใหญ่กว่า) เป็นไปไม่ได้ในทางกายภาพ
-      สำหรับชิ้นงานที่เลื่อนขนานกัน — ถ้าเจอแปลว่าชิ้นงาน **เอียง** (rotate)
-      ไม่ใช่เลื่อน ซึ่งเป็นคนละปัญหา · คืนมุมแรกไปก่อนแทนที่จะ raise เพราะ
-      หยุดสายการผลิตด้วยเรื่องที่ยังไม่มีใครออกแบบวิธีรับมือไว้ไม่คุ้ม
-      (เห็นได้จาก log ว่าเกิดบ่อยแค่ไหนก่อนค่อยตัดสินใจ)
+                    dy > 0        dy = 0        dy < 0
+        dx > 0    TOP LEFT        LEFT       BOTTOM LEFT
+        dx = 0       TOP         CENTER        BOTTOM
+        dx < 0   TOP RIGHT        RIGHT     BOTTOM RIGHT
+
+    ⚠ **"= 0" ไม่ได้แปลว่าเท่ากันเป๊ะ** — ใช้ `_POS_TIE_EPS` เป็นเขตตาย
+      (deadband) เพราะค่าที่วัดจากของจริงไม่มีทางเท่ากันพอดี ถ้าเทียบ `== 0`
+      ตรง ๆ จะไม่มีวันได้ CENTER/TOP/LEFT เลย เหลือแต่ 4 มุม
+      ปรับความกว้างได้จาก `OFFSET_POS_TIE_EPS` ใน .env
+
+    ⚠ ตรรกะนี้ **ไม่มีทางล้มเหลว** — ทุก input ตกลงช่องใดช่องหนึ่งใน 9 ช่องเสมอ
+      จึงไม่มีเคส warning แบบ "เสมอทแยง" ของตรรกะเดิมอีกต่อไป (เคสชิ้นงานเอียง
+      ตอนนี้จะถูกกลืนเป็นตำแหน่งใดตำแหน่งหนึ่งเงียบ ๆ แทนที่จะขึ้น log)
     """
-    corners = {_POS_TR: tr, _POS_TL: tl, _POS_BR: br, _POS_BL: bl}
-    lo = min(corners.values())
+    dx = horizon_left - horizon_right      # + = เบียดไปทางซ้าย
+    dy = vertical_top - vertical_bottom    # + = เบียดขึ้นบน
 
-    # มุมทั้งหมดที่ "น้อยที่สุดเท่ากัน" ภายในระยะ eps
-    tied = {name for name, v in corners.items() if v - lo <= _POS_TIE_EPS}
+    # -1 / 0 / +1 โดยมีเขตตายกว้าง _POS_TIE_EPS รอบศูนย์
+    sx = 0 if abs(dx) <= _POS_TIE_EPS else (1 if dx > 0 else -1)
+    sy = 0 if abs(dy) <= _POS_TIE_EPS else (1 if dy > 0 else -1)
 
-    if len(tied) >= 4:
-        return _POS_CENTER                      # ไม่เบียดทางไหนเลย
-    if len(tied) == 1:
-        return next(iter(tied))                 # เบียดมุมเดียวชัดเจน
-
-    # เสมอ 2 มุม (หรือ 3 ซึ่งเกิดจาก eps กว้างไป) — ดูว่าคู่ไหนประกอบเป็นด้าน
-    for edge, pair in (
-        (_POS_TOP,    {_POS_TR, _POS_TL}),
-        (_POS_BOTTOM, {_POS_BR, _POS_BL}),
-        (_POS_RIGHT,  {_POS_TR, _POS_BR}),
-        (_POS_LEFT,   {_POS_TL, _POS_BL}),
-    ):
-        if pair <= tied:
-            return edge
-
-    # เหลือแต่คู่ทแยง — ดูหมายเหตุใน docstring
-    log.warning(
-        "offset_pos: มุมที่แคบสุดเสมอกันแบบทแยง (tr=%s tl=%s br=%s bl=%s) "
-        "— ชิ้นงานอาจเอียงไม่ใช่เลื่อน", tr, tl, br, bl,
-    )
-    return sorted(tied)[0]
+    return {
+        ( 1,  1): _POS_TL, ( 1, 0): _POS_LEFT,   ( 1, -1): _POS_BL,
+        ( 0,  1): _POS_TOP, (0, 0): _POS_CENTER, ( 0, -1): _POS_BOTTOM,
+        (-1,  1): _POS_TR, (-1, 0): _POS_RIGHT,  (-1, -1): _POS_BR,
+    }[(sx, sy)]
 
 
 @router.get("/api/measurements")
@@ -216,6 +215,13 @@ def list_measurements(
                 (*params, limit, offset),
             )
             items = cur.fetchall()
+        # ⚠ แปะผลตัดสินรายแกนไปด้วย — หน้าเว็บ **ต้องไม่คำนวณเอง**
+        #   คอลัมน์ `result` เป็นผลรวมของทั้งแถว (X ผ่านแต่ Y ไม่ผ่าน → NG)
+        #   ระบายสีช่อง X ด้วย `result` จึงผิด · เดิม frontend เลยไปคำนวณ
+        #   `nominal ± tol` ใหม่เองโดยไม่ปัดทศนิยม แล้วชิ้นที่ตกขอบพอดีขึ้น
+        #   สีแดงทั้งที่ `result` บอก OK — ดู `_ok_flags` ใน shared.py
+        for it in items:
+            it.update(_ok_flags(it))
         return {"items": items, "total": total}
     finally:
         db.close()
@@ -290,7 +296,9 @@ async def create_measurement(req: MeasurementCreate):
             part = _load_criteria(cur, number_alpl, measure_type)
 
             # ── คำนวณหาตำแหน่ง Offset ที่น้อยที่สุด (OP) ─────────────────
-            offset_pos_op = _get_min_position_label(req.tr_op, req.tl_op, req.br_op, req.bl_op)
+            offset_pos_op = _get_position_label(
+                req.horizon_left, req.horizon_right, req.vertical_top, req.vertical_bottom,
+            )
 
             # ── [FIX 1] ส่ง Parameter ให้ครบทั้ง 8 ตัว ──────────────────────────
             verdict = _judge(

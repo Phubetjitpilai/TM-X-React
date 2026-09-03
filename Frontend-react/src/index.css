@@ -251,7 +251,7 @@ button.topbar-link {
 }
 
 /* ── ปุ่มมาตรฐาน (ยกจาก Frontend/shared.css + edit.html) ──────────────────
-   ⚠ 3 คลาสนี้ถูกใช้ใน ConfirmDialog / PartEntry / SessionControl / Measurements
+   ⚠ 3 คลาสนี้ถูกใช้ใน ConfirmDialog / PartEntryModal / DashboardPage / Measurements
      มาตั้งแต่แรกแต่ **ไม่เคยมีนิยาม** — ปุ่มจึงออกมาเป็นปุ่มเปล่าของเบราว์เซอร์
      เป็นบั๊กชนิดเดียวกับ .mock-banner ฝั่ง vanilla คือ "ใช้คลาสที่ไม่มีอยู่จริง"
      ซึ่งไม่มี error อะไรเตือนเลย ต้องไล่เทียบเอง                            */
@@ -1896,3 +1896,76 @@ tr[data-clickable] { cursor: pointer; }
   border-left: 2px solid var(--border); padding: 0.3rem 0 0.3rem 0.8rem;
   margin: 0.2rem 0 0.2rem 0.4rem; font-size: 0.78rem; line-height: 1.9;
 }
+
+/* ── MultiSelectCell — dropdown เลือกหลายค่าสำหรับ *ช่องในตาราง* ────────────────────────────
+   ใช้ที่ตาราง Lookup → Package Size (ช่อง Handlers)
+
+   ⚠ prefix เป็น `msc-` ไม่ใช่ `ms-` เพราะ `.ms-*` เป็นของ MultiSelect ที่หน้า
+     Export ใช้อยู่แล้ว (บรรทัด ~829) — ชื่อชนกันเมื่อไหร่ตัวล่างจะทับตัวบน
+     แล้วช่องกรองในหน้า Export จะเพี้ยนโดยไม่มีอะไรเตือน
+
+   ⚠ ตัว panel ใช้ `position: absolute` เทียบกับ `.msc` ที่เป็น relative
+     — ห้ามให้ตัวแม่ที่ครอบอยู่ (`td`, `.lookup-table`) ตั้ง `overflow: hidden`
+     ไม่งั้นรายการจะถูกตัดหายไปครึ่งหนึ่งตอนกางออกมา                        */
+.msc { position: relative; display: inline-block; }
+
+.msc-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  font: inherit;
+  font-size: 0.83rem;
+  padding: 0.35rem 0.6rem;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.msc-toggle:hover:not(:disabled) { border-color: var(--accent); }
+.msc-toggle:disabled { opacity: 0.55; cursor: not-allowed; }
+/* ตอนกางอยู่ ตัดขอบล่างออกให้ต่อเป็นชิ้นเดียวกับ panel */
+.msc-toggle.open {
+  border-color: var(--accent);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+/* ยังไม่ได้เลือกเลย = เตือนเบาๆ ไม่ใช่ error — ยังบันทึกได้ (ดู optional ใน config) */
+.msc-toggle.empty { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+
+.msc-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msc-caret { font-size: 0.7rem; color: var(--muted); flex: none; }
+
+.msc-panel {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 40;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-top: none;
+  border-radius: 0 0 var(--radius) var(--radius);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .10);
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.msc-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.6rem;
+  font-size: 0.83rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.msc-item + .msc-item { border-top: 1px solid var(--surface2); }
+.msc-item:hover { background: var(--surface2); }
+.msc-item.on { background: rgba(55,138,222,.12); color: var(--accent); font-weight: 600; }
+.msc-item input { cursor: pointer; }
+
+.msc-empty { padding: 0.6rem; font-size: 0.8rem; color: var(--muted); text-align: center; }

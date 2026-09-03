@@ -185,16 +185,16 @@ def _parse_measurement_line(line: str):
     try:
         value_x = float(parts[0])
         value_y = float(parts[1])
-        tr_op = float(parts[2])
-        tl_op = float(parts[3])
-        bl_op = float(parts[4])
-        br_op = float(parts[5])
+        horizon_left = float(parts[2])
+        horizon_right = float(parts[3])
+        vertical_bottom = float(parts[4])
+        vertical_top = float(parts[5])
         offset_opx = float(parts[6])
         offset_opy = float(parts[7])
 
     except ValueError:
         return None
-    return value_x, value_y,tr_op, tl_op, bl_op, br_op, offset_opx, offset_opy
+    return value_x, value_y,horizon_left, horizon_right, vertical_bottom, vertical_top, offset_opx, offset_opy
 
 
 def _read_lines(path: str):
@@ -220,7 +220,7 @@ def _find_measurement_for_image(timeout: float = TXT_WAIT_TIMEOUT):
       · .txt ย้อนกลับไปที่ 1 แถวทุกครั้งที่ขึ้นไฟล์ใหม่
     ดูที่ไฟล์โตขึ้นหรือเปล่าอย่างเดียวจึงทนต่อทั้งสามเรื่องนี้
 
-    คืน (value_x, value_y, tr_op, tl_op, bl_op, br_op, offset_opx, offset_opy)
+    คืน (value_x, value_y, horizon_left, horizon_right, vertical_bottom, vertical_top, offset_opx, offset_opy)
     หรือ None ถ้าหมดเวลาแล้วยังไม่มีบรรทัดใหม่
     """
     global _txt_cursor_path, _txt_cursor_rows
@@ -282,7 +282,7 @@ def get_current_session():
 def post_to_backend(
     session_id,
     value_x, value_y,
-    tr_op, tl_op, bl_op, br_op,
+    horizon_left, horizon_right, vertical_bottom, vertical_top,
     offset_opx, offset_opy
 ):
     """POST ค่าเข้า backend — format ตรงตาม MeasurementCreate ใน main.py
@@ -299,10 +299,10 @@ def post_to_backend(
             "value_y":     value_y,
 
             # ── กลุ่มค่าตัวเทียบ Pos OP ──
-            "tr_op":       tr_op,
-            "tl_op":       tl_op,
-            "bl_op":       bl_op,
-            "br_op":       br_op,
+            "horizon_left":       horizon_left,
+            "horizon_right":       horizon_right,
+            "vertical_bottom":       vertical_bottom,
+            "vertical_top":       vertical_top,
 
             # ── กลุ่มค่า Offset ──
             "offset_opx":  offset_opx,
@@ -498,7 +498,7 @@ def _handle_capture_inner(image_path, t_recv):
         return
     (
     value_x, value_y,
-    tr_op, tl_op, bl_op, br_op,
+    horizon_left, horizon_right, vertical_bottom, vertical_top,
     offset_opx, offset_opy
     ) = pair
 
@@ -515,14 +515,14 @@ def _handle_capture_inner(image_path, t_recv):
     print(
     f"✅ {name} ({size_mb:.1f} MB) → "
     f"value_x={value_x} value_y={value_y} "
-    f"tr_op={tr_op} tl_op={tl_op} bl_op={bl_op} br_op={br_op} "
+    f"horizon_left={horizon_left} horizon_right={horizon_right} vertical_bottom={vertical_bottom} vertical_top={vertical_top} "
     f"offset_opx={offset_opx} offset_opy={offset_opy}"
     )
     try:
         resp = post_to_backend(
         session_id,
         value_x, value_y,
-        tr_op, tl_op, bl_op, br_op,
+        horizon_left, horizon_right, vertical_bottom, vertical_top,
         offset_opx, offset_opy
         )
     except Exception as exc:

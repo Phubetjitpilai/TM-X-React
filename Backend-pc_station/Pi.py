@@ -57,10 +57,16 @@ def _idx(name, default):
 
 GM_IDX_X      = _idx("GM_IDX_X", "0")
 GM_IDX_Y      = _idx("GM_IDX_Y", "1")
-GM_IDX_TR_OFFSET   = _idx("GM_IDX_TR_OFFSET", "2")
-GM_IDX_TL_OFFSET   = _idx("GM_IDX_TL_OFFSET", "3")
-GM_IDX_BL_OFFSET   = _idx("GM_IDX_BL_OFFSET", "4")
-GM_IDX_BR_OFFSET   = _idx("GM_IDX_BR_OFFSET", "5")
+# ระยะ opening 4 ด้าน — จับเป็น 2 คู่แกน ไม่ใช่ 4 มุม
+#
+# ⚠⚠ ชื่อคีย์เปลี่ยนแล้ว (เดิม GM_IDX_TR/TL/BL/BR_OFFSET) — **ต้องแก้ `.env` บน
+#     เครื่อง Pi จริงให้ตรงด้วย** ไม่งั้น `_idx()` จะหาคีย์ไม่เจอแล้ว **คืนค่า
+#     default ให้เงียบๆ ไม่มี error** ถ้าเครื่องนั้นเคยตั้งช่องไว้ไม่ตรงกับ
+#     default มันจะอ่านค่าจากช่องผิดตลอดทั้ง session โดยไม่มีอะไรเตือนเลย
+GM_IDX_HORIZON_LEFT    = _idx("GM_IDX_HORIZON_LEFT", "2")
+GM_IDX_HORIZON_RIGHT   = _idx("GM_IDX_HORIZON_RIGHT", "3")
+GM_IDX_VERTICAL_TOP    = _idx("GM_IDX_VERTICAL_TOP", "4")
+GM_IDX_VERTICAL_BOTTOM = _idx("GM_IDX_VERTICAL_BOTTOM", "5")
 GM_IDX_OFFSET_X = _idx("GM_IDX_OFFSET_X", "6")    
 GM_IDX_OFFSET_Y = _idx("GM_IDX_OFFSET_Y", "7") 
 
@@ -427,7 +433,14 @@ def trigger_tmx(sock):
 def judge(x, y, offset_x, offset_y, limits):
     """ตัดสิน OK/NG จาก limits ที่ Backend คำนวณมาให้ — คืน ("OK"|"NG", เหตุผล[])
 
-    เทียบขอบตรงๆ ไม่ต้องคำนวณอะไรเอง เพราะ Backend บวก/ลบ _TOL_EPS มาให้แล้ว
+    เทียบขอบตรงๆ ไม่ต้องคำนวณอะไรเอง เพราะ Backend ปัดทศนิยมมาให้เรียบร้อยแล้ว
+    (ดู `_limits_of` ใน `routers/session.py`)
+
+    ⚠ **ห้ามปัดค่า x/y ซ้ำที่นี่** — ค่าฝั่งนี้มาจากการ parse ข้อความ `GM` ตรง ๆ
+      ไม่เคยผ่านคอลัมน์ FLOAT จึงไม่มีหางให้ต้องปัด · `float("8.05")` กับขอบที่
+      backend ปัดมาแล้วเป็น double ตัวเดียวกันเป๊ะอยู่แล้ว ปัดซ้ำมีแต่จะทำให้
+      กฎการปัดไปอยู่ 2 ที่แล้วเพี้ยนกันวันหลัง
+
     `offset_max = None` → โหมดนี้ไม่ตรวจ offset (IPM) ให้ถือว่าผ่าน
     """
 
@@ -448,11 +461,9 @@ def judge(x, y, offset_x, offset_y, limits):
     return ("NG" if reasons else "OK"), reasons
 
 def clean_tools(tools):
-    """คัดกรองเอาเฉพาะข้อมูลที่สถานะ (index 1) ไม่เป็น 0 และ 3"""
     if not tools:
         return []
-        # กรองเอาเฉพาะ item ที่สถานะไม่ใช่ 0 หรือ 3 (รองรับทั้ง int และ string)
-    return [item for item in tools if str(item[0]) not in "-9999.999"]
+    return [item for item in tools if item[0] is not None and item[0] >= 0]
 
             # ── ดึงค่าออกมาตาม index ที่ตั้งไว้ ────────────────────────────
 def _val(idx,tools):
@@ -489,13 +500,13 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
             tools_new = clean_tools(tools)
             print(tools_new)
         
-            x, y, tr_op, tl_op, bl_op, br_op, offset_x, offset_y = (
+            x, y, horizon_left, horizon_right, vertical_top, vertical_bottom, offset_x, offset_y = (
             _val(GM_IDX_X,tools_new),
             _val(GM_IDX_Y,tools_new),
-            _val(GM_IDX_TR_OFFSET,tools_new),
-            _val(GM_IDX_TL_OFFSET,tools_new),
-            _val(GM_IDX_BL_OFFSET,tools_new),
-            _val(GM_IDX_BR_OFFSET,tools_new),
+            _val(GM_IDX_HORIZON_LEFT,tools_new),
+            _val(GM_IDX_HORIZON_RIGHT,tools_new),
+            _val(GM_IDX_VERTICAL_TOP,tools_new),
+            _val(GM_IDX_VERTICAL_BOTTOM,tools_new),
             _val(GM_IDX_OFFSET_X,tools_new), 
             _val(GM_IDX_OFFSET_Y,tools_new)
              )
@@ -515,7 +526,7 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
                 if tmx_says != result:
                     print(f"   ⚠️ TM-X ตัดสินว่า {tmx_says} แต่เราคำนวณได้ {result} — "
                           f"tolerance ในโปรแกรมวัดกับใน DB อาจเพี้ยนกันแล้ว")'''
-            return result, x, y, tr_op, tl_op, bl_op, br_op, offset_x, offset_y
+            return result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom,offset_x, offset_y
         time.sleep(GM_POLL_INTERVAL)
 
     print(f"   ⚠️ รอ {timeout:.0f} วิแล้ว GM ยังไม่คืนค่าใหม่ (ถาม {polls} ครั้ง) "
@@ -608,7 +619,7 @@ def handle_error(kind, session_id, piece, target, detail, rounds) -> bool:
 
     return ask_user(session_id, piece, target) == "retry"
 
-def post_measurement_from_pi(session_id, piece, x, y, tr_op, tl_op, bl_op, br_op,
+def post_measurement_from_pi(session_id, piece, x, y, horizon_left, horizon_right, vertical_top, vertical_bottom,
                              offset_x, offset_y) -> bool:
     """POST ค่าที่ Pi อ่านจาก GM เข้า Backend แทน Recieve — คืน True ถ้าสำเร็จ
 
@@ -631,10 +642,10 @@ def post_measurement_from_pi(session_id, piece, x, y, tr_op, tl_op, bl_op, br_op
         "session_id":  session_id,
         "value_x":     x,
         "value_y":     y,
-        "tr_op":       tr_op,
-        "tl_op":       tl_op,
-        "bl_op":       bl_op,
-        "br_op":       br_op,
+        "horizon_left":       horizon_left,
+        "horizon_right":       horizon_right,
+        "vertical_top":       vertical_top,
+        "vertical_bottom":       vertical_bottom,
         "offset_opx":  offset_x,
         "offset_opy":  offset_y,
         "note":        "ค่าจาก Pi (GM) — Recieve ส่งไม่ถึง ไม่มีรูป",
@@ -746,7 +757,7 @@ def command_flow(session_id, groups, target_count):
             # ── ③ วน GM จนได้ค่า ────────────────────────────────────────────
             rounds = 0
             while True:
-                result, x, y, tr_op, tl_op, bl_op, br_op, offset_x, offset_y = get_measurement_tmx(client_socket, groups[0].limits)
+                result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom, offset_x, offset_y = get_measurement_tmx(client_socket, groups[0].limits)
                 if result != "UNKNOWN":
                     break
                 rounds += 1
@@ -794,7 +805,7 @@ def command_flow(session_id, groups, target_count):
                 continue
 
             if not post_measurement_from_pi(session_id, piece, x, y,
-                                            tr_op, tl_op, bl_op, br_op,
+                                            horizon_left, horizon_right, vertical_top, vertical_bottom,
                                             offset_x, offset_y):
                 stop_reason = f"ชิ้นที่ {piece}/{target_count}: บันทึกค่าจาก Pi ไม่สำเร็จ"
                 break
