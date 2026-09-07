@@ -1,9 +1,37 @@
+"""Pi_test.py — Pi.py ฉบับตัด Backend/DB ออก สำหรับเทสต์ร่วมกับ MCU
+
+⚠⚠ **ห้ามเอาไฟล์นี้ไปใช้หน้างานเด็ดขาด** — ค่าที่วัดได้ถูกเก็บไว้ในหน่วยความจำ
+    เท่านั้น ปิดโปรแกรมแล้วหายหมด ไม่มีอะไรลงฐานข้อมูลจริง
+
+สร้างจาก Pi.py โดยแทน **เฉพาะ 6 ฟังก์ชันที่ยิง HTTP ไปหา backend** ด้วยของจำลอง
+ที่เหลือ (การคุย TM-X, ตรรกะการวัด, การตัดสิน OK/NG, การจัดการ error) เหมือนเดิม
+ทุกบรรทัด — จะได้เทสต์สิ่งที่ต้องเทสต์จริง ๆ
+
+    ฟังก์ชันที่ถูกแทน   get_measured_count · heartbeat_loop · wait_for_trigger_mcu
+                       report · ask_user · post_measurement_from_pi
+
+วิธีใช้ (ไม่ต้องมี backend / MySQL / Data-receiver เลย)
+
+    python Pi_test.py
+
+    แล้วสั่งงานผ่านเบราว์เซอร์หรือ curl ที่พอร์ต 9998
+      เริ่มวัด     http://127.0.0.1:9998/start?count=3
+      หยุด        http://127.0.0.1:9998/stop
+      ดูสถานะ     http://127.0.0.1:9998/status
+      ดูค่าที่เก็บ  http://127.0.0.1:9998/mock/db
+
+⚠⚠ **ตัวสั่งวัดรายชิ้น (trigger) ยังไม่มีในไฟล์นี้** — ต้องเขียนเพิ่มเองที่
+    `wait_for_trigger_mcu()` ให้ไปอ่านสัญญาณจาก MCU · ตอนนี้กด /start แล้วจะ
+    ค้างอยู่ที่ "รอสัญญาณจาก MCU ..." ตลอดจนกว่าจะยิง /stop ซึ่งถูกต้องแล้ว
+    ไม่ใช่โปรแกรมแฮงก์ · อ่านสัญญา 3 ข้อใน docstring ของฟังก์ชันนั้นก่อนแก้
+
+⚠ ต้องมี ESP (หรืออะไรก็ได้) ฟัง TCP อยู่ที่ TMX_HOST:TMX_PORT ใน .env และตอบ
+  ตามรูปแบบใน ESP_PROTOCOL.md ไม่งั้นจะติดตั้งแต่ขั้น R0
+"""
 import os
 import socket
 import threading
 import time
-
-import httpx
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -25,6 +53,7 @@ TMX_PORT = int(os.getenv("TMX_PORT", 8600))
 BUFFER_SIZE = 1024
 
 TRIGGER_COMMAND = "T1\r"
+TRIGGER_TIMEOUT = 2.0  # วินาที — รอ response จาก TM-X หลังส่ง trigger
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 AGENT_PORT = int(os.getenv("AGENT_PORT", 9998))
@@ -35,8 +64,8 @@ HB_TIMEOUT_HINT = float(os.getenv("HEARTBEAT_TIMEOUT", 15))
 MEASURE_TIMEOUT       = float(os.getenv("MEASURE_TIMEOUT", 15))    # รอค่าสูงสุดกี่วินาที
 MEASURE_POLL_INTERVAL = float(os.getenv("MEASURE_POLL_INTERVAL", 0.4))
 
-SOCKET_TIMEOUT   = float(os.getenv("SOCKET_TIMEOUT", 5))
 # ── GM: ดึงค่าที่วัดได้จาก TM-X โดยตรง ──────────────────────────────────────
+SOCKET_TIMEOUT   = float(os.getenv("SOCKET_TIMEOUT", 5))
 GM_POLL_INTERVAL = 0.02                                  # 20 ms
 GM_MAX_WAIT      = float(os.getenv("GM_MAX_WAIT", 8))    # รอค่าสูงสุดต่อชิ้น
 NO_VALUE_ABS     = 9999.0        # |ค่า| >= นี้ = TM-X ยังวัดไม่เสร็จ/วัดไม่ติด
@@ -45,14 +74,7 @@ NO_VALUE_ABS     = 9999.0        # |ค่า| >= นี้ = TM-X ยังว�
 T1_RETRY = int(os.getenv("T1_RETRY", 3))
 T1_RETRY_WAIT = float(os.getenv("T1_RETRY_WAIT", 0.3))
 
-# รอกี่วินาทีหลังส่ง `PW` ก่อนจะเริ่มวัด — TM-X ต้องโหลดโปรแกรมจากการ์ด SD
-# และ RESET ที่พ่วงมาทำให้ READY ดับชั่วคราว ยิง `T1` เร็วเกินไปจะได้ `ER,T1,03`
-#
-# ⚠ ตัวนี้ถูกใช้ **ทุกครั้งที่ข้ามรอยต่อกลุ่ม** ไม่ใช่แค่ตอนเริ่ม session แล้ว
-#   ตั้งสูงไปจะช้าทุกกลุ่ม ตั้งต่ำไปชิ้นแรกของกลุ่มจะพังแล้วเด้งถามผู้ใช้
-PW_LOAD_WAIT = float(os.getenv("PW_LOAD_WAIT", 1.0))
-
-MAX_ASK_USER_ROUNDS = int(os.getenv("MAX_ASK_USER_ROUNDS", 4))
+MAX_ASK_USER_ROUNDS = int(os.getenv("MAX_ASK_USER_ROUNDS", 3))
 
 _answer_event  = threading.Event()
 _answer_action = None                  # "retry" | "stop" | None
@@ -61,7 +83,7 @@ _answer_lock   = threading.Lock()
 # รอคำตอบจากคนได้นานสุดกี่วิ — ต้อง **มากกว่า** ตัวนับถอยหลังในหน้าเว็บ (60 วิ)
 # เพราะคนกดหยุดเองหรือหน้าเว็บกดให้อัตโนมัติก็ตาม คำตอบจะวิ่งกลับมาทางเดียวกัน
 # ตัวนี้เป็นแค่ตาข่ายกันค้างถาวรตอนหน้าเว็บไม่ได้เปิดอยู่เลย
-ASK_USER_TIMEOUT = float(os.getenv("ASK_USER_TIMEOUT", 70))
+ASK_USER_TIMEOUT = float(os.getenv("ASK_USER_TIMEOUT", 60))
 
 # คำสั่งล้างค่าเก่า — คู่มือหน้า 5-9 พิมพ์ 2 แบบไม่ตรงกันเอง ต้องลองเอง
 CLEAR_CANDIDATES = ["MRS", "MSR"]
@@ -92,17 +114,50 @@ GM_IDX_OFFSET_Y = _idx("GM_IDX_OFFSET_Y", "7")
 # กด Start → NameError
 is_running = False          # ตอนนี้มี session กำลังวัดอยู่ไหม (ไม่ใช่ "สคริปต์รันอยู่ไหม")
 current_session_id = None   # session ที่กำลังวัด (None = idle) heartbeat แนบไปด้วย
-_tmx_sock = None            # socket ที่ค้างไว้คุย TM-X ให้ stop handler ยิง S0 ได้
 _hb_last_ok = time.time()   # เวลาที่ heartbeat ยิงออกสำเร็จครั้งล่าสุด
 
-# "กระดิ่ง" ที่บอกว่าชิ้นงานเข้าที่พร้อมวัดแล้ว — ตอนนี้มาจาก curl /trigger
-# พอต่อ MCU จริงค่อยเพิ่ม thread อ่าน Serial แล้วเรียก _trigger.set() บรรทัดเดียว
-# ตัวรอไม่ต้องแก้เลย เพราะ Event รับสัญญาณจากหลายแหล่งได้
-_trigger = threading.Event()
+# ══════════════════════════════════════════════════════════════════════════
+# [MOCK] ฐานข้อมูลจำลอง — แทน MySQL + Backend ทั้งก้อน
+# ══════════════════════════════════════════════════════════════════════════
+# ⚠ อยู่ในหน่วยความจำล้วน ปิดโปรแกรมแล้วหาย · มีไว้ให้ flow เดินได้ครบเท่านั้น
+#
+# ⚠ ต้องมี lock เพราะถูกอ่าน/เขียนจาก 3 เธรด: เธรด HTTP (endpoint),
+#   เธรด command_flow, และเธรดตั้งเวลาของ _mock_schedule_measurement()
+_mock_lock = threading.Lock()
+_mock_db = {
+    "session_id":     None,
+    "state":          "idle",     # idle | running | stopped
+    "target_count":   0,
+    "measured_count": 0,
+    "reason":         None,
+    "rows":           [],         # ค่าที่ "บันทึกลง DB" แล้ว
+}
 
-# ตอนนี้อยู่ในช่วง "รอสัญญาณ" จริงหรือยัง — endpoint ใช้ตอบให้ตรงความจริงว่า
-# สัญญาณที่ยิงมาจะถูกใช้หรือถูกทิ้ง ไม่งั้น curl แล้วเครื่องไม่ขยับจะนึกว่าพัง
-_waiting_for_trigger = False
+# หน่วงกี่วินาทีหลังยิง T1 ก่อนจะถือว่า "ค่าเข้า DB แล้ว"
+#   จำลองเวลาที่ TM-X ส่งไฟล์ทาง FTP มาให้ Data-receiver แล้ว POST เข้า backend
+#
+# ⚠ ตั้งให้ **มากกว่า MEASURE_TIMEOUT** เมื่อไหร่ จะได้ทดสอบเส้นทาง
+#   "วัดได้แต่ค่าไม่ถึง DB" ที่เด้งถาม retry / accept / stop
+MOCK_MEASURE_DELAY = float(os.getenv("MOCK_MEASURE_DELAY", 1.0))
+
+
+def _mock_schedule_measurement():
+    """ตั้งเวลาเพิ่ม measured_count — เลียนแบบ Data-receiver ที่รับไฟล์ FTP แล้ว POST"""
+    def _bump():
+        time.sleep(MOCK_MEASURE_DELAY)
+        with _mock_lock:
+            if _mock_db["state"] != "running":
+                return                      # session ปิดไปแล้ว ค่าที่มาช้าถูกทิ้ง
+            _mock_db["measured_count"] += 1
+            _mock_db["rows"].append({"source": "mock-ftp",
+                                     "n": _mock_db["measured_count"]})
+            n, t = _mock_db["measured_count"], _mock_db["target_count"]
+            if n >= t:
+                _mock_db["state"] = "stopped"
+                _mock_db["reason"] = "วัดครบตามจำนวนแล้ว"
+        log.info("   📥 [MOCK] ค่าเข้า DB แล้ว (%s/%s)", n, t)
+    threading.Thread(target=_bump, daemon=True).start()
+
 
 http_app = FastAPI()
 
@@ -125,12 +180,7 @@ class CommandRequest(BaseModel):
 async def command(req: CommandRequest):
     global is_running, _answer_action
     if req.action == "start":
-        try:
-            httpx.post(f"{BACKEND_URL}/api/heartbeat",
-                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
-                timeout=5)
-        except Exception:
-            pass
+        # [MOCK] ถอด httpx.post /api/heartbeat ออก — ไม่มี backend ให้แจ้ง
         log.info("\n ได้รับคำสั่ง Start จาก Backend")
         groups = req.groups
         if not groups:
@@ -145,8 +195,9 @@ async def command(req: CommandRequest):
             raise HTTPException(400, "มี ALPL ซ้ำข้ามกลุ่ม")
         if req.target_count != len(all_alpl):
             raise HTTPException(400, f"target_count ({req.target_count}) ไม่เท่ากับจำนวน ALPL รวมทุกกลุ่ม ({len(all_alpl)})")
-        if any(not g.template_name for g in groups):
-            raise HTTPException(400, "มีกลุ่มที่ไม่ได้ระบุ `template_name`")
+        templates = {g.template_name for g in groups}
+        if len(templates) > 1:
+            raise HTTPException(400, f"Pi ยังรองรับ template เดียวต่อ session — ได้มา {sorted(templates)}")
 
         with _answer_lock:
             _answer_action = None
@@ -176,25 +227,6 @@ async def command(req: CommandRequest):
             _answer_action = "accept"
         _answer_event.set()    
 
-    elif req.action == "trigger":
-        # ปุ่มจำลองทริกเกอร์บนหน้าเว็บ (ใช้ชั่วคราวระหว่างที่ยังไม่มี MCU)
-        #
-        # เส้นทางคือ เบราว์เซอร์ → Backend → ที่นี่ **ไม่ให้เบราว์เซอร์ยิงตรงมา**
-        # เพราะหน้าเว็บจะต้องรู้ IP ของ Pi เอง และต้องเปิด CORS ที่นี่เพิ่ม
-        #
-        # guard ชุดเดียวกับ /trigger เป๊ะ แต่ตอบเป็น HTTP error แทน {"ok": False}
-        # เพื่อให้ Backend แยกออกว่าถูกปฏิเสธ ไม่ใช่สำเร็จ แล้วส่งเหตุผลถึงหน้าเว็บได้
-        if not is_running:
-            raise HTTPException(400, "ไม่มี session กำลังวัดอยู่ — กด Start ที่หน้าเว็บก่อน")
-        if not _waiting_for_trigger:
-            raise HTTPException(
-                409,
-                "ยังไม่ถึงช่วงรอสัญญาณ — ระบบกำลังโหลดโปรแกรมวัด "
-                "หรือกำลังรอผลของชิ้นก่อนหน้าอยู่",
-            )
-        _trigger.set()
-        log.info("⚡ ได้รับสัญญาณ trigger (จากปุ่มบนหน้าเว็บ)")
-
     elif req.action == "stop":
         is_running = False
         # ⚠ ต้อง set ด้วย ไม่งั้นกด Stop ตอน modal เปิดอยู่
@@ -206,53 +238,24 @@ async def command(req: CommandRequest):
         raise HTTPException(
             400,
             f"ไม่รู้จัก action '{req.action}' — ตอนนี้รองรับแค่ "
-            f"start/stop/retry/accept/trigger",
+            f"start/stop/retry/accept",
         )
     return {"status": "ok", "action": req.action}
 
-@http_app.api_route("/trigger", methods=["GET", "POST"])
-async def trigger():
-    """จำลองเซนเซอร์ — ยิงอะไรมาก็ได้ที่ URL นี้ = "ชิ้นงานเข้าที่แล้ว วัดได้เลย"
-
-        curl -X POST http://<ip-ของ-pi>:9998/trigger
-
-    guard 2 ชั้น ตอบให้ตรงความจริงว่าสัญญาณจะถูกใช้หรือถูกทิ้ง — ไม่งั้นยิงมาแล้ว
-    เครื่องไม่ขยับจะนึกว่าระบบพัง แล้วหาสาเหตุไม่เจอ
-    """
-    if not is_running:
-        return {"ok": False, "reason": "ไม่มี session กำลังวัดอยู่ — กด Start ที่หน้าเว็บก่อน"}
-    if not _waiting_for_trigger:
-        # ยิงมาถูกจังหวะแต่ยังไม่ถึงช่วงรอ (กำลังส่ง R0/PW อยู่ หรือกำลังรอผลวัด
-        # ของชิ้นก่อนหน้า) — สัญญาณนี้จะโดน _trigger.clear() ล้างทิ้งอยู่ดี
-        return {"ok": False,
-                "reason": "ยังไม่ถึงช่วงรอสัญญาณ — รอข้อความ 'รอสัญญาณ trigger ...' ก่อนแล้วยิงใหม่"}
-    _trigger.set()
-    log.info("⚡ ได้รับสัญญาณ trigger")
-    return {"ok": True}
-
 
 def heartbeat_loop():
-    global is_running, _hb_last_ok
-    while True:
-        try:
-            httpx.post(
-                f"{BACKEND_URL}/api/heartbeat",
-                json={
-                    "session_id": current_session_id,
-                    "waiting_for_trigger": _waiting_for_trigger,
-                },
-                timeout=5,
-            )
-            _hb_last_ok = time.time()
-        except Exception:
-            pass  # backend ล่มชั่วคราวไม่เป็นไร รอบหน้าค่อยยิงใหม่
-                  # (ไม่ต้องนับอะไร แค่ "ไม่อัปเดตเวลา" ก็พอ)
+    """[MOCK] เดิมยิง POST /api/heartbeat ทุก HB_INTERVAL วิ
 
-        # เช็คนอก try เสมอ — ต้องทำงานทุกรอบไม่ว่ารอบนี้จะยิงออกหรือไม่
-        if is_running and time.time() - _hb_last_ok > HB_TIMEOUT_HINT:
-            log.info(f"\n⏹ ติดต่อ Backend ไม่ได้เกิน {HB_TIMEOUT_HINT:g} วิ — หยุดวัด")
-            log.info(f"   (backend น่าจะ mark session เป็น 'timeout' ไปแล้ว วัดต่อไปค่าก็ถูกทิ้ง)")
-            is_running = False
+    ของจริงมี 2 หน้าที่: บอก backend ว่า Pi ยังมีชีวิต และ **หยุดวัดเองถ้าติดต่อ
+    backend ไม่ได้เกิน HB_TIMEOUT_HINT วิ** (กันวัดต่อทั้งที่ค่าจะถูกทิ้ง)
+
+    ⚠ ที่นี่ถอดส่วน "หยุดเองเมื่อขาดการติดต่อ" ออกด้วย เพราะไม่มี backend ให้ขาด
+      → session จะไม่จบเองจากเหตุนี้อีก · ตอนกลับไปใช้ Pi.py ตัวจริง
+      พฤติกรรมนี้จะกลับมา อย่าแปลกใจถ้าเครื่องหยุดเองตอนเน็ตหลุด
+    """
+    while True:
+        if is_running:
+            log.info("   💓 heartbeat (mock) session=%s", current_session_id)
         time.sleep(HB_INTERVAL)
 
 
@@ -264,52 +267,41 @@ def send_command(sock, command):
     return response
 
 def get_measured_count(session_id):
-    try:
-        data = httpx.get(f"{BACKEND_URL}/api/session/state", timeout=5).json()
-    except Exception as exc:
-        log.info(f"   ⚠️ อ่าน session state ไม่ได้: {exc}")
-        return None
-    if data.get("session_id") != session_id:
-        return None
-    return data.get("measured_count")
+    """[MOCK] เดิมยิง GET /api/session/state ไปถาม backend
 
-# curl -X POST http://<ip-ของ-pi>:9998/trigger
-# วนถามจนกว่ามันจะตอบ is_ready 
+    ของจริง: backend เพิ่ม measured_count ทุกครั้งที่ Data-receiver POST ค่าที่
+    TM-X ส่งมาทาง FTP เข้ามา · ที่นี่ไม่มีทั้ง backend และ FTP จึงจำลองด้วย
+    ตัวนับในหน่วยความจำที่ `trigger_tmx()` สั่งเพิ่มให้หลังยิง T1 สำเร็จ
+    (หน่วง MOCK_MEASURE_DELAY วิ เลียนแบบเวลาที่ไฟล์วิ่งมาทาง FTP)
+
+    ⚠ คืน None เมื่อ session_id ไม่ตรง — พฤติกรรมเดียวกับของจริง
+      `wait_for_measurement()` เช็ค `count_after is not None` อยู่
+    """
+    with _mock_lock:
+        if _mock_db["session_id"] != session_id:
+            return None
+        return _mock_db["measured_count"]
+
 # รอ Trigger จาก MCU
 def wait_for_trigger_mcu():
-    log.info("arrive")
-    global _waiting_for_trigger
-    _trigger.clear()
-    _waiting_for_trigger = True
-    # บอก Backend ทันทีว่าพร้อมรับ trigger — ไม่ต้องรอ heartbeat รอบถัดไป
-    #
-    # ⚠ timeout สั้นมากโดยตั้งใจ เพราะบรรทัดนี้อยู่ใน **เธรดที่กำลังวัดงาน**
-    #   ถ้า Backend ช้าหรือค้าง Pi จะหยุดรอตรงนี้ก่อนเข้าลูปรอสัญญาณ ทำให้เกิด
-    #   อาการ "กดปุ่มแล้วเครื่องไม่ขยับ" ซึ่งหาสาเหตุยากมาก
-    #   ส่งไม่ทันก็ไม่เป็นไร — heartbeat รอบปกติจะตามมาใน HB_INTERVAL วิอยู่แล้ว
-    try:
-        httpx.post(f"{BACKEND_URL}/api/heartbeat",
-            json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
-            timeout=0.5)
-    except Exception:
-        pass
-    try:
-        while is_running:
-            if _trigger.wait(0.1):
-                return True
-        return False
-    finally:
-        _waiting_for_trigger = False
-        # บอก Backend ทันทีว่าไม่รอแล้ว → ปุ่มดับเลย
-        try:
-            httpx.post(f"{BACKEND_URL}/api/heartbeat",
-                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
-                timeout=5)
-        except Exception:
-            pass
+    log.info("   ⏳ รอสัญญาณจาก MCU ... (กด Stop เพื่อยกเลิก)")
+    while is_running:
+        # 👇 แก้ตรงนี้ให้ เมื่อ MCU บอกชิ้นงานพร้อมแล้วให้ return True
+
+
+        time.sleep(0.1)
+    return False           # ออกจาก loop เพราะโดน Stop จาก Backend และ return False
 
 def send_recv(sock, command, timeout=SOCKET_TIMEOUT):
     """ส่ง 1 คำสั่ง แล้ว **วน recv จนเจอ CR** — คืน (response, ok)
+
+    ต่างจาก send_command() ข้างบนที่ใช้ sleep(0.1) + recv ครั้งเดียว ซึ่งผิด 2 อย่าง:
+      - sleep เดาเวลาเอา ไม่ได้ช่วยอะไร (recv บล็อกรอข้อมูลอยู่แล้วโดยธรรมชาติ)
+        และทำให้ poll GM ทุก 20 ms เป็นไปไม่ได้เลย
+      - TCP เป็น stream — recv ครั้งเดียวอาจได้ข้อความมาครึ่งเดียว แล้วพาร์สพัง
+        แบบเงียบๆ (GM คืนมายาวมาก 8 เครื่องมือ = 24 ช่อง)
+
+    ⚠ R0/PW ยังใช้ send_command() ตัวเดิมอยู่ ควรย้ายมาใช้ตัวนี้ด้วยตามแผนข้อ 7
     """
     sock.settimeout(timeout)
     deadline = time.time() + timeout
@@ -422,12 +414,20 @@ def trigger_tmx(sock):
         resp, ok = send_recv(sock, "T1")
         log.info(resp)
         if ok:
+            # [MOCK] ของจริง measured_count ขยับเมื่อ Data-receiver รับไฟล์จาก
+            #   FTP แล้ว POST เข้า backend · ที่นี่ไม่มีทั้งคู่ จึงตั้งเวลาเพิ่ม
+            #   ให้เองหลัง MOCK_MEASURE_DELAY วิ เพื่อให้ wait_for_measurement()
+            #   ทำงานเหมือนของจริงทุกบรรทัด
+            #   ⚠ ตั้ง MOCK_MEASURE_DELAY ให้ **มากกว่า** MEASURE_TIMEOUT เพื่อ
+            #     ทดสอบเส้นทาง "วัดไม่ถึง DB" (จะเด้งถาม retry/accept/stop)
+            _mock_schedule_measurement()
             log.info(f"📡 TM-X ตอบ T1: {resp}")
             log.info(f"ส่ง T1 สำเร็จหลังลอง {T1_RETRY} ครั้ง  {resp}")
             return True, resp
         if ",03" in resp:
             log.info(f"   ⏳ T1 โดนละเว้น ({resp}) — READY ยังไม่กลับมา "
                   f"ลองใหม่ครั้งที่ {attempt}/{T1_RETRY}")
+            print(5)
             time.sleep(T1_RETRY_WAIT)
             continue
         log.info(f"❌ ส่ง T1 ไม่สำเร็จ: {resp}")
@@ -500,7 +500,7 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
         if not is_running:                       # กด Stop ระหว่างรอ
             return "UNKNOWN", None, None, None, None, None, None, None, None
 
-        resp, ok = send_recv(sock, "GM,3,0", timeout=2.0)
+        resp, ok = send_recv(sock, "GM,3,0", timeout=2)
         polls += 1
         tools = parse_gm(resp) if ok else None
         if tools and has_real_value(tools):
@@ -526,13 +526,6 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
             for r in reasons:
                 log.info("      • %s", r)
 
-            # เทียบกับผลที่ TM-X ตัดสินมาเอง (j) — ได้ตัวเฝ้าระวัง config drift ฟรีๆ
-            '''j_x = tools[GM_IDX_X][2] if GM_IDX_X is not None and GM_IDX_X < len(tools) else None
-            if j_x is not None and limits is not None:
-                tmx_says = "OK" if j_x == 0 else "NG"
-                if tmx_says != result:
-                    print(f"   ⚠️ TM-X ตัดสินว่า {tmx_says} แต่เราคำนวณได้ {result} — "
-                          f"tolerance ในโปรแกรมวัดกับใน DB อาจเพี้ยนกันแล้ว")'''
             return result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom,offset_x, offset_y
         time.sleep(GM_POLL_INTERVAL)
 
@@ -542,20 +535,7 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
 
 #วนไปถามว่าพร้อมรับ result ยัง ให้ MCU set Flag เอา idle(ยังไม่มีชิ้นงาน) -> obj_is_ready(เมื่อวางชิ้นงานแล้ว) -> waiting_for_result(พร้อมรับ result) -> idle(เสร็จการวัด 1 ชิ้น)
 def send_result_to_mcu(result, mcu_timeout=MCU_TIMEOUT):
-    """ส่งผลตัดสินให้ MCU — `result` เป็น "OK" / "NG" / "UNKNOWN"
 
-    ตอนนี้ยังไม่มีบอร์ด MCU จริง จึงแค่พิมพ์ให้เห็นว่าส่งอะไรออกไป
-    พอต่อ Serial จริงค่อยเปลี่ยนบรรทัดข้างในเป็นการเขียนลงพอร์ต — **ตัวเรียก
-    ไม่ต้องแก้เลย** นี่คือเหตุผลที่แยกออกมาเป็นฟังก์ชันตั้งแต่ตอนที่ยังไม่มีอะไร
-
-    ⚠ "UNKNOWN" ต้องส่งไปด้วยเสมอ ห้ามข้ามเงียบๆ — เป็นสถานะที่สามที่ต้องมี
-      ไม่ใช่แค่ OK กับ NG · ถ้าไม่ส่ง MCU จะมีชิ้นงานคาอยู่โดยไม่มีคำสั่ง แล้วมัน
-      จะไม่มีวันตอบว่า "พร้อม" สำหรับชิ้นถัดไปอีกเลย = ค้างกันทั้งคู่
-      **ห้ามเดา UNKNOWN เป็น NG** เพราะของอาจดีอยู่ แค่กล้องไม่เห็น
-
-    `mcu_timeout` ยังไม่ได้ใช้ — รับไว้ก่อนเพื่อให้ signature นิ่ง ไว้ใช้ตอนเพิ่ม
-    การรอ MCU ตอบรับ (`wait_mcu_ack` ผ่าน `_mcu_ack` ที่ประกาศไว้แล้วข้างบน)
-    """
     icon = {"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
     log.info("   🔀 → MCU: %s %s", icon, result)
     return True
@@ -575,38 +555,32 @@ def wait_for_measurement(session_id, count_before, timeout=MEASURE_TIMEOUT):
 
 
 def report(event: str, detail: str, *, persist: bool = True):
+    """[MOCK] เดิมยิง POST /api/session/event ให้ backend เก็บไว้โชว์บนหน้าเว็บ
+    — ที่นี่พิมพ์ลง log อย่างเดียว ตัวเรียกไม่ต้องแก้"""
     log.info("   📣 %s: %s", event, detail)
-    try:
-        resp = httpx.post(
-            f"{BACKEND_URL}/api/session/event",
-            json={"event": event, "detail": detail, "persist": persist},
-            timeout=2,
-        )
-        if resp.status_code != 200:
-            log.info("   ⚠️ Backend ไม่รับรายงาน (HTTP %s)", resp.status_code)
-    except Exception as exc:
-        log.info("   ⚠️ แจ้ง Backend ไม่สำเร็จ: %s", exc)
 
 def ask_user(session_id, piece, target) -> str:
+    """[MOCK] เดิมยิง POST /api/measure-timeout ให้หน้าเว็บเด้ง modal ถามผู้ใช้
+
+    ที่นี่ไม่มีหน้าเว็บ จึงรอคำตอบผ่าน endpoint ของตัวเองแทน
+        curl -X POST http://127.0.0.1:9998/answer/retry    ← วัดชิ้นเดิมใหม่
+        curl -X POST http://127.0.0.1:9998/answer/accept   ← รับค่าที่ Pi อ่านได้
+        curl -X POST http://127.0.0.1:9998/answer/stop     ← หยุดทั้ง session
+    หรือเปิด URL เดียวกันในเบราว์เซอร์ก็ได้ (รองรับ GET ด้วย)
+
+    ⚠ ถ้าไม่มีใครตอบใน ASK_USER_TIMEOUT วิ จะถือว่า "stop" เหมือนของจริงเป๊ะ
+    """
     global _answer_action
     with _answer_lock:
         _answer_action = None
         _answer_event.clear()
 
-    try:
-        resp = httpx.post(
-            f"{BACKEND_URL}/api/measure-timeout",
-            json={"session_id": session_id, "piece": piece, "target": target},
-            timeout=5,
-        )
-        if resp.status_code != 200:
-            log.info("   ⚠️ Backend ไม่รับคำถาม (HTTP %s) — ถือว่าหยุด", resp.status_code)
-            return "stop"
-    except Exception as exc:
-        log.info("   ⚠️ ถามผู้ใช้ไม่ได้: %s — ถือว่าหยุด", exc)
-        return "stop"
-
+    log.info("   ❓ ถามผู้ใช้: ชิ้นที่ %s/%s วัดไม่สำเร็จ — จะเอายังไงต่อ", piece, target)
+    log.info("      retry  : curl -X POST http://127.0.0.1:%s/answer/retry", AGENT_PORT)
+    log.info("      accept : curl -X POST http://127.0.0.1:%s/answer/accept", AGENT_PORT)
+    log.info("      stop   : curl -X POST http://127.0.0.1:%s/answer/stop", AGENT_PORT)
     log.info("   ⏳ รอผู้ใช้ตัดสินใจ (สูงสุด %.0f วิ) ...", ASK_USER_TIMEOUT)
+
     if not _answer_event.wait(ASK_USER_TIMEOUT):
         log.info("   ⏱ ไม่มีคำตอบใน %.0f วิ — ถือว่าหยุด", ASK_USER_TIMEOUT)
         return "stop"
@@ -616,9 +590,9 @@ def ask_user(session_id, piece, target) -> str:
 
 def handle_error(kind, session_id, piece, target, detail, rounds) -> bool:
     report(f"{kind}_FAILED",
-           f"ชิ้นที่ {piece}/{target} (ครั้งที่ {rounds}/{MAX_ASK_USER_ROUNDS-1}): {detail}")
+           f"ชิ้นที่ {piece}/{target} (ครั้งที่ {rounds}/{MAX_ASK_USER_ROUNDS}): {detail}")
     if rounds >= MAX_ASK_USER_ROUNDS:
-        report(f"{kind}_GAVE_UP", f"ชิ้นที่ {piece}/{target}: ครบ {MAX_ASK_USER_ROUNDS-1} ครั้งแล้ว — หยุดการวัด")
+        report(f"{kind}_GAVE_UP", f"ชิ้นที่ {piece}/{target}: ครบ {MAX_ASK_USER_ROUNDS} ครั้งแล้ว — หยุดการวัด")
         return False
 
     if not is_running:          # กด Stop จากเว็บระหว่างนี้
@@ -628,66 +602,30 @@ def handle_error(kind, session_id, piece, target, detail, rounds) -> bool:
 
 def post_measurement_from_pi(session_id, piece, x, y, horizon_left, horizon_right, vertical_top, vertical_bottom,
                              offset_x, offset_y) -> bool:
-    """POST ค่าที่ Pi อ่านจาก GM เข้า Backend แทน Recieve — คืน True ถ้าสำเร็จ
+    """[MOCK] เดิมยิง POST /api/measurements แล้ว PATCH ธง "ไม่มีรูป" ตามหลัง
 
-    ใช้เฉพาะตอน `wait_for_measurement` หมดเวลา = **วัดสำเร็จแล้วแต่ค่าไม่ถึง DB**
-    (ชิ้นงานถูก MCU คัดแยกไปแล้ว ไม่มีอะไรให้วัดใหม่) สิ่งที่ขาดคือแถวใน DB
-    ไม่ใช่การวัด — จึงเป็น "บันทึกค่าที่มี" ไม่ใช่ "retry"
+    ที่นี่เก็บลง list ในหน่วยความจำ (`_mock_db["rows"]`) ดูได้ที่
+        http://127.0.0.1:9998/mock/db
 
-    ⚠ ไม่มีการกันยิงซ้ำแล้ว — `client_uuid` ถูกถอดออกทั้งระบบ เพราะฟังก์ชันนี้
-      ยิงครั้งเดียวจบ (พลาดแล้วตั้ง stop_reason แล้ว break ไม่มี retry loop)
-      ถ้าวันหลังใส่ retry เข้ามา ต้องกลับมาคิดเรื่องกันซ้ำใหม่ด้วย
-
-    ⚠ ต้อง PATCH image ต่อด้วย `upload_failed=True` — ไม่งั้น `image_path = NULL`
-      จะแปลว่า "รูปยังไม่มา" ซึ่งปกติหมายถึงกำลังจะมาในไม่กี่วินาที แต่เคสนี้
-      **ไม่มีวันมา** คนเปิดรายงานจะนั่งรอรูปที่ไม่มีอยู่จริง
-
-    ไม่ส่ง `number_alpl` / `measure_type` / `operator_id` — backend เลือกเองจาก
-    ตำแหน่งในคิวกับ queue_state เหมือนตอนที่ Recieve ส่ง (แหล่งความจริงเดียว)
+    ⚠ ของจริง backend เป็นคนเลือก number_alpl จากตำแหน่งในคิวเอง — Pi ไม่เคยส่ง
+      ค่านั้นไป · mock นี้จึงไม่มี ALPL เหมือนกัน เพื่อให้หน้าตาข้อมูลตรงกัน
     """
-    body = {
-        "session_id":  session_id,
-        "value_x":     x,
-        "value_y":     y,
-        "horizon_left":       horizon_left,
-        "horizon_right":       horizon_right,
-        "vertical_top":       vertical_top,
-        "vertical_bottom":       vertical_bottom,
-        "offset_opx":  offset_x,
-        "offset_opy":  offset_y,
-        "note":        "ค่าจาก Pi (GM) — Recieve ส่งไม่ถึง ไม่มีรูป",
-    }
-    try:
-        resp = httpx.post(f"{BACKEND_URL}/api/measurements", json=body, timeout=10)
-    except Exception as exc:
-        report("PI_POST_FAILED", f"ชิ้นที่ {piece}: POST ค่าจาก Pi ไม่สำเร็จ — {exc}")
-        return False
-
-    if resp.status_code != 200:
-        detail = ""
-        try:
-            detail = resp.json().get("detail", "")
-        except Exception:
-            detail = resp.text[:200]
-        report("PI_POST_FAILED",
-               f"ชิ้นที่ {piece}: backend ปฏิเสธค่าจาก Pi (HTTP {resp.status_code}): {detail}")
-        return False
-
-    mid = resp.json().get("measurement_id")
-    log.info("   ✅ บันทึกค่าจาก Pi แล้ว (measurement_id=%s)", mid)
-
-    # ปักธงว่า "ไม่มีรูปถาวร" — ล้มก็ไม่ถือว่างานหลักพัง แถวลง DB ไปแล้ว
-    try:
-        httpx.patch(f"{BACKEND_URL}/api/measurements/{mid}/image",
-                    json={"image_path": None, "upload_failed": True}, timeout=5)
-    except Exception as exc:
-        report("PI_POST_FAILED", f"ชิ้นที่ {piece}: ปักธงไม่มีรูปไม่สำเร็จ — {exc}",
-               persist=False)   # ← ค่าลง DB แล้ว ห้ามทับสาเหตุที่ Pi กำลังรอ
+    with _mock_lock:
+        _mock_db["rows"].append({
+            "piece": piece, "value_x": x, "value_y": y,
+            "horizon_left": horizon_left, "horizon_right": horizon_right,
+            "vertical_top": vertical_top, "vertical_bottom": vertical_bottom,
+            "offset_opx": offset_x, "offset_opy": offset_y,
+            "source": "pi-fallback",
+        })
+        _mock_db["measured_count"] += 1
+        mid = len(_mock_db["rows"])
+    log.info("   ✅ [MOCK] บันทึกค่าจาก Pi แล้ว (measurement_id=%s)", mid)
     return True
 
 def command_flow(session_id, groups, target_count):
 
-    global current_session_id, is_running, _tmx_sock, _hb_last_ok
+    global current_session_id, is_running, _hb_last_ok
     _hb_last_ok = time.time()
     current_session_id = session_id  # heartbeat จะเริ่มแนบ session นี้ทันที
     is_running = True
@@ -707,20 +645,7 @@ def command_flow(session_id, groups, target_count):
                 log.info(f"                   X {L.x_lo:.4f}–{L.x_hi:.4f} · "
                       f"Y {L.y_lo:.4f}–{L.y_hi:.4f} · offset_max={L.offset_max}")
         log.info(f"{'='*60}")
-
-        # ── ชิ้นที่ i อยู่กลุ่มไหน ──────────────────────────────────────────
-        # ทำได้ด้วยบรรทัดเดียวเพราะ **คิวไม่เคยสลับกลุ่ม** — `_flatten_groups`
-        # ฝั่ง backend (routers/session.py) ต่อ ALPL ของกลุ่ม 0 ให้หมดก่อน
-        # แล้วค่อยกลุ่ม 1 ดังนั้นแต่ละกลุ่มเป็นบล็อกติดกันเสมอ ลำดับที่ได้ตรงกับ
-        # `queue` ที่ backend ใช้เลือก ALPL ให้ measurement เป๊ะ
-        #
-        # ⚠ ถ้าวันหลัง backend เปลี่ยนไปเรียงคิวแบบสลับกลุ่ม บรรทัดนี้พังทันที
-        #   และจะพังแบบเงียบ ๆ (วัดด้วย template ผิดโดยไม่มี error) — ต้องให้
-        #   backend ส่ง `group_of` มาตรง ๆ แทนการเดาจากลำดับ
-        group_of = [gi for gi, g in enumerate(groups) for _ in g.alpl]
-        if len(group_of) != target_count:
-            log.info("⚠️ จำนวน ALPL รวม (%s) ไม่เท่า target_count (%s) — payload เพี้ยน",
-                     len(group_of), target_count)
+        template_name = groups[0].template_name
 
         try:
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -733,41 +658,22 @@ def command_flow(session_id, groups, target_count):
             stop_reason = (f"ต่อ TM-X ที่ {TMX_IP}:{TMX_PORT} ไม่ได้ ({type(exc).__name__}) "f"— ตรวจสาย LAN · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env")
             return
 
-        _tmx_sock = client_socket  # ให้ stop handler ยิง S0 ผ่าน socket นี้ได้
-
         # Running (เข้าโหมดดำเนินงาน)
         log.info("→ R0 : %s", send_command(client_socket, "R0"))
         time.sleep(0.5)
 
-        # `PW` ย้ายเข้าไปในลูปแล้ว (ดูข้างล่าง) เพราะแต่ละกลุ่มใช้ template คนละตัวได้
-        current_tmpl = None      # template ที่โหลดค้างอยู่ใน TM-X ตอนนี้
+        # Load Program ตาม template ที่ backend ส่งมา (zero-pad เป็น 3 หลัก)
+        pw = f"PW,1,{str(template_name).zfill(3)}"
+        log.info("→ %s : %s", pw, send_command(client_socket, pw))
+        time.sleep(1.0)
 
         for piece in range(1, target_count + 1):
             if not is_running:
                 log.info("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
                 break
-
-            # ── ⓪ โหลดโปรแกรมวัดของกลุ่มนี้ ถ้ายังไม่ตรงกับที่ค้างอยู่ ──────
-            #
-            # ยิงก่อน `wait_for_trigger_mcu()` โดยตั้งใจ — ช่วงรอสัญญาณจาก MCU
-            # ไม่มีกำหนดเวลาอยู่แล้ว ปล่อยให้ TM-X โหลดโปรแกรมไปพร้อมกันเลย
-            # ถ้าย้ายไปไว้หลัง trigger จะเพิ่มดีเลย์ ~1 วิให้ชิ้นแรกของทุกกลุ่ม
-            #
-            # ⚠ `PW` พ่วง RESET มาด้วย ทำให้ READY ดับชั่วคราว ยิง `T1` ตามติด
-            #   จะได้ `ER,T1,03` · ที่รอดอยู่ทุกวันนี้เพราะ sleep 1 วิ + `T1_RETRY`
-            #   ลองซ้ำให้อีก 3 ครั้ง (~0.9 วิ) รวมเผื่อไว้ ~1.9 วิ
-            #   **ถ้าหน้างานพบว่าชิ้นแรกของกลุ่มพังบ่อย ให้เพิ่ม PW_LOAD_WAIT**
-            #   ทางที่สะอาดกว่าคือใช้คำสั่ง `RM` อ่านโหมดยืนยันแทนการเดาเวลา
-            tmpl = groups[group_of[piece - 1]].template_name
-            if tmpl != current_tmpl:
-                pw = f"PW,1,{str(tmpl).zfill(3)}"
-                log.info("→ %s : %s  (กลุ่มที่ %s)", pw,
-                         send_command(client_socket, pw), group_of[piece - 1] + 1)
-                time.sleep(PW_LOAD_WAIT)
-                current_tmpl = tmpl
-
-            # ── ① รอ MCU บอกว่าชิ้นงานเข้าที่แล้ว (ตอนนี้ = curl /trigger) ──
-            log.info("\nชิ้นที่ %s/%s — รอสัญญาณ trigger ...", piece, target_count)
+            # ── ① รอ MCU บอกว่าชิ้นงานเข้าที่แล้ว ──────────────────────────
+            # ⚠ wait_for_trigger_mcu() ยังเป็นโครงเปล่า ต้องเขียนส่วนอ่าน MCU เอง
+            log.info("\nชิ้นที่ %s/%s — รอสัญญาณจาก MCU ...", piece, target_count)
             if not wait_for_trigger_mcu():
                 log.info("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
                 break
@@ -791,15 +697,11 @@ def command_flow(session_id, groups, target_count):
             if not ok:
                 break                     # ← ออกจาก for → finally → ยิง stop
                 
+
             # ── ③ วน GM จนได้ค่า ────────────────────────────────────────────
-            #
-            # ⚠⚠ **ต้องเป็น limits ของกลุ่มที่ชิ้นนี้อยู่ ห้ามใช้ groups[0]** —
-            #   ถ้าโหลด template ถูกแต่ตัดสินด้วยเกณฑ์ของกลุ่มแรก ค่าที่ได้จะ
-            #   ดูปกติทุกอย่างแต่คัดของผิดทั้งกลุ่มหลัง โดยไม่มี error ใด ๆ
-            #   (backend บันทึกด้วยเกณฑ์รายตัวที่ถูกต้อง → DB กับ MCU ขัดกันเงียบ ๆ)
             rounds = 0
             while True:
-                result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom, offset_x, offset_y = get_measurement_tmx(client_socket, groups[group_of[piece - 1]].limits)
+                result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom, offset_x, offset_y = get_measurement_tmx(client_socket, groups[0].limits)
                 if result != "UNKNOWN":
                     break
                 rounds += 1
@@ -864,55 +766,129 @@ def command_flow(session_id, groups, target_count):
                 client_socket.close()
             except Exception:
                 pass
-        _tmx_sock = None
         is_running = False
         current_session_id = None  # heartbeat กลับไปยิงแบบ idle (ไม่แนบ session)
         log.info("\n✅ จบ session — ปิดการเชื่อมต่อ TM-X แล้ว")
-        try:
-            st = httpx.get(f"{BACKEND_URL}/api/session/state", timeout=5).json()
-            if st.get("session_id") == session_id and st.get("state") == "running":
-                measured = st.get("measured_count")
+        # [MOCK] เดิมถาม GET /api/session/state แล้ว POST /api/session/stop
+        #   ที่นี่ปิด session ในหน่วยความจำแทน — เงื่อนไข "ปิดเฉพาะ session
+        #   ตัวเองที่ยัง running อยู่" คงไว้เหมือนเดิม เพราะเป็นตัวกันไม่ให้ไป
+        #   ปิด session ใหม่ที่เพิ่งกด Start ระหว่างที่ finally ของรอบเก่าทำงานค้าง
+        with _mock_lock:
+            same = _mock_db["session_id"] == session_id
+            running = _mock_db["state"] == "running"
+            measured = _mock_db["measured_count"]
+        if same and running:
+            reason = stop_reason or (
+                f"session จบก่อนครบจำนวน (วัดได้ {measured}/{target_count}) "
+                f"— ไม่ทราบสาเหตุแน่ชัด ดู log บนเครื่อง Pi"
+            )
+            with _mock_lock:
+                _mock_db["state"] = "stopped"
+                _mock_db["reason"] = reason
+            log.info("⏹ [MOCK] ปิด session แล้ว (วัดได้ %s/%s)", measured, target_count)
+            log.info("   เหตุผล: %s", reason)
 
-                # ⚠ ห้ามส่ง None — session.py:707 เช็ค `if req.reason:` ถ้าเป็น None
-                #   จะไม่เขียนอะไรลง DB เลย หน้าเว็บขึ้น STOPPED เปล่า ๆ เหมือนเดิม
-                #   ทางที่ยังไม่ได้ตั้ง reason ให้บอกตรง ๆ ว่าไม่ทราบ ดีกว่าเงียบ
-                reason = stop_reason or (
-                    f"session จบก่อนครบจำนวน (วัดได้ {measured}/{target_count}) "
-                    f"— ไม่ทราบสาเหตุแน่ชัด ดู log บนเครื่อง Pi"
-                )
-                httpx.post(
-                    f"{BACKEND_URL}/api/session/stop",
-                    json={"session_id": session_id, "reason": reason},
-                    timeout=10,
-                )
-                log.info("⏹ แจ้ง backend ปิด session แล้ว (วัดได้ %s/%s)", measured, target_count)
-                log.info("   เหตุผล: %s", reason)
+# ══════════════════════════════════════════════════════════════════════════
+# [MOCK] endpoint สำหรับสั่งงานเองโดยไม่ต้องมี Backend
+# ══════════════════════════════════════════════════════════════════════════
+# ⚠ รับทั้ง GET และ POST โดยตั้งใจ — GET เพื่อให้ "พิมพ์ URL ในเบราว์เซอร์แล้ว
+#   ทำงานเลย" ซึ่งสะดวกมากตอนเทสต์คู่กับ MCU ที่มือไม่ว่าง
+#   **ของจริงใน Pi.py มีแต่ POST /command เท่านั้น อย่าเอาแนวนี้ไปใส่ตัวจริง**
 
-        except Exception as exc:
-            log.info("   ⚠️ แจ้งปิด session ไม่ได้: %s — "
-                     "backend จะปิดเองใน ~%g วิ (ขึ้นเป็น 'timeout')", exc, HB_TIMEOUT_HINT)
-            # reason กำลังจะหายไปทั้งก้อน — เทอร์มินัลคือหลักฐานเดียวที่เหลือ
-            if stop_reason:
-                log.info("   เหตุผลที่จะหายไป: %s", stop_reason)
+
+@http_app.api_route("/start", methods=["GET", "POST"])
+async def mock_start(count: int = 1, template: str = "201"):
+    """เริ่ม session จำลอง — http://127.0.0.1:9998/start?count=3
+
+    ⚠ สร้าง `groups` ให้เหมือนที่ backend ตัวจริงส่งมาเป๊ะ (ดู _build_groups
+      ใน routers/session.py) เพื่อให้เส้นทางตรวจ payload ใน /command ถูกใช้จริง
+      — ถ้าข้ามไปเรียก command_flow ตรง ๆ จะเทสต์ไม่ครบ
+    """
+    if is_running:
+        return {"ok": False, "error": "กำลังวัดอยู่ — กด /stop ก่อน"}
+
+    with _mock_lock:
+        _mock_db.update(session_id=_mock_db["session_id"] or 0)
+        _mock_db["session_id"] += 1
+        sid = _mock_db["session_id"]
+        _mock_db.update(state="running", target_count=count,
+                        measured_count=0, reason=None, rows=[])
+
+    req = CommandRequest(
+        action="start", session_id=sid, target_count=count,
+        groups=[Group(
+            template_name=template,
+            alpl=list(range(201, 201 + count)),
+            limits=Limits(x_lo=8.0, x_hi=8.5, y_lo=0.0, y_hi=9999.0,
+                          offset_max=None),
+        )],
+    )
+    await command(req)
+    return {"ok": True, "session_id": sid, "target_count": count,
+            "next": "รอสัญญาณจาก MCU — ต้องเขียนส่วนอ่านสัญญาณใน "
+                    "wait_for_trigger_mcu() เองก่อน ไม่งั้นจะค้างตรงนี้"}
+
+
+@http_app.api_route("/stop", methods=["GET", "POST"])
+async def mock_stop():
+    """หยุด session — เดินเส้นทางเดียวกับที่ backend ยิง /command action=stop"""
+    await command(CommandRequest(action="stop", session_id=_mock_db["session_id"]))
+    return {"ok": True}
+
+
+@http_app.api_route("/answer/{action}", methods=["GET", "POST"])
+async def mock_answer(action: str):
+    """ตอบคำถามตอน ask_user() — retry / accept / stop"""
+    if action not in ("retry", "accept", "stop"):
+        raise HTTPException(400, "action ต้องเป็น retry / accept / stop")
+    await command(CommandRequest(action=action, session_id=_mock_db["session_id"]))
+    return {"ok": True, "answered": action}
+
+
+@http_app.get("/status")
+async def mock_status():
+    """สถานะย่อ — ใช้ดูเร็ว ๆ ว่าตอนนี้เดินถึงไหน"""
+    with _mock_lock:
+        db = dict(_mock_db)
+    return {
+        "is_running": is_running,
+        "current_session_id": current_session_id,
+        "tmx": f"{TMX_IP}:{TMX_PORT}",
+        "session": {k: db[k] for k in
+                    ("session_id", "state", "target_count", "measured_count", "reason")},
+    }
+
+
+@http_app.get("/mock/db")
+async def mock_db_dump():
+    """ดูทุกอย่างที่ "ลง DB" ไปแล้ว — เทียบเท่าการ SELECT ตาราง measurements"""
+    with _mock_lock:
+        return dict(_mock_db)
+
 
 if __name__ == "__main__":
     # heartbeat ต้องเริ่ม "ก่อน" เปิด server และรันตลอดอายุโปรแกรมใน daemon thread
     threading.Thread(target=heartbeat_loop, daemon=True).start()
 
     log.info("─" * 66)
-    log.info("Pi.py — รอคำสั่ง Start จาก Backend")
-    log.info(f"  ฟัง /command ที่    : 0.0.0.0:{AGENT_PORT}   (.env: AGENT_PORT)")
-    log.info(f"  TM-X ที่            : {TMX_IP}:{TMX_PORT}    (.env: TMX_HOST/TMX_PORT)")
-    log.info(f"  Backend ที่         : {BACKEND_URL}          (.env: BACKEND_URL)")
-    log.info(f"  heartbeat ทุก       : {HB_INTERVAL:g} วิ · หยุดเองถ้าขาดติดต่อเกิน {HB_TIMEOUT_HINT:g} วิ")
+    log.info("Pi_test.py — โหมดทดสอบ ไม่ใช้ Backend / ไม่ใช้ฐานข้อมูลจริง")
+    log.info(f"  ฟังคำสั่งที่        : 0.0.0.0:{AGENT_PORT}   (.env: AGENT_PORT)")
+    log.info(f"  ESP/TM-X ที่        : {TMX_IP}:{TMX_PORT}    (.env: TMX_HOST/TMX_PORT)")
+    log.info(f"  หน่วง 'ค่าเข้า DB'   : {MOCK_MEASURE_DELAY:g} วิ (env: MOCK_MEASURE_DELAY)")
     log.info(f"  รอค่าการวัดสูงสุด    : {MEASURE_TIMEOUT:g} วิ (poll ทุก {MEASURE_POLL_INTERVAL:g} วิ)")
     # แยก 2 บรรทัดโดยตั้งใจ — เดิมพิมพ์ "curl -X POST http://..." ติดกันบรรทัดเดียว
     # แล้วมีคนก๊อปทั้งบรรทัดไปวางในช่อง address ของเบราว์เซอร์ ได้ URL เพี้ยนเป็น
     #   http://127.0.0.1:9998/curl%20-X%20POST%20http://...
     # (%20 = ช่องว่าง) · บรรทัดล่างจึงเป็น URL ล้วนที่ก๊อปแล้ววางได้ทันที
-    log.info(f"  จำลองเซนเซอร์ (เบราว์เซอร์): http://127.0.0.1:{AGENT_PORT}/trigger")
-    log.info(f"  จำลองเซนเซอร์ (เทอร์มินัล) : curl -X POST http://127.0.0.1:{AGENT_PORT}/trigger")
-    log.info(f"     ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi")
+    log.info("  เปิด URL พวกนี้ในเบราว์เซอร์ได้เลย (ยิงจากเครื่องอื่นเปลี่ยน 127.0.0.1 เป็น IP ของ Pi)")
+    log.info(f"     เริ่มวัด 3 ชิ้น : http://127.0.0.1:{AGENT_PORT}/start?count=3")
+    log.info(f"     หยุด          : http://127.0.0.1:{AGENT_PORT}/stop")
+    log.info(f"     สถานะ         : http://127.0.0.1:{AGENT_PORT}/status")
+    log.info(f"     ค่าที่เก็บไว้    : http://127.0.0.1:{AGENT_PORT}/mock/db")
+    log.info("")
+    log.info("  ⚠ ยังไม่มีตัวสั่งวัดรายชิ้น — ต้องเขียนส่วนอ่านสัญญาณ MCU ที่")
+    log.info("    wait_for_trigger_mcu() เอง · กด /start ตอนนี้จะค้างที่")
+    log.info("    'รอสัญญาณจาก MCU ...' จนกว่าจะยิง /stop (ถูกต้องแล้ว ไม่ใช่แฮงก์)")
     log.info("─" * 66)
 
     # ── เตือนถ้า heartbeat ตั้งค่าไม่สัมพันธ์กัน ────────────────────────────

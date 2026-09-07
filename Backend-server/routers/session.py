@@ -648,21 +648,19 @@ async def start_session(request: Request):
                     alpls_of_group = [a for a, gg in zip(alpl_queue, group_of) if gg == gi]
                     templates.append(_validate_group(cur, gi, g, measure_type, alpls_of_group))
 
-                # ⚠ ยังสลับ template กลางคันไม่ได้ — Pi รับ template_name ตัวเดียว
-                #   ตอน start แล้วส่ง PW ครั้งเดียว (การสลับ PW ระหว่างคิวคือแผน E
-                #   ใน PLAN_criteria_and_multigroup.md ซึ่งยังไม่ได้ทำ)
-                #   ถ้าปล่อยผ่าน กลุ่มที่ 2 เป็นต้นไปจะถูกวัดด้วยโปรแกรมของกลุ่มแรก
-                #   → ได้ค่าที่ "ดูเหมือนใช้ได้" แต่ผิดทั้งกลุ่มโดยไม่มีอะไรเตือน
+                # ── หลาย template ในรอบเดียวกันได้แล้ว (แผน E) ─────────────────
+                # Pi สลับ `PW` เองเมื่อข้ามรอยต่อกลุ่ม โดยดูจาก `groups[].template_name`
+                # ที่แนบไปกับ /command — ดู `command_flow()` ใน Pi.py
+                #
+                # ⚠ ทำได้เพราะ `_flatten_groups` ต่อ ALPL ของแต่ละกลุ่มเป็นบล็อกติดกัน
+                #   (ไม่สลับกลุ่มกลางคิว) `template` จึงเปลี่ยนแค่ตอนข้ามรอยต่อ
+                #   ไม่ใช่เปลี่ยนได้ทุกชิ้น — ถ้าวันหลังเปลี่ยนวิธีเรียงคิวให้สลับกลุ่มได้
+                #   ต้องกลับมาคิดเรื่องนี้ใหม่ เพราะ `PW` แต่ละครั้งกินเวลาโหลด ~1 วิ
+                #
+                # `template_name` ตัวนี้เหลือไว้แค่โชว์บนหน้าเว็บ **ห้ามเอาไปใช้สั่งงาน**
+                # ของจริงที่ Pi ใช้คือ `groups[gi].template_name` รายกลุ่ม
                 distinct = sorted(set(templates))
-                if len(distinct) > 1:
-                    raise HTTPException(
-                        400,
-                        "กลุ่มที่กรอกมาใช้ Template ของ TM-X คนละตัวกัน "
-                        f"({', '.join(distinct)}) — ตอนนี้ยังสลับโปรแกรมกลางคันไม่ได้ "
-                        "กรุณาแยกวัดทีละ Template (กลุ่มที่ Package Size ให้ Template "
-                        "เดียวกันรวมรอบเดียวกันได้)",
-                    )
-                template_name = templates[0]
+                template_name = distinct[0] if len(distinct) == 1 else " + ".join(distinct)
 
                 # 1.5) ประกอบ `groups` ที่จะแนบไปกับ /command ให้ Pi
                 #      ทำ "ก่อน" insert sessions โดยตั้งใจ — ถ้าเกณฑ์ 2 ฝั่งไม่ตรงกัน

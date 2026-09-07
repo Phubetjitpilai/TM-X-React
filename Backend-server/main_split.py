@@ -1,8 +1,13 @@
 """main.py (ฉบับแยกไฟล์) — สร้าง app แล้วประกอบ router เข้าด้วยกัน
 
-รันเหมือนเดิมทุกตัวอักษร:  uvicorn main_split:app --reload --port 8000
-(ต้อง cd Backend-server ก่อน ไม่งั้น import routers ไม่เจอ)
+รันได้ 2 แบบ (ต้อง `cd Backend-server` ก่อนทั้งคู่ ไม่งั้น import routers ไม่เจอ):
+
+    python main_split.py                              ← หน้างานใช้ตัวนี้
+    uvicorn main_split:app --reload --port 8000       ← ตอน dev (มี hot reload)
+
+ดูบล็อก `if __name__ == "__main__"` ท้ายไฟล์
 """
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -75,4 +80,36 @@ app.mount(
     SPAStaticFiles(directory=_frontend_dir, html=True),
     name="static",
 )
+
+
+if __name__ == "__main__":
+    # ── รันตรงจากไฟล์นี้ได้เลย: `python main_split.py` ────────────────────
+    # มีไว้ให้หน้างานไม่ต้องจำคำสั่ง uvicorn ยาว ๆ (แบบเดียวกับ Pi.py)
+    #
+    # ⚠⚠ **ห้ามใส่ `reload=True` ที่นี่เด็ดขาด** — reload จ้องดูไฟล์แล้วรีสตาร์ท
+    #   เองเมื่อมีอะไรเปลี่ยน ซึ่งจะทำให้ **SSE ของทุกเครื่องที่เปิดหน้าเว็บอยู่
+    #   หลุดพร้อมกัน** กลางรอบการวัด · ตอน dev ให้ใช้คำสั่ง uvicorn ข้างบนแทน
+    #
+    # ⚠ ส่ง `app` เป็น object ตรง ๆ ไม่ใช่สตริง "main_split:app" — เพราะ
+    #   ตอนรันแบบนี้ module ชื่อ `__main__` ไม่ใช่ `main_split` uvicorn จะ
+    #   import ซ้ำแล้วได้ app คนละตัวกับที่ router ลงทะเบียนไว้
+    #   (แลกกับการที่ reload/workers ใช้ไม่ได้ ซึ่งเราไม่ต้องการอยู่แล้ว)
+    #
+    # host 0.0.0.0 = รับจากเครื่องอื่นในวง LAN ด้วย — จำเป็น เพราะ Pi ต้องยิง
+    # heartbeat/measurement กลับมา และ Operator เปิดหน้าเว็บจากเครื่องอื่น
+    _host = os.getenv("BACKEND_HOST", "0.0.0.0")
+    _port = int(os.getenv("BACKEND_PORT", 8000))
+
+    print("=" * 62)
+    print("  TM-X Backend Server")
+    print(f"  ฟังที่        : {_host}:{_port}   (.env: BACKEND_HOST / BACKEND_PORT)")
+    print(f"  เปิดหน้าเว็บ  : http://localhost:{_port}")
+    print(f"  รูปถาวร       : {ALPL_IMAGE_DIR}")
+    print(f"  หน้าเว็บจาก   : {_frontend_dir}")
+    if not os.path.isdir(_frontend_dir):
+        print("  ⚠ ไม่พบโฟลเดอร์ dist — ต้อง `npm run build` แล้วเอามาวางก่อน")
+        print("    ไม่งั้นเปิดหน้าเว็บจะได้ 404 ทุกหน้า (API ยังใช้ได้ปกติ)")
+    print("=" * 62)
+
+    uvicorn.run(app, host=_host, port=_port)
 
