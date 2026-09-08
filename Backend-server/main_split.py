@@ -3,6 +3,7 @@
 รันเหมือนเดิมทุกตัวอักษร:  uvicorn main_split:app --reload --port 8000
 (ต้อง cd Backend-server ก่อน ไม่งั้น import routers ไม่เจอ)
 """
+import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -10,8 +11,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from shared import *  # noqa: F401,F403
 from routers import session, measurements, parts_register, lookups, export, deleted
-
+import os
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 app = FastAPI(title="TM-X Backend Server", lifespan=lifespan)
+BACKEND_HOST = os.getenv("BACKEND_HOST","0.0.0.0")
+BACKEND_PORT = int(os.getenv("BACKEND_PORT",8000))
 
 app.add_middleware(
     CORSMiddleware,
@@ -76,3 +81,16 @@ app.mount(
     name="static",
 )
 
+if __name__ == "__main__":
+
+    log.info("=" * 62)
+    log.info("  TM-X Backend Server")
+    log.info(f"  ฟังที่        : {BACKEND_HOST}:{BACKEND_PORT}   (.env: BACKEND_HOST / BACKEND_PORT)")
+    log.info(f"  เปิดหน้าเว็บ  : http://localhost:{BACKEND_PORT}")
+    log.info(f"  รูปถาวร       : {ALPL_IMAGE_DIR}")
+    log.info(f"  หน้าเว็บจาก   : {_frontend_dir}")
+    if not os.path.isdir(_frontend_dir):
+        log.info("  ⚠ ไม่พบโฟลเดอร์ dist — ต้อง `npm run build` แล้วเอามาวางก่อน")
+        log.info("    ไม่งั้นเปิดหน้าเว็บจะได้ 404 ทุกหน้า (API ยังใช้ได้ปกติ)")
+    log.info("=" * 62)
+    uvicorn.run(app, host=BACKEND_HOST, port=BACKEND_PORT, access_log=False) 

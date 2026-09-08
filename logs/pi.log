@@ -1,0 +1,76 @@
+2026-09-04 14:48:01,767 [PI] ──────────────────────────────────────────────────────────────────
+2026-09-04 14:48:01,767 [PI] Pi.py — รอคำสั่ง Start จาก Backend
+2026-09-04 14:48:01,767 [PI]   ฟัง /command ที่    : 0.0.0.0:9998   (.env: PI_PORT)
+2026-09-04 14:48:01,767 [PI]   TM-X ที่            : 192.168.10.11:8600    (.env: TMX_HOST/TMX_PORT)
+2026-09-04 14:48:01,767 [PI]   Backend ที่         : http://127.0.0.1:8000          (.env: BACKEND_URL)
+2026-09-04 14:48:01,767 [PI]   heartbeat ทุก       : 2 วิ · หยุดเองถ้าขาดติดต่อเกิน 5 วิ
+2026-09-04 14:48:01,783 [PI]   รอค่าการวัดสูงสุด    : 15 วิ (poll ทุก 0.4 วิ)
+2026-09-04 14:48:01,783 [PI]   จำลองเซนเซอร์ (เบราว์เซอร์): http://127.0.0.1:9998/trigger
+2026-09-04 14:48:01,783 [PI]   จำลองเซนเซอร์ (เทอร์มินัล) : curl -X POST http://127.0.0.1:9998/trigger
+2026-09-04 14:48:01,783 [PI]      ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi
+2026-09-04 14:48:01,783 [PI] ──────────────────────────────────────────────────────────────────
+INFO:     Started server process [21912]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:9998 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [21912]
+2026-09-04 14:51:10,110 [PI] ──────────────────────────────────────────────────────────────────
+2026-09-04 14:51:10,110 [PI] Pi.py — รอคำสั่ง Start จาก Backend
+2026-09-04 14:51:10,110 [PI]   ฟัง /command ที่    : 0.0.0.0:9998   (.env: PI_PORT)
+2026-09-04 14:51:10,110 [PI]   TM-X ที่            : 192.168.10.11:8600    (.env: TMX_HOST/TMX_PORT)
+2026-09-04 14:51:10,110 [PI]   Backend ที่         : http://127.0.0.1:8000          (.env: BACKEND_URL)
+2026-09-04 14:51:10,110 [PI]   heartbeat ทุก       : 2 วิ · หยุดเองถ้าขาดติดต่อเกิน 5 วิ
+2026-09-04 14:51:10,110 [PI]   รอค่าการวัดสูงสุด    : 15 วิ (poll ทุก 0.4 วิ)
+2026-09-04 14:51:10,110 [PI]   จำลองเซนเซอร์ (เบราว์เซอร์): http://127.0.0.1:9998/trigger
+2026-09-04 14:51:10,110 [PI]   จำลองเซนเซอร์ (เทอร์มินัล) : curl -X POST http://127.0.0.1:9998/trigger
+2026-09-04 14:51:10,110 [PI]      ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi
+2026-09-04 14:51:10,110 [PI] ──────────────────────────────────────────────────────────────────
+INFO:     Started server process [13812]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:9998 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [13812]
+2026-09-04 16:45:07,274 [PI] ──────────────────────────────────────────────────────────────────
+2026-09-04 16:45:07,274 [PI] Pi.py — รอคำสั่ง Start จาก Backend
+2026-09-04 16:45:07,274 [PI]   ฟัง /command ที่    : 0.0.0.0:9998   (.env: PI_PORT)
+2026-09-04 16:45:07,274 [PI]   TM-X ที่            : 192.168.10.11:8600    (.env: TMX_HOST/TMX_PORT)
+2026-09-04 16:45:07,274 [PI]   Backend ที่         : http://127.0.0.1:8000          (.env: BACKEND_URL)
+2026-09-04 16:45:07,274 [PI]   heartbeat ทุก       : 2 วิ · หยุดเองถ้าขาดติดต่อเกิน 5 วิ
+2026-09-04 16:45:07,274 [PI]   รอค่าการวัดสูงสุด    : 15 วิ (poll ทุก 0.4 วิ)
+2026-09-04 16:45:07,274 [PI]   จำลองเซนเซอร์ (เบราว์เซอร์): http://127.0.0.1:9998/trigger
+2026-09-04 16:45:07,274 [PI]   จำลองเซนเซอร์ (เทอร์มินัล) : curl -X POST http://127.0.0.1:9998/trigger
+2026-09-04 16:45:07,274 [PI]      ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi
+2026-09-04 16:45:07,274 [PI] ──────────────────────────────────────────────────────────────────
+INFO:     Started server process [2104]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:9998 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [2104]
+2026-09-04 17:13:36,672 [PI] ──────────────────────────────────────────────────────────────────
+2026-09-04 17:13:36,672 [PI] Pi.py — รอคำสั่ง Start จาก Backend
+2026-09-04 17:13:36,672 [PI]   ฟัง /command ที่    : 0.0.0.0:9998   (.env: PI_PORT)
+2026-09-04 17:13:36,672 [PI]   TM-X ที่            : 192.168.10.11:8600    (.env: TMX_HOST/TMX_PORT)
+2026-09-04 17:13:36,672 [PI]   Backend ที่         : http://127.0.0.1:8000          (.env: BACKEND_URL)
+2026-09-04 17:13:36,672 [PI]   heartbeat ทุก       : 2 วิ · หยุดเองถ้าขาดติดต่อเกิน 5 วิ
+2026-09-04 17:13:36,672 [PI]   รอค่าการวัดสูงสุด    : 15 วิ (poll ทุก 0.4 วิ)
+2026-09-04 17:13:36,672 [PI]   จำลองเซนเซอร์ (เบราว์เซอร์): http://127.0.0.1:9998/trigger
+2026-09-04 17:13:36,672 [PI]   จำลองเซนเซอร์ (เทอร์มินัล) : curl -X POST http://127.0.0.1:9998/trigger
+2026-09-04 17:13:36,672 [PI]      ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi
+2026-09-04 17:13:36,672 [PI] ──────────────────────────────────────────────────────────────────
+INFO:     Started server process [16816]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:9998 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [16816]

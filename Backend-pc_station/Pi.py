@@ -9,13 +9,23 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
+# ── ตั้ง logging ─────────────────────────────────────────────────────────
+# ทุกบรรทัดจะมี timestamp นำหน้า จำเป็นตอนรันเป็น service แบบไม่มีหน้าต่าง
+# แล้วมาเปิดไฟล์ log อ่านทีหลัง — ไม่มีเวลากำกับจะไล่ลำดับเหตุการณ์ไม่ได้เลย
+#
+# ⚠ ป้าย [Pi] ไว้แยกจาก [Server] ของ Backend เวลาเอา log 2 เครื่องมาวางเทียบกัน
+import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [Pi] %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+log = logging.getLogger(__name__)
+
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 TMX_IP = os.getenv("TMX_HOST", "192.168.10.11")
 TMX_PORT = int(os.getenv("TMX_PORT", 8600))
 BUFFER_SIZE = 1024
 
 TRIGGER_COMMAND = "T1\r"
-TRIGGER_TIMEOUT = 2.0  # วินาที — รอ response จาก TM-X หลังส่ง trigger
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
 AGENT_PORT = int(os.getenv("AGENT_PORT", 9998))
@@ -26,8 +36,8 @@ HB_TIMEOUT_HINT = float(os.getenv("HEARTBEAT_TIMEOUT", 15))
 MEASURE_TIMEOUT       = float(os.getenv("MEASURE_TIMEOUT", 15))    # รอค่าสูงสุดกี่วินาที
 MEASURE_POLL_INTERVAL = float(os.getenv("MEASURE_POLL_INTERVAL", 0.4))
 
-# ── GM: ดึงค่าที่วัดได้จาก TM-X โดยตรง ──────────────────────────────────────
 SOCKET_TIMEOUT   = float(os.getenv("SOCKET_TIMEOUT", 5))
+# ── GM: ดึงค่าที่วัดได้จาก TM-X โดยตรง ──────────────────────────────────────
 GM_POLL_INTERVAL = 0.02                                  # 20 ms
 GM_MAX_WAIT      = float(os.getenv("GM_MAX_WAIT", 8))    # รอค่าสูงสุดต่อชิ้น
 NO_VALUE_ABS     = 9999.0        # |ค่า| >= นี้ = TM-X ยังวัดไม่เสร็จ/วัดไม่ติด
@@ -36,7 +46,14 @@ NO_VALUE_ABS     = 9999.0        # |ค่า| >= นี้ = TM-X ยังว�
 T1_RETRY = int(os.getenv("T1_RETRY", 3))
 T1_RETRY_WAIT = float(os.getenv("T1_RETRY_WAIT", 0.3))
 
-MAX_ASK_USER_ROUNDS = int(os.getenv("MAX_ASK_USER_ROUNDS", 3))
+# รอกี่วินาทีหลังส่ง `PW` ก่อนจะเริ่มวัด — TM-X ต้องโหลดโปรแกรมจากการ์ด SD
+# และ RESET ที่พ่วงมาทำให้ READY ดับชั่วคราว ยิง `T1` เร็วเกินไปจะได้ `ER,T1,03`
+#
+# ⚠ ตัวนี้ถูกใช้ **ทุกครั้งที่ข้ามรอยต่อกลุ่ม** ไม่ใช่แค่ตอนเริ่ม session แล้ว
+#   ตั้งสูงไปจะช้าทุกกลุ่ม ตั้งต่ำไปชิ้นแรกของกลุ่มจะพังแล้วเด้งถามผู้ใช้
+PW_LOAD_WAIT = float(os.getenv("PW_LOAD_WAIT", 1.0))
+
+MAX_ASK_USER_ROUNDS = int(os.getenv("MAX_ASK_USER_ROUNDS", 4))
 
 _answer_event  = threading.Event()
 _answer_action = None                  # "retry" | "stop" | None
@@ -115,7 +132,7 @@ async def command(req: CommandRequest):
                 timeout=5)
         except Exception:
             pass
-        print("\n ได้รับคำสั่ง Start จาก Backend")
+        log.info("\n ได้รับคำสั่ง Start จาก Backend")
         groups = req.groups
         if not groups:
             raise HTTPException(400, "payload ไม่มี `groups`")
@@ -129,9 +146,8 @@ async def command(req: CommandRequest):
             raise HTTPException(400, "มี ALPL ซ้ำข้ามกลุ่ม")
         if req.target_count != len(all_alpl):
             raise HTTPException(400, f"target_count ({req.target_count}) ไม่เท่ากับจำนวน ALPL รวมทุกกลุ่ม ({len(all_alpl)})")
-        templates = {g.template_name for g in groups}
-        if len(templates) > 1:
-            raise HTTPException(400, f"Pi ยังรองรับ template เดียวต่อ session — ได้มา {sorted(templates)}")
+        if any(not g.template_name for g in groups):
+            raise HTTPException(400, "มีกลุ่มที่ไม่ได้ระบุ `template_name`")
 
         with _answer_lock:
             _answer_action = None
@@ -156,7 +172,7 @@ async def command(req: CommandRequest):
         #   Pi แค่ POST ค่าที่อ่านจาก GM ไว้แล้วเข้า /api/measurements เอง
         #
         # ⚠ ห้ามแตะ is_running เหมือน retry — session ยังเดินต่อหลังบันทึกเสร็จ
-        print("📥 ได้รับคำสั่ง Accept จาก Backend")
+        log.info("📥 ได้รับคำสั่ง Accept จาก Backend")
         with _answer_lock:
             _answer_action = "accept"
         _answer_event.set()    
@@ -178,7 +194,7 @@ async def command(req: CommandRequest):
                 "หรือกำลังรอผลของชิ้นก่อนหน้าอยู่",
             )
         _trigger.set()
-        print("⚡ ได้รับสัญญาณ trigger (จากปุ่มบนหน้าเว็บ)")
+        log.info("⚡ ได้รับสัญญาณ trigger (จากปุ่มบนหน้าเว็บ)")
 
     elif req.action == "stop":
         is_running = False
@@ -212,7 +228,7 @@ async def trigger():
         return {"ok": False,
                 "reason": "ยังไม่ถึงช่วงรอสัญญาณ — รอข้อความ 'รอสัญญาณ trigger ...' ก่อนแล้วยิงใหม่"}
     _trigger.set()
-    print("⚡ ได้รับสัญญาณ trigger")
+    log.info("⚡ ได้รับสัญญาณ trigger")
     return {"ok": True}
 
 
@@ -235,8 +251,8 @@ def heartbeat_loop():
 
         # เช็คนอก try เสมอ — ต้องทำงานทุกรอบไม่ว่ารอบนี้จะยิงออกหรือไม่
         if is_running and time.time() - _hb_last_ok > HB_TIMEOUT_HINT:
-            print(f"\n⏹ ติดต่อ Backend ไม่ได้เกิน {HB_TIMEOUT_HINT:g} วิ — หยุดวัด")
-            print(f"   (backend น่าจะ mark session เป็น 'timeout' ไปแล้ว วัดต่อไปค่าก็ถูกทิ้ง)")
+            log.info(f"\n⏹ ติดต่อ Backend ไม่ได้เกิน {HB_TIMEOUT_HINT:g} วิ — หยุดวัด")
+            log.info(f"   (backend น่าจะ mark session เป็น 'timeout' ไปแล้ว วัดต่อไปค่าก็ถูกทิ้ง)")
             is_running = False
         time.sleep(HB_INTERVAL)
 
@@ -252,7 +268,7 @@ def get_measured_count(session_id):
     try:
         data = httpx.get(f"{BACKEND_URL}/api/session/state", timeout=5).json()
     except Exception as exc:
-        print(f"   ⚠️ อ่าน session state ไม่ได้: {exc}")
+        log.info(f"   ⚠️ อ่าน session state ไม่ได้: {exc}")
         return None
     if data.get("session_id") != session_id:
         return None
@@ -262,7 +278,7 @@ def get_measured_count(session_id):
 # วนถามจนกว่ามันจะตอบ is_ready 
 # รอ Trigger จาก MCU
 def wait_for_trigger_mcu():
-    print("arrive")
+    log.info("arrive")
     global _waiting_for_trigger
     _trigger.clear()
     _waiting_for_trigger = True
@@ -295,14 +311,6 @@ def wait_for_trigger_mcu():
 
 def send_recv(sock, command, timeout=SOCKET_TIMEOUT):
     """ส่ง 1 คำสั่ง แล้ว **วน recv จนเจอ CR** — คืน (response, ok)
-
-    ต่างจาก send_command() ข้างบนที่ใช้ sleep(0.1) + recv ครั้งเดียว ซึ่งผิด 2 อย่าง:
-      - sleep เดาเวลาเอา ไม่ได้ช่วยอะไร (recv บล็อกรอข้อมูลอยู่แล้วโดยธรรมชาติ)
-        และทำให้ poll GM ทุก 20 ms เป็นไปไม่ได้เลย
-      - TCP เป็น stream — recv ครั้งเดียวอาจได้ข้อความมาครึ่งเดียว แล้วพาร์สพัง
-        แบบเงียบๆ (GM คืนมายาวมาก 8 เครื่องมือ = 24 ช่อง)
-
-    ⚠ R0/PW ยังใช้ send_command() ตัวเดิมอยู่ ควรย้ายมาใช้ตัวนี้ด้วยตามแผนข้อ 7
     """
     sock.settimeout(timeout)
     deadline = time.time() + timeout
@@ -392,10 +400,10 @@ def clear_measurement(sock):
         resp, ok = send_recv(sock, cand)
         if ok:
             _clear_cmd = cand
-            print(f"   ℹ️ ใช้คำสั่งล้างค่า `{cand}` ได้ (จะใช้ตัวนี้ตลอดทั้ง session)")
+            log.info(f"   ℹ️ ใช้คำสั่งล้างค่า `{cand}` ได้ (จะใช้ตัวนี้ตลอดทั้ง session)")
             return True
     _clear_cmd = False
-    print("   ⚠️ TM-X ไม่รู้จักทั้ง MRS และ MSR — GM อาจคืนค่าของชิ้นก่อนหน้า!")
+    log.info("   ⚠️ TM-X ไม่รู้จักทั้ง MRS และ MSR — GM อาจคืนค่าของชิ้นก่อนหน้า!")
     return False
 
 
@@ -413,20 +421,20 @@ def trigger_tmx(sock):
     clear_measurement(sock)          # MRS ก่อนเสมอ ห้ามลืม
     for attempt in range(1, T1_RETRY + 1):
         resp, ok = send_recv(sock, "T1")
-        print(resp)
+        log.info(resp)
         if ok:
-            print(f"📡 TM-X ตอบ T1: {resp}")
-            print(f"ส่ง T1 สำเร็จหลังลอง {T1_RETRY} ครั้ง  {resp}")
+            log.info(f"📡 TM-X ตอบ T1: {resp}")
+            log.info(f"ส่ง T1 สำเร็จหลังลอง {T1_RETRY} ครั้ง  {resp}")
             return True, resp
         if ",03" in resp:
-            print(f"   ⏳ T1 โดนละเว้น ({resp}) — READY ยังไม่กลับมา "
+            log.info(f"   ⏳ T1 โดนละเว้น ({resp}) — READY ยังไม่กลับมา "
                   f"ลองใหม่ครั้งที่ {attempt}/{T1_RETRY}")
             time.sleep(T1_RETRY_WAIT)
             continue
-        print(f"❌ ส่ง T1 ไม่สำเร็จ: {resp}")
+        log.info(f"❌ ส่ง T1 ไม่สำเร็จ: {resp}")
         return False, resp
 
-    print(f"❌ ส่ง T1 ไม่สำเร็จหลังลอง {T1_RETRY} ครั้ง")
+    log.info(f"❌ ส่ง T1 ไม่สำเร็จหลังลอง {T1_RETRY} ครั้ง")
     return False, f"{resp} (ลองครบ {T1_RETRY} ครั้ง)"
 
 
@@ -498,7 +506,7 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
         tools = parse_gm(resp) if ok else None
         if tools and has_real_value(tools):
             tools_new = clean_tools(tools)
-            print(tools_new)
+            log.info(tools_new)
         
             x, y, horizon_left, horizon_right, vertical_top, vertical_bottom, offset_x, offset_y = (
             _val(GM_IDX_X,tools_new),
@@ -512,12 +520,12 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
              )
             result, reasons = judge(x, y, offset_x, offset_y, limits)
 
-            print(f"   📥 ได้ค่าหลัง {(time.time()-t0)*1000:.0f} ms "
-                  f"(ถาม GM {polls} ครั้ง · TM-X คืนมา {len(tools)} เครื่องมือ)")
-            print(f"      X={x} · Y={y} · offset_x={offset_x} · offset_y={offset_y} ")
-            print(f"   {'✅' if result == 'OK' else '❌'} ผลตัดสิน: {result}")
+            log.info("   📥 ได้ค่าหลัง %.0f ms (ถาม GM %s ครั้ง · TM-X คืนมา %s เครื่องมือ)",
+                     (time.time() - t0) * 1000, polls, len(tools))
+            log.info("      X=%s · Y=%s · offset_x=%s · offset_y=%s", x, y, offset_x, offset_y)
+            log.info("   %s ผลตัดสิน: %s", "✅" if result == "OK" else "❌", result)
             for r in reasons:
-                print(f"      • {r}")
+                log.info("      • %s", r)
 
             # เทียบกับผลที่ TM-X ตัดสินมาเอง (j) — ได้ตัวเฝ้าระวัง config drift ฟรีๆ
             '''j_x = tools[GM_IDX_X][2] if GM_IDX_X is not None and GM_IDX_X < len(tools) else None
@@ -529,8 +537,8 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
             return result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom,offset_x, offset_y
         time.sleep(GM_POLL_INTERVAL)
 
-    print(f"   ⚠️ รอ {timeout:.0f} วิแล้ว GM ยังไม่คืนค่าใหม่ (ถาม {polls} ครั้ง) "
-          f"— TM-X วัดชิ้นนี้ไม่ติด")
+    log.info("   ⚠️ รอ %.0f วิแล้ว GM ยังไม่คืนค่าใหม่ (ถาม %s ครั้ง) "
+             "— TM-X วัดชิ้นนี้ไม่ติด", timeout, polls)
     return "UNKNOWN", None, None, None, None, None, None, None, None
 
 #วนไปถามว่าพร้อมรับ result ยัง ให้ MCU set Flag เอา idle(ยังไม่มีชิ้นงาน) -> obj_is_ready(เมื่อวางชิ้นงานแล้ว) -> waiting_for_result(พร้อมรับ result) -> idle(เสร็จการวัด 1 ชิ้น)
@@ -550,7 +558,7 @@ def send_result_to_mcu(result, mcu_timeout=MCU_TIMEOUT):
     การรอ MCU ตอบรับ (`wait_mcu_ack` ผ่าน `_mcu_ack` ที่ประกาศไว้แล้วข้างบน)
     """
     icon = {"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
-    print(f"   🔀 → MCU: {icon} {result}")
+    log.info("   🔀 → MCU: %s %s", icon, result)
     return True
 
 
@@ -568,7 +576,7 @@ def wait_for_measurement(session_id, count_before, timeout=MEASURE_TIMEOUT):
 
 
 def report(event: str, detail: str, *, persist: bool = True):
-    print(f"   📣 {event}: {detail}")
+    log.info("   📣 %s: %s", event, detail)
     try:
         resp = httpx.post(
             f"{BACKEND_URL}/api/session/event",
@@ -576,9 +584,9 @@ def report(event: str, detail: str, *, persist: bool = True):
             timeout=2,
         )
         if resp.status_code != 200:
-            print(f"   ⚠️ Backend ไม่รับรายงาน (HTTP {resp.status_code})")
+            log.info("   ⚠️ Backend ไม่รับรายงาน (HTTP %s)", resp.status_code)
     except Exception as exc:
-        print(f"   ⚠️ แจ้ง Backend ไม่สำเร็จ: {exc}")
+        log.info("   ⚠️ แจ้ง Backend ไม่สำเร็จ: %s", exc)
 
 def ask_user(session_id, piece, target) -> str:
     global _answer_action
@@ -593,15 +601,15 @@ def ask_user(session_id, piece, target) -> str:
             timeout=5,
         )
         if resp.status_code != 200:
-            print(f"   ⚠️ Backend ไม่รับคำถาม (HTTP {resp.status_code}) — ถือว่าหยุด")
+            log.info("   ⚠️ Backend ไม่รับคำถาม (HTTP %s) — ถือว่าหยุด", resp.status_code)
             return "stop"
     except Exception as exc:
-        print(f"   ⚠️ ถามผู้ใช้ไม่ได้: {exc} — ถือว่าหยุด")
+        log.info("   ⚠️ ถามผู้ใช้ไม่ได้: %s — ถือว่าหยุด", exc)
         return "stop"
 
-    print(f"   ⏳ รอผู้ใช้ตัดสินใจ (สูงสุด {ASK_USER_TIMEOUT:.0f} วิ) ...")
+    log.info("   ⏳ รอผู้ใช้ตัดสินใจ (สูงสุด %.0f วิ) ...", ASK_USER_TIMEOUT)
     if not _answer_event.wait(ASK_USER_TIMEOUT):
-        print(f"   ⏱ ไม่มีคำตอบใน {ASK_USER_TIMEOUT:.0f} วิ — ถือว่าหยุด")
+        log.info("   ⏱ ไม่มีคำตอบใน %.0f วิ — ถือว่าหยุด", ASK_USER_TIMEOUT)
         return "stop"
 
     with _answer_lock:
@@ -609,9 +617,9 @@ def ask_user(session_id, piece, target) -> str:
 
 def handle_error(kind, session_id, piece, target, detail, rounds) -> bool:
     report(f"{kind}_FAILED",
-           f"ชิ้นที่ {piece}/{target} (ครั้งที่ {rounds}/{MAX_ASK_USER_ROUNDS}): {detail}")
+           f"ชิ้นที่ {piece}/{target} (ครั้งที่ {rounds}/{MAX_ASK_USER_ROUNDS-1}): {detail}")
     if rounds >= MAX_ASK_USER_ROUNDS:
-        report(f"{kind}_GAVE_UP", f"ชิ้นที่ {piece}/{target}: ครบ {MAX_ASK_USER_ROUNDS} ครั้งแล้ว — หยุดการวัด")
+        report(f"{kind}_GAVE_UP", f"ชิ้นที่ {piece}/{target}: ครบ {MAX_ASK_USER_ROUNDS-1} ครั้งแล้ว — หยุดการวัด")
         return False
 
     if not is_running:          # กด Stop จากเว็บระหว่างนี้
@@ -667,7 +675,7 @@ def post_measurement_from_pi(session_id, piece, x, y, horizon_left, horizon_righ
         return False
 
     mid = resp.json().get("measurement_id")
-    print(f"   ✅ บันทึกค่าจาก Pi แล้ว (measurement_id={mid})")
+    log.info("   ✅ บันทึกค่าจาก Pi แล้ว (measurement_id=%s)", mid)
 
     # ปักธงว่า "ไม่มีรูปถาวร" — ล้มก็ไม่ถือว่างานหลักพัง แถวลง DB ไปแล้ว
     try:
@@ -688,50 +696,81 @@ def command_flow(session_id, groups, target_count):
     stop_reason = None
 
     try:
-        print(f"\n{'='*60}")
-        print(f"✅ ได้รับคำสั่ง Start จาก Backend")
-        print(f"   session_id    : {session_id}")
-        print(f"   target_count  : {target_count}  ← จำนวนชิ้นที่จะวัดรอบนี้")
+        log.info(f"\n{'='*60}")
+        log.info(f"✅ ได้รับคำสั่ง Start จาก Backend")
+        log.info(f"   session_id    : {session_id}")
+        log.info(f"   target_count  : {target_count}  ← จำนวนชิ้นที่จะวัดรอบนี้")
         for gi, g in enumerate(groups, 1):
-            print(f"   กลุ่มที่ {gi}      : template={g.template_name!r} "
+            log.info(f"   กลุ่มที่ {gi}      : template={g.template_name!r} "
                   f"ALPL={g.alpl}")
             if g.limits:
                 L = g.limits
-                print(f"                   X {L.x_lo:.4f}–{L.x_hi:.4f} · "
+                log.info(f"                   X {L.x_lo:.4f}–{L.x_hi:.4f} · "
                       f"Y {L.y_lo:.4f}–{L.y_hi:.4f} · offset_max={L.offset_max}")
-        print(f"{'='*60}")
-        template_name = groups[0].template_name
+        log.info(f"{'='*60}")
+
+        # ── ชิ้นที่ i อยู่กลุ่มไหน ──────────────────────────────────────────
+        # ทำได้ด้วยบรรทัดเดียวเพราะ **คิวไม่เคยสลับกลุ่ม** — `_flatten_groups`
+        # ฝั่ง backend (routers/session.py) ต่อ ALPL ของกลุ่ม 0 ให้หมดก่อน
+        # แล้วค่อยกลุ่ม 1 ดังนั้นแต่ละกลุ่มเป็นบล็อกติดกันเสมอ ลำดับที่ได้ตรงกับ
+        # `queue` ที่ backend ใช้เลือก ALPL ให้ measurement เป๊ะ
+        #
+        # ⚠ ถ้าวันหลัง backend เปลี่ยนไปเรียงคิวแบบสลับกลุ่ม บรรทัดนี้พังทันที
+        #   และจะพังแบบเงียบ ๆ (วัดด้วย template ผิดโดยไม่มี error) — ต้องให้
+        #   backend ส่ง `group_of` มาตรง ๆ แทนการเดาจากลำดับ
+        group_of = [gi for gi, g in enumerate(groups) for _ in g.alpl]
+        if len(group_of) != target_count:
+            log.info("⚠️ จำนวน ALPL รวม (%s) ไม่เท่า target_count (%s) — payload เพี้ยน",
+                     len(group_of), target_count)
 
         try:
             client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             client_socket.settimeout(5.0)
             client_socket.connect((TMX_IP, TMX_PORT))
         except Exception as exc:
-            print(f"\n❌ ต่อ TM-X ที่ {TMX_IP}:{TMX_PORT} ไม่ได้ — {type(exc).__name__}: {exc}")
-            print("   ตรวจ: สาย LAN ต่ออยู่ไหม · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env ถูกไหม")
-            print("   → กด Stop ที่หน้าเว็บเพื่อล้าง session นี้ แล้วลองใหม่")
+            log.info("\n❌ ต่อ TM-X ที่ %s:%s ไม่ได้ — %s: %s", TMX_IP, TMX_PORT, type(exc).__name__, exc)
+            log.info("   ตรวจ: สาย LAN ต่ออยู่ไหม · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env ถูกไหม")
+            log.info("   → กด Stop ที่หน้าเว็บเพื่อล้าง session นี้ แล้วลองใหม่")
             stop_reason = (f"ต่อ TM-X ที่ {TMX_IP}:{TMX_PORT} ไม่ได้ ({type(exc).__name__}) "f"— ตรวจสาย LAN · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env")
             return
 
         _tmx_sock = client_socket  # ให้ stop handler ยิง S0 ผ่าน socket นี้ได้
 
         # Running (เข้าโหมดดำเนินงาน)
-        print(f"→ R0 : {send_command(client_socket, 'R0')}")
+        log.info("→ R0 : %s", send_command(client_socket, "R0"))
         time.sleep(0.5)
 
-        # Load Program ตาม template ที่ backend ส่งมา (zero-pad เป็น 3 หลัก)
-        pw = f"PW,1,{str(template_name).zfill(3)}"
-        print(f"→ {pw} : {send_command(client_socket, pw)}")
-        time.sleep(1.0)
+        # `PW` ย้ายเข้าไปในลูปแล้ว (ดูข้างล่าง) เพราะแต่ละกลุ่มใช้ template คนละตัวได้
+        current_tmpl = None      # template ที่โหลดค้างอยู่ใน TM-X ตอนนี้
 
         for piece in range(1, target_count + 1):
             if not is_running:
-                print("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
+                log.info("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
                 break
+
+            # ── ⓪ โหลดโปรแกรมวัดของกลุ่มนี้ ถ้ายังไม่ตรงกับที่ค้างอยู่ ──────
+            #
+            # ยิงก่อน `wait_for_trigger_mcu()` โดยตั้งใจ — ช่วงรอสัญญาณจาก MCU
+            # ไม่มีกำหนดเวลาอยู่แล้ว ปล่อยให้ TM-X โหลดโปรแกรมไปพร้อมกันเลย
+            # ถ้าย้ายไปไว้หลัง trigger จะเพิ่มดีเลย์ ~1 วิให้ชิ้นแรกของทุกกลุ่ม
+            #
+            # ⚠ `PW` พ่วง RESET มาด้วย ทำให้ READY ดับชั่วคราว ยิง `T1` ตามติด
+            #   จะได้ `ER,T1,03` · ที่รอดอยู่ทุกวันนี้เพราะ sleep 1 วิ + `T1_RETRY`
+            #   ลองซ้ำให้อีก 3 ครั้ง (~0.9 วิ) รวมเผื่อไว้ ~1.9 วิ
+            #   **ถ้าหน้างานพบว่าชิ้นแรกของกลุ่มพังบ่อย ให้เพิ่ม PW_LOAD_WAIT**
+            #   ทางที่สะอาดกว่าคือใช้คำสั่ง `RM` อ่านโหมดยืนยันแทนการเดาเวลา
+            tmpl = groups[group_of[piece - 1]].template_name
+            if tmpl != current_tmpl:
+                pw = f"PW,1,{str(tmpl).zfill(3)}"
+                log.info("→ %s : %s  (กลุ่มที่ %s)", pw,
+                         send_command(client_socket, pw), group_of[piece - 1] + 1)
+                time.sleep(PW_LOAD_WAIT)
+                current_tmpl = tmpl
+
             # ── ① รอ MCU บอกว่าชิ้นงานเข้าที่แล้ว (ตอนนี้ = curl /trigger) ──
-            print(f"\nชิ้นที่ {piece}/{target_count} — รอสัญญาณ trigger ...")
+            log.info("\nชิ้นที่ %s/%s — รอสัญญาณ trigger ...", piece, target_count)
             if not wait_for_trigger_mcu():
-                print("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
+                log.info("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
                 break
 
             # อ่านให้ชิดกับ T1 ที่สุด — ช่วงรอสัญญาณข้างบนกินเวลาเป็นนาทีได้
@@ -753,11 +792,15 @@ def command_flow(session_id, groups, target_count):
             if not ok:
                 break                     # ← ออกจาก for → finally → ยิง stop
                 
-
             # ── ③ วน GM จนได้ค่า ────────────────────────────────────────────
+            #
+            # ⚠⚠ **ต้องเป็น limits ของกลุ่มที่ชิ้นนี้อยู่ ห้ามใช้ groups[0]** —
+            #   ถ้าโหลด template ถูกแต่ตัดสินด้วยเกณฑ์ของกลุ่มแรก ค่าที่ได้จะ
+            #   ดูปกติทุกอย่างแต่คัดของผิดทั้งกลุ่มหลัง โดยไม่มี error ใด ๆ
+            #   (backend บันทึกด้วยเกณฑ์รายตัวที่ถูกต้อง → DB กับ MCU ขัดกันเงียบ ๆ)
             rounds = 0
             while True:
-                result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom, offset_x, offset_y = get_measurement_tmx(client_socket, groups[0].limits)
+                result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom, offset_x, offset_y = get_measurement_tmx(client_socket, groups[group_of[piece - 1]].limits)
                 if result != "UNKNOWN":
                     break
                 rounds += 1
@@ -774,13 +817,13 @@ def command_flow(session_id, groups, target_count):
             # TODO: รอ MCU ตอบรับ (wait_mcu_ack) ก่อนไปชิ้นถัดไป — ยังไม่ทำ
 
             if not is_running:
-                print("⏹ หยุดการวัด")
+                log.info("⏹ หยุดการวัด")
                 break
 
             # ── รอยืนยันว่าค่าเข้า DB จริง ก่อนไปชิ้นถัดไป ────────────────── ถ้า wait_for_measurement return true 
             if wait_for_measurement(session_id, count_before):
                 if is_running:
-                    print(f"   ✅ ชิ้นที่ {piece}/{target_count} บันทึกแล้ว")
+                    log.info("   ✅ ชิ้นที่ %s/%s บันทึกแล้ว", piece, target_count)
                 continue
 
             # ── ค่าไม่ถึง DB — วัดสำเร็จแล้ว แต่ Recieve ส่งไม่ถึง ────────────
@@ -801,7 +844,7 @@ def command_flow(session_id, groups, target_count):
             #   ⚠ การเช็คตรงนี้เป็น **ด่านเดียวที่กันแถวซ้ำ** — ระบบไม่มี client_uuid
             #     หรือกลไกกันซ้ำฝั่ง backend อีกแล้ว ห้ามถอดออก
             if get_measured_count(session_id) != count_before:
-                print("   ℹ️ ค่ามาถึงระหว่างรอคำตอบ — ไม่ต้องบันทึกซ้ำ")
+                log.info("   ℹ️ ค่ามาถึงระหว่างรอคำตอบ — ไม่ต้องบันทึกซ้ำ")
                 continue
 
             if not post_measurement_from_pi(session_id, piece, x, y,
@@ -810,7 +853,7 @@ def command_flow(session_id, groups, target_count):
                 stop_reason = f"ชิ้นที่ {piece}/{target_count}: บันทึกค่าจาก Pi ไม่สำเร็จ"
                 break
     except Exception as exc:
-        print(f"\n❌ session พังกลางทาง — {type(exc).__name__}: {exc}")
+        log.info("\n❌ session พังกลางทาง — %s: %s", type(exc).__name__, exc)
         stop_reason = f"session พังกลางทาง — {type(exc).__name__}: {exc}" 
     finally:
         if client_socket is not None:
@@ -825,7 +868,7 @@ def command_flow(session_id, groups, target_count):
         _tmx_sock = None
         is_running = False
         current_session_id = None  # heartbeat กลับไปยิงแบบ idle (ไม่แนบ session)
-        print("\n✅ จบ session — ปิดการเชื่อมต่อ TM-X แล้ว")
+        log.info("\n✅ จบ session — ปิดการเชื่อมต่อ TM-X แล้ว")
         try:
             st = httpx.get(f"{BACKEND_URL}/api/session/state", timeout=5).json()
             if st.get("session_id") == session_id and st.get("state") == "running":
@@ -843,35 +886,35 @@ def command_flow(session_id, groups, target_count):
                     json={"session_id": session_id, "reason": reason},
                     timeout=10,
                 )
-                print(f"⏹ แจ้ง backend ปิด session แล้ว (วัดได้ {measured}/{target_count})")
-                print(f"   เหตุผล: {reason}")
+                log.info("⏹ แจ้ง backend ปิด session แล้ว (วัดได้ %s/%s)", measured, target_count)
+                log.info("   เหตุผล: %s", reason)
 
         except Exception as exc:
-            print(f"   ⚠️ แจ้งปิด session ไม่ได้: {exc} — "
-                  f"backend จะปิดเองใน ~{HB_TIMEOUT_HINT:g} วิ (ขึ้นเป็น 'timeout')")
+            log.info("   ⚠️ แจ้งปิด session ไม่ได้: %s — "
+                     "backend จะปิดเองใน ~%g วิ (ขึ้นเป็น 'timeout')", exc, HB_TIMEOUT_HINT)
             # reason กำลังจะหายไปทั้งก้อน — เทอร์มินัลคือหลักฐานเดียวที่เหลือ
             if stop_reason:
-                print(f"   เหตุผลที่จะหายไป: {stop_reason}")
+                log.info("   เหตุผลที่จะหายไป: %s", stop_reason)
 
 if __name__ == "__main__":
     # heartbeat ต้องเริ่ม "ก่อน" เปิด server และรันตลอดอายุโปรแกรมใน daemon thread
     threading.Thread(target=heartbeat_loop, daemon=True).start()
 
-    print("─" * 66)
-    print("Pi.py — รอคำสั่ง Start จาก Backend")
-    print(f"  ฟัง /command ที่    : 0.0.0.0:{AGENT_PORT}   (.env: AGENT_PORT)")
-    print(f"  TM-X ที่            : {TMX_IP}:{TMX_PORT}    (.env: TMX_HOST/TMX_PORT)")
-    print(f"  Backend ที่         : {BACKEND_URL}          (.env: BACKEND_URL)")
-    print(f"  heartbeat ทุก       : {HB_INTERVAL:g} วิ · หยุดเองถ้าขาดติดต่อเกิน {HB_TIMEOUT_HINT:g} วิ")
-    print(f"  รอค่าการวัดสูงสุด    : {MEASURE_TIMEOUT:g} วิ (poll ทุก {MEASURE_POLL_INTERVAL:g} วิ)")
+    log.info("─" * 66)
+    log.info("Pi.py — รอคำสั่ง Start จาก Backend")
+    log.info(f"  ฟัง /command ที่    : 0.0.0.0:{AGENT_PORT}   (.env: AGENT_PORT)")
+    log.info(f"  TM-X ที่            : {TMX_IP}:{TMX_PORT}    (.env: TMX_HOST/TMX_PORT)")
+    log.info(f"  Backend ที่         : {BACKEND_URL}          (.env: BACKEND_URL)")
+    log.info(f"  heartbeat ทุก       : {HB_INTERVAL:g} วิ · หยุดเองถ้าขาดติดต่อเกิน {HB_TIMEOUT_HINT:g} วิ")
+    log.info(f"  รอค่าการวัดสูงสุด    : {MEASURE_TIMEOUT:g} วิ (poll ทุก {MEASURE_POLL_INTERVAL:g} วิ)")
     # แยก 2 บรรทัดโดยตั้งใจ — เดิมพิมพ์ "curl -X POST http://..." ติดกันบรรทัดเดียว
     # แล้วมีคนก๊อปทั้งบรรทัดไปวางในช่อง address ของเบราว์เซอร์ ได้ URL เพี้ยนเป็น
     #   http://127.0.0.1:9998/curl%20-X%20POST%20http://...
     # (%20 = ช่องว่าง) · บรรทัดล่างจึงเป็น URL ล้วนที่ก๊อปแล้ววางได้ทันที
-    print(f"  จำลองเซนเซอร์ (เบราว์เซอร์): http://127.0.0.1:{AGENT_PORT}/trigger")
-    print(f"  จำลองเซนเซอร์ (เทอร์มินัล) : curl -X POST http://127.0.0.1:{AGENT_PORT}/trigger")
-    print(f"     ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi")
-    print("─" * 66)
+    log.info(f"  จำลองเซนเซอร์ (เบราว์เซอร์): http://127.0.0.1:{AGENT_PORT}/trigger")
+    log.info(f"  จำลองเซนเซอร์ (เทอร์มินัล) : curl -X POST http://127.0.0.1:{AGENT_PORT}/trigger")
+    log.info(f"     ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi")
+    log.info("─" * 66)
 
     # ── เตือนถ้า heartbeat ตั้งค่าไม่สัมพันธ์กัน ────────────────────────────
     # ต้อง INTERVAL × 2 ≤ TIMEOUT เป็นอย่างน้อย เพื่อให้ทนบีตหาย 1 ครั้งได้
@@ -882,9 +925,9 @@ if __name__ == "__main__":
     # ฆ่า session ทิ้งเองกลางการวัด (ทิ้งคิวด้วย กู้ไม่ได้) โดยไม่มีสาเหตุจริง
     # แล้วหน้าเว็บขึ้นว่า 'timeout' ซึ่งชี้ไปที่ "Pi ตาย" ทั้งที่ Pi ปกติดี
     if HB_INTERVAL * 2 > HB_TIMEOUT_HINT:
-        print(f"⚠️  HEARTBEAT_INTERVAL ({HB_INTERVAL:g}s) ถี่ไม่พอเมื่อเทียบกับ "
+        log.info(f"⚠️  HEARTBEAT_INTERVAL ({HB_INTERVAL:g}s) ถี่ไม่พอเมื่อเทียบกับ "
               f"HEARTBEAT_TIMEOUT ({HB_TIMEOUT_HINT:g}s)")
-        print(f"    แนะนำให้ HEARTBEAT_INTERVAL ไม่เกิน {HB_TIMEOUT_HINT/2:g}s "
+        log.info(f"    แนะนำให้ HEARTBEAT_INTERVAL ไม่เกิน {HB_TIMEOUT_HINT/2:g}s "
               f"— แก้ที่ .env\n")
 
     # port ต้องตรงกับ AGENT_PORT ที่ main.py ใช้ยิงมา

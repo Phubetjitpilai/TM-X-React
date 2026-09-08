@@ -1,0 +1,14 @@
+{
+  "deleted_at": "2026-09-04 11:21:02",
+  "kind": "operator",
+  "table": "operator",
+  "pk": {
+    "operator_id": 3
+  },
+  "row": {
+    "operator_id": 3,
+    "operator_name": "Ronaldo"
+  },
+  "related": {},
+  "image_file": null
+}

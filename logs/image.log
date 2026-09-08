@@ -1,0 +1,60 @@
+2026-09-04 14:48:01,783 [Image Server] ==================================================================
+2026-09-04 14:48:01,783 [Image Server] TM-X Image Server (สำหรับ Power BI)
+2026-09-04 14:48:01,783 [Image Server]   ฟังที่         : 0.0.0.0:8080
+2026-09-04 14:48:01,783 [Image Server]   URL สำหรับ Power BI : http://.0.0.1:8080/images/<path>
+2026-09-04 14:48:01,783 [Image Server]   เสิร์ฟรูปจาก    : C:\Users\Pjitpila\TM-X\image_ALPL
+2026-09-04 14:48:01,783 [Image Server]   อนุญาตเฉพาะ IP : วง LAN (10.x / 172.16-31.x / 192.168.x) และ localhost
+2026-09-04 14:48:01,783 [Image Server] ==================================================================
+INFO:     Started server process [26756]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [26756]
+2026-09-04 14:51:10,094 [Image Server] ==================================================================
+2026-09-04 14:51:10,094 [Image Server] TM-X Image Server (สำหรับ Power BI)
+2026-09-04 14:51:10,094 [Image Server]   ฟังที่         : 0.0.0.0:8080
+2026-09-04 14:51:10,094 [Image Server]   URL สำหรับ Power BI : http://.0.0.1:8080/images/<path>
+2026-09-04 14:51:10,094 [Image Server]   เสิร์ฟรูปจาก    : C:\Users\Pjitpila\TM-X\image_ALPL
+2026-09-04 14:51:10,094 [Image Server]   อนุญาตเฉพาะ IP : วง LAN (10.x / 172.16-31.x / 192.168.x) และ localhost
+2026-09-04 14:51:10,094 [Image Server] ==================================================================
+INFO:     Started server process [12732]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [12732]
+2026-09-04 16:45:07,244 [Image Server] ==================================================================
+2026-09-04 16:45:07,244 [Image Server] TM-X Image Server (สำหรับ Power BI)
+2026-09-04 16:45:07,244 [Image Server]   ฟังที่         : 0.0.0.0:8080
+2026-09-04 16:45:07,244 [Image Server]   URL สำหรับ Power BI : http://.0.0.1:8080/images/<path>
+2026-09-04 16:45:07,244 [Image Server]   เสิร์ฟรูปจาก    : C:\Users\Pjitpila\TM-X\image_ALPL
+2026-09-04 16:45:07,244 [Image Server]   อนุญาตเฉพาะ IP : วง LAN (10.x / 172.16-31.x / 192.168.x) และ localhost
+2026-09-04 16:45:07,244 [Image Server] ==================================================================
+INFO:     Started server process [12492]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [12492]
+2026-09-04 17:13:36,672 [Image Server] ==================================================================
+2026-09-04 17:13:36,672 [Image Server] TM-X Image Server (สำหรับ Power BI)
+2026-09-04 17:13:36,672 [Image Server]   ฟังที่         : 0.0.0.0:8080
+2026-09-04 17:13:36,672 [Image Server]   URL สำหรับ Power BI : http://.0.0.1:8080/images/<path>
+2026-09-04 17:13:36,672 [Image Server]   เสิร์ฟรูปจาก    : C:\Users\Pjitpila\TM-X\image_ALPL
+2026-09-04 17:13:36,672 [Image Server]   อนุญาตเฉพาะ IP : วง LAN (10.x / 172.16-31.x / 192.168.x) และ localhost
+2026-09-04 17:13:36,672 [Image Server] ==================================================================
+INFO:     Started server process [15244]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [15244]

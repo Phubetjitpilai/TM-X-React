@@ -1,0 +1,45 @@
+2026-09-04 14:48:01,497 [Data Receiver] ======================================================================
+2026-09-04 14:48:01,497 [Data Receiver] Recieve_tm-x.py (PC) — รอรับค่า+รูปจาก TM-X ผ่าน FTP
+2026-09-04 14:48:01,497 [Data Receiver]   โหมด          : ส่งต่อเข้า Backend (ใช้งานจริง)
+2026-09-04 14:48:01,497 [Data Receiver]                   (.env: FORWARD_TO_BACKEND=1)
+2026-09-04 14:48:01,497 [Data Receiver]   FTP รออยู่ที่   : 0.0.0.0:21   (.env: AGENT_FTP_HOST/PORT)
+2026-09-04 14:48:01,497 [Data Receiver]   บัญชี FTP      : INTERN_USER / ******   (.env: AGENT_FTP_USER/PASS)
+2026-09-04 14:48:01,497 [Data Receiver]   เก็บไฟล์ลงที่   : C:\Users\Pjitpila\TM-X\Store_image_temporary
+2026-09-04 14:48:01,497 [Data Receiver]   Backend ที่    : http://127.0.0.1:8000   (.env: BACKEND_URL)
+2026-09-04 14:48:01,497 [Data Receiver]   กติกา         : ใช้รูปนอกโฟลเดอร์ HEAD-A · ข้ามค่า -9999.999
+2026-09-04 14:48:01,497 [Data Receiver] ======================================================================
+2026-09-04 14:48:01,513 [Data Receiver] 🔄 รีเซ็ตตำแหน่งอ่าน .txt เรียบร้อย
+2026-09-04 14:48:01,513 [Data Receiver] concurrency model: async
+2026-09-04 14:48:01,513 [Data Receiver] masquerade (NAT) address: None
+2026-09-04 14:48:01,513 [Data Receiver] passive ports: 60000->60099
+2026-09-04 14:48:01,513 [Data Receiver] >>> starting FTP server on 0.0.0.0:21, pid=29248 <<<
+2026-09-04 14:51:09,688 [Data Receiver] ======================================================================
+2026-09-04 14:51:09,688 [Data Receiver] Recieve_tm-x.py (PC) — รอรับค่า+รูปจาก TM-X ผ่าน FTP
+2026-09-04 14:51:09,688 [Data Receiver]   โหมด          : ส่งต่อเข้า Backend (ใช้งานจริง)
+2026-09-04 14:51:09,688 [Data Receiver]                   (.env: FORWARD_TO_BACKEND=1)
+2026-09-04 14:51:09,688 [Data Receiver]   FTP รออยู่ที่   : 0.0.0.0:21   (.env: AGENT_FTP_HOST/PORT)
+2026-09-04 14:51:09,688 [Data Receiver]   บัญชี FTP      : INTERN_USER / ******   (.env: AGENT_FTP_USER/PASS)
+2026-09-04 14:51:09,688 [Data Receiver]   เก็บไฟล์ลงที่   : C:\Users\Pjitpila\TM-X\Store_image_temporary
+2026-09-04 14:51:09,688 [Data Receiver]   Backend ที่    : http://127.0.0.1:8000   (.env: BACKEND_URL)
+2026-09-04 14:51:09,688 [Data Receiver]   กติกา         : ใช้รูปนอกโฟลเดอร์ HEAD-A · ข้ามค่า -9999.999
+2026-09-04 14:51:09,688 [Data Receiver] ======================================================================
+2026-09-04 14:51:09,688 [Data Receiver] 🔄 รีเซ็ตตำแหน่งอ่าน .txt เรียบร้อย
+2026-09-04 14:51:09,688 [Data Receiver] concurrency model: async
+2026-09-04 14:51:09,688 [Data Receiver] masquerade (NAT) address: None
+2026-09-04 14:51:09,688 [Data Receiver] passive ports: 60000->60099
+2026-09-04 14:51:09,688 [Data Receiver] >>> starting FTP server on 0.0.0.0:21, pid=12680 <<<
+2026-09-04 16:45:07,055 [Data Receiver] ======================================================================
+2026-09-04 16:45:07,055 [Data Receiver] Recieve_tm-x.py (PC) — รอรับค่า+รูปจาก TM-X ผ่าน FTP
+2026-09-04 16:45:07,055 [Data Receiver]   โหมด          : ส่งต่อเข้า Backend (ใช้งานจริง)
+2026-09-04 16:45:07,055 [Data Receiver]                   (.env: FORWARD_TO_BACKEND=1)
+2026-09-04 16:45:07,055 [Data Receiver]   FTP รออยู่ที่   : 0.0.0.0:21   (.env: AGENT_FTP_HOST/PORT)
+2026-09-04 16:45:07,055 [Data Receiver]   บัญชี FTP      : INTERN_USER / ******   (.env: AGENT_FTP_USER/PASS)
+2026-09-04 16:45:07,055 [Data Receiver]   เก็บไฟล์ลงที่   : C:\Users\Pjitpila\TM-X\Store_image_temporary
+2026-09-04 16:45:07,055 [Data Receiver]   Backend ที่    : http://127.0.0.1:8000   (.env: BACKEND_URL)
+2026-09-04 16:45:07,055 [Data Receiver]   กติกา         : ใช้รูปนอกโฟลเดอร์ HEAD-A · ข้ามค่า -9999.999
+2026-09-04 16:45:07,055 [Data Receiver] ======================================================================
+2026-09-04 16:45:07,055 [Data Receiver] 🔄 รีเซ็ตตำแหน่งอ่าน .txt เรียบร้อย
+2026-09-04 16:45:07,055 [Data Receiver] concurrency model: async
+2026-09-04 16:45:07,055 [Data Receiver] masquerade (NAT) address: None
+2026-09-04 16:45:07,055 [Data Receiver] passive ports: 60000->60099
+2026-09-04 16:45:07,055 [Data Receiver] >>> starting FTP server on 0.0.0.0:21, pid=21012 <<<

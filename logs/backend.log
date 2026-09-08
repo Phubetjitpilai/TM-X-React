@@ -1,0 +1,72 @@
+2026-09-04 14:48:02,168 [Server] ==============================================================
+2026-09-04 14:48:02,168 [Server]   TM-X Backend Server
+2026-09-04 14:48:02,168 [Server]   ฟังที่        : 0.0.0.0:8000   (.env: BACKEND_HOST / BACKEND_PORT)
+2026-09-04 14:48:02,168 [Server]   เปิดหน้าเว็บ  : http://localhost:8000
+2026-09-04 14:48:02,168 [Server]   รูปถาวร       : C:\Users\Pjitpila\TM-X\image_ALPL
+2026-09-04 14:48:02,168 [Server]   หน้าเว็บจาก   : C:\Users\Pjitpila\TM-X\Frontend-react\dist
+2026-09-04 14:48:02,168 [Server] ==============================================================
+INFO:     Started server process [20492]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-09-04 14:48:02,262 [Server] SSE client connected  (total=1)
+2026-09-04 14:48:40,608 [Server] SSE client disconnected (total=0)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [20492]
+2026-09-04 14:51:10,813 [Server] ==============================================================
+2026-09-04 14:51:10,813 [Server]   TM-X Backend Server
+2026-09-04 14:51:10,813 [Server]   ฟังที่        : 0.0.0.0:8000   (.env: BACKEND_HOST / BACKEND_PORT)
+2026-09-04 14:51:10,813 [Server]   เปิดหน้าเว็บ  : http://localhost:8000
+2026-09-04 14:51:10,813 [Server]   รูปถาวร       : C:\Users\Pjitpila\TM-X\image_ALPL
+2026-09-04 14:51:10,813 [Server]   หน้าเว็บจาก   : C:\Users\Pjitpila\TM-X\Frontend-react\dist
+2026-09-04 14:51:10,813 [Server] ==============================================================
+INFO:     Started server process [11552]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-09-04 14:52:01,782 [Server] SSE client connected  (total=1)
+2026-09-04 14:52:07,593 [Server] SSE client disconnected (total=0)
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [11552]
+2026-09-04 16:45:07,589 [Server] ==============================================================
+2026-09-04 16:45:07,589 [Server]   TM-X Backend Server
+2026-09-04 16:45:07,589 [Server]   ฟังที่        : 0.0.0.0:8000   (.env: BACKEND_HOST / BACKEND_PORT)
+2026-09-04 16:45:07,589 [Server]   เปิดหน้าเว็บ  : http://localhost:8000
+2026-09-04 16:45:07,589 [Server]   รูปถาวร       : C:\Users\Pjitpila\TM-X\image_ALPL
+2026-09-04 16:45:07,589 [Server]   หน้าเว็บจาก   : C:\Users\Pjitpila\TM-X\Frontend-react\dist
+2026-09-04 16:45:07,589 [Server] ==============================================================
+INFO:     Started server process [16396]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-09-04 16:45:10,102 [Server] SSE client connected  (total=1)
+2026-09-04 16:45:38,808 [Server] SSE client disconnected (total=0)
+INFO:     Shutting down
+2026-09-04 16:46:04,496 [Server] Database connection failed: (2003, "Can't connect to MySQL server on '127.0.0.1' ([WinError 10061] No connection could be made because the target machine actively refused it)") (หยุดลองต่อ 2 วิ)
+2026-09-04 16:46:04,496 [Server] heartbeat_checker: DB unreachable, skip this round: เชื่อมต่อฐานข้อมูลไม่สำเร็จ: (2003, "Can't connect to MySQL server on '127.0.0.1' ([WinError 10061] No connection could be made because the target machine actively refused it)")
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [16396]
+2026-09-04 17:13:37,704 [Server] ==============================================================
+2026-09-04 17:13:37,704 [Server]   TM-X Backend Server
+2026-09-04 17:13:37,704 [Server]   ฟังที่        : 0.0.0.0:8000   (.env: BACKEND_HOST / BACKEND_PORT)
+2026-09-04 17:13:37,704 [Server]   เปิดหน้าเว็บ  : http://localhost:8000
+2026-09-04 17:13:37,704 [Server]   รูปถาวร       : C:\Users\Pjitpila\TM-X\image_ALPL
+2026-09-04 17:13:37,704 [Server]   หน้าเว็บจาก   : C:\Users\Pjitpila\TM-X\Frontend-react\dist
+2026-09-04 17:13:37,704 [Server] ==============================================================
+INFO:     Started server process [20960]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-09-04 17:13:56,854 [Server] SSE client connected  (total=1)
+INFO:     Shutting down
+INFO:     Waiting for connections to close. (CTRL+C to force quit)
+2026-09-04 17:14:52,774 [Server] SSE client disconnected (total=0)
+ERROR:    ASGI callable returned without completing response.
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [20960]

@@ -498,11 +498,11 @@ def _fetch_one(cur, sql: str, params) -> Optional[Dict[str, Any]]:
     cur.execute(sql, params)
     return cur.fetchone()
 
-AGENT_HOST      = os.getenv("AGENT_HOST", "localhost")
+PI_HOST      = os.getenv("PI_HOST", "localhost")
 
-AGENT_PORT      = int(os.getenv("AGENT_PORT", 9998))
+PI_PORT      = int(os.getenv("PI_PORT", 9998))
 
-AGENT_BASE_URL  = f"http://{AGENT_HOST}:{AGENT_PORT}"
+AGENT_BASE_URL  = f"http://{PI_HOST}:{PI_PORT}"
 
 # หน้าเว็บ poll /api/session/state ทุกกี่วินาที — ส่งให้ frontend ผ่าน
 # GET /api/config เพราะเบราว์เซอร์อ่าน .env เองไม่ได้
@@ -1583,8 +1583,8 @@ def _purge_old_deleted() -> int:
 # ต้องมี __all__ เพราะ import * จะข้ามชื่อที่ขึ้นต้นด้วย _ ทั้งหมด
 __all__ = [
     "AGENT_BASE_URL",
-    "AGENT_HOST",
-    "AGENT_PORT",
+    "PI_HOST",
+    "PI_PORT",
     "ALPL_IMAGE_DIR",
     "Any",
     "BaseModel",

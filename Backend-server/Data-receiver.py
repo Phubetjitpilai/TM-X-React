@@ -2,12 +2,16 @@ import os
 import shutil
 import threading
 import time
-
+import logging
 import httpx
 from dotenv import load_dotenv
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
 from pyftpdlib.servers import FTPServer
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [Data Receiver] %(message)s")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+log = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 load_dotenv(dotenv_path=os.path.join(PROJECT_ROOT, ".env"))
@@ -144,7 +148,7 @@ def _find_measurement_for_image(timeout: float = TXT_WAIT_TIMEOUT):
         if path:
             with count_lock:
                 if path != _txt_cursor_path:
-                    print(f"📄 .txt ไฟล์ใหม่ → {os.path.basename(path)} (เริ่มนับบรรทัดใหม่)")
+                    log.info(f"📄 .txt ไฟล์ใหม่ → {os.path.basename(path)} (เริ่มนับบรรทัดใหม่)")
                     _txt_cursor_path = path
                     _txt_cursor_rows = 0
 
@@ -154,7 +158,7 @@ def _find_measurement_for_image(timeout: float = TXT_WAIT_TIMEOUT):
 
                 if after > before:
                     _txt_cursor_rows = after
-                    print(f"   📈 .txt {before} → {after} บรรทัด")
+                    log.info(f"   📈 .txt {before} → {after} บรรทัด")
                     parsed = _parse_measurement_line(lines[-1])
                     if parsed is not None:
                         return parsed
@@ -172,7 +176,7 @@ def get_current_session():
         if data.get("state") == "running":
             return data.get("session_id")
     except Exception as exc:
-        print(f"⚠️ query /api/session/state ไม่สำเร็จ: {exc}")
+        log.info(f"⚠️ query /api/session/state ไม่สำเร็จ: {exc}")
     return None
 
 def post_to_backend(
@@ -208,7 +212,7 @@ def post_to_backend(
     )
 
 def report(event: str, detail: str, *, persist: bool = True):
-    print(f"   📣 {event}: {detail}")
+    log.info(f"   📣 {event}: {detail}")
     try:
         httpx.post(
             f"{BACKEND_URL}/api/session/event",
@@ -216,7 +220,7 @@ def report(event: str, detail: str, *, persist: bool = True):
             timeout=2,
         )
     except Exception as exc:
-        print(f"   ⚠️ แจ้ง Backend ไม่สำเร็จ: {exc}")
+        log.info(f"   ⚠️ แจ้ง Backend ไม่สำเร็จ: {exc}")
 
 def upload_image_to_backend(measurement_id, image_path):
     try:
@@ -227,7 +231,7 @@ def upload_image_to_backend(measurement_id, image_path):
                 timeout=60,
             )
         if resp.status_code == 200:
-            print(f"   🖼 อัปโหลดรูปสำเร็จ (measurement_id={measurement_id})")
+            log.info(f"   🖼 อัปโหลดรูปสำเร็จ (measurement_id={measurement_id})")
         else:
             report("IMAGE_UPLOAD_FAILED",
                    f"รูปของ measurement {measurement_id} อัปโหลดไม่สำเร็จ "
@@ -262,11 +266,11 @@ def clear_temp_dir(wait_timeout: float = 5.0):
     if wait_timeout > 0:
         deadline = time.time() + wait_timeout
         if _jobs_count() > 0:
-            print(f"⏳ รองาน {_jobs_count()} รายการที่ค้างอยู่ให้เสร็จก่อนล้าง...")
+            log.info(f"⏳ รองาน {_jobs_count()} รายการที่ค้างอยู่ให้เสร็จก่อนล้าง...")
         while _jobs_count() > 0 and time.time() < deadline:
             time.sleep(0.3)
         if _jobs_count() > 0:
-            print(f"⚠️ ยังมีงานค้าง {_jobs_count()} รายการหลังรอ {wait_timeout:.0f} วิ — ล้างต่อไป")
+            log.info(f"⚠️ ยังมีงานค้าง {_jobs_count()} รายการหลังรอ {wait_timeout:.0f} วิ — ล้างต่อไป")
 
     # ── ลบไฟล์และโฟลเดอร์ข้างใน ────────────────────────────────────────
     removed_files = removed_dirs = 0
@@ -278,7 +282,7 @@ def clear_temp_dir(wait_timeout: float = 5.0):
             else:
                 os.remove(path);     removed_files += 1
         except OSError as exc:
-            print(f"⚠️ ลบ {name} ไม่สำเร็จ: {exc}")
+            log.info(f"⚠️ ลบ {name} ไม่สำเร็จ: {exc}")
 
     with _txt_lock:
         _txt_paths.clear()   # path ที่จำไว้ชี้ไปยังไฟล์ที่ไม่มีแล้ว
@@ -287,10 +291,10 @@ def clear_temp_dir(wait_timeout: float = 5.0):
         # ไฟล์ที่หมุดชี้อยู่ถูกลบไปกับโฟลเดอร์ temp แล้ว ต้องล้างด้วย
         _txt_cursor_path = None
         _txt_cursor_rows = 0
-    print("🔄 รีเซ็ตตำแหน่งอ่าน .txt เรียบร้อย")
+    log.info("🔄 รีเซ็ตตำแหน่งอ่าน .txt เรียบร้อย")
 
     if removed_files or removed_dirs:
-        print(f"🧹 ล้าง {os.path.basename(TEMP_IMAGE_DIR)} แล้ว "
+        log.info(f"🧹 ล้าง {os.path.basename(TEMP_IMAGE_DIR)} แล้ว "
               f"(ไฟล์ {removed_files} · โฟลเดอร์ {removed_dirs})")
         
 #Clear เมื่อ Session_id เปลี่ยน และ จบแล้ว
@@ -308,11 +312,11 @@ def session_watcher():
 
         if is_running: #Session_id เปลี่ยน
             if last_running_sid is not None and session_id != last_running_sid:
-                print(f"\n🔄 session เปลี่ยนจาก {last_running_sid} → {session_id}")
+                log.info(f"\n🔄 session เปลี่ยนจาก {last_running_sid} → {session_id}")
                 clear_temp_dir()
             last_running_sid = session_id
         elif last_running_sid is not None: #Run จบแล้ว
-            print(f"\n🏁 session {last_running_sid} จบแล้ว (state={data.get('state')})")
+            log.info(f"\n🏁 session {last_running_sid} จบแล้ว (state={data.get('state')})")
             clear_temp_dir()
             last_running_sid = None
         
@@ -350,7 +354,7 @@ def _handle_capture_inner(image_path):
         return
 
     # ── ด่าน 3: ส่งเข้า Backend ─────────────────────────────────────────
-    print(
+    log.info(
     f"✅ {name} ({size_mb:.1f} MB) → "
     f"value_x={value_x} value_y={value_y} "
     f"horizon_left={horizon_left} horizon_right={horizon_right} vertical_bottom={vertical_bottom} vertical_top={vertical_top} "
@@ -380,7 +384,7 @@ def _handle_capture_inner(image_path):
         return
 
     data = resp.json()
-    print(f"   → บันทึกแล้ว: result={data.get('result')}  ({data.get('measured')}/{data.get('target')})")
+    log.info(f"   → บันทึกแล้ว: result={data.get('result')}  ({data.get('measured')}/{data.get('target')})")
     upload_image_to_backend(data["measurement_id"], image_path)
 
 # ทำงานเมื่อ FORWARD_TO_BACKEND = 0 ใช้สำหรับการ Debug
@@ -400,26 +404,26 @@ def _log_received_file(path: str, note: str = ""):
         size = -1
 
     kind = "รูป" if ext in _IMAGE_EXTS else "ข้อความ"
-    print(f"[{when}] ได้ไฟล์ ({kind}): {rel}  ({size:,} bytes){note}")
+    log.info(f"[{when}] ได้ไฟล์ ({kind}): {rel}  ({size:,} bytes){note}")
 
     if ext in _IMAGE_EXTS:
         return
 
     lines = _read_lines(path)
-    print(f"           มีทั้งหมด {len(lines)} บรรทัด")
+    log.info(f"           มีทั้งหมด {len(lines)} บรรทัด")
     if not lines:
         return
 
     last = lines[-1]
-    print(f"           บรรทัดล่าสุด: {last!r}")
+    log.info(f"           บรรทัดล่าสุด: {last!r}")
 
     parsed = _parse_measurement_line(last)
     if parsed is None:
         n = len(last.split(","))
-        print(f"           ⚠️ แปลงค่าไม่ได้ — ได้ {n} ช่อง (ต้องการ = 8) ")
+        log.info(f"           ⚠️ แปลงค่าไม่ได้ — ได้ {n} ช่อง (ต้องการ = 8) ")
         return
 
-    print(f"           แปลงค่าได้: value_x={parsed[0]}  value_y={parsed[1]}  "
+    log.info(f"           แปลงค่าได้: value_x={parsed[0]}  value_y={parsed[1]}  "
           f"offset_opx={parsed[6]}  offset_opy={parsed[7]}")
   
 class ReceiverFTPHandler(FTPHandler):
@@ -483,28 +487,28 @@ def start_ftp_server():
     try:
         server.serve_forever(timeout=1)
     except KeyboardInterrupt:
-        print("\nได้รับ Ctrl+C — กำลังปิด FTP server...")
+        log.info("\nได้รับ Ctrl+C — กำลังปิด FTP server...")
     finally:
         server.close_all()
-        print("ปิด FTP server เรียบร้อย")
+        log.info("ปิด FTP server เรียบร้อย")
 
 
 if __name__ == "__main__":
     mode = ("ส่งต่อเข้า Backend (ใช้งานจริง)" if FORWARD_TO_BACKEND
             else "รับอย่างเดียว — ไม่ยิง Backend / ไม่ลบไฟล์")
-    print("=" * 70)
-    print("Recieve_tm-x.py (PC) — รอรับค่า+รูปจาก TM-X ผ่าน FTP")
-    print(f"  โหมด          : {mode}")
-    print(f"                  (.env: FORWARD_TO_BACKEND={'1' if FORWARD_TO_BACKEND else '0'})")
-    print(f"  FTP รออยู่ที่   : {DATA_RECEIVER_FTP_HOST}:{DATA_RECEIVER_FTP_PORT}   (.env: AGENT_FTP_HOST/PORT)")
-    print(f"  บัญชี FTP      : {DATA_RECEIVER_FTP_USER} / {'*' * len(DATA_RECEIVER_FTP_PASS)}   (.env: AGENT_FTP_USER/PASS)")
-    print(f"  เก็บไฟล์ลงที่   : {TEMP_IMAGE_DIR}")
+    log.info("=" * 70)
+    log.info("Recieve_tm-x.py (PC) — รอรับค่า+รูปจาก TM-X ผ่าน FTP")
+    log.info(f"  โหมด          : {mode}")
+    log.info(f"                  (.env: FORWARD_TO_BACKEND={'1' if FORWARD_TO_BACKEND else '0'})")
+    log.info(f"  FTP รออยู่ที่   : {DATA_RECEIVER_FTP_HOST}:{DATA_RECEIVER_FTP_PORT}   (.env: AGENT_FTP_HOST/PORT)")
+    log.info(f"  บัญชี FTP      : {DATA_RECEIVER_FTP_USER} / {'*' * len(DATA_RECEIVER_FTP_PASS)}   (.env: AGENT_FTP_USER/PASS)")
+    log.info(f"  เก็บไฟล์ลงที่   : {TEMP_IMAGE_DIR}")
     if FORWARD_TO_BACKEND:
-        print(f"  Backend ที่    : {BACKEND_URL}   (.env: BACKEND_URL)")
-        print("  กติกา         : ใช้รูปนอกโฟลเดอร์ HEAD-A · ข้ามค่า -9999.999")
+        log.info(f"  Backend ที่    : {BACKEND_URL}   (.env: BACKEND_URL)")
+        log.info("  กติกา         : ใช้รูปนอกโฟลเดอร์ HEAD-A · ข้ามค่า -9999.999")
     else:
-        print("  ** ไฟล์จะกองอยู่ในโฟลเดอร์ข้างบน ไม่ถูกลบ — ตรวจแล้วลบเองด้วย **")
-    print("=" * 70)
+        log.info("  ** ไฟล์จะกองอยู่ในโฟลเดอร์ข้างบน ไม่ถูกลบ — ตรวจแล้วลบเองด้วย **")
+    log.info("=" * 70)
 
     # เฝ้าดูสถานะ session เพื่อล้างโฟลเดอร์พักไฟล์ตอนจบรอบ — เฉพาะโหมดใช้งานจริง
     # โหมด "รับอย่างเดียว" ตั้งใจให้ไฟล์กองไว้ให้ตรวจ จึงต้องไม่ไปล้างทิ้ง
