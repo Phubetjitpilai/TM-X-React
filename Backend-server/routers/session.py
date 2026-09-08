@@ -1,934 +1,1118 @@
-import os
-import socket
-import threading
-import time
+"""routers/session.py — คุมรอบการวัด · คุยกับ Pi และ Recieve_tm-x · SSE ไปหาเบราว์เซอร์
 
-import httpx
-import uvicorn
-from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+ย้ายมาจาก main.py แบบยกก้อน ไม่ได้แก้ตรรกะใดๆ
+⚠ ห้ามประกาศ session_queues / measure_timeouts / subscribers ซ้ำในไฟล์นี้
+  ต้องดึงจาก shared.py เท่านั้น ไม่งั้นจะกลายเป็นคนละ object โดยไม่มี error
+"""
+from fastapi import APIRouter
 
-# ── ตั้ง logging ─────────────────────────────────────────────────────────
-# ทุกบรรทัดจะมี timestamp นำหน้า จำเป็นตอนรันเป็น service แบบไม่มีหน้าต่าง
-# แล้วมาเปิดไฟล์ log อ่านทีหลัง — ไม่มีเวลากำกับจะไล่ลำดับเหตุการณ์ไม่ได้เลย
-#
-# ⚠ ป้าย [Pi] ไว้แยกจาก [Server] ของ Backend เวลาเอา log 2 เครื่องมาวางเทียบกัน
-import logging
+from shared import *  # noqa: F401,F403
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [Pi] %(message)s")
-logging.getLogger("httpx").setLevel(logging.WARNING)
-log = logging.getLogger(__name__)
+router = APIRouter()
 
-load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
-TMX_IP = os.getenv("TMX_HOST", "192.168.10.11")
-TMX_PORT = int(os.getenv("TMX_PORT", 8600))
-BUFFER_SIZE = 1024
 
-TRIGGER_COMMAND = "T1\r"
+# ══════════════════════════════════════════════════════════════════════════════
+# SSE Stream
+# ══════════════════════════════════════════════════════════════════════════════
+@router.get("/api/stream")
+async def sse_stream(request: Request):
+    """Endpoint SSE ที่ dashboard เชื่อมต่อเข้ามาเพื่อรับข้อมูล real-time
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-AGENT_PORT = int(os.getenv("AGENT_PORT", 9998))
-
-HB_INTERVAL     = float(os.getenv("HEARTBEAT_INTERVAL", 5))
-HB_TIMEOUT_HINT = float(os.getenv("HEARTBEAT_TIMEOUT", 15))
-
-MEASURE_TIMEOUT       = float(os.getenv("MEASURE_TIMEOUT", 15))    # รอค่าสูงสุดกี่วินาที
-MEASURE_POLL_INTERVAL = float(os.getenv("MEASURE_POLL_INTERVAL", 0.4))
-
-SOCKET_TIMEOUT   = float(os.getenv("SOCKET_TIMEOUT", 5))
-# ── GM: ดึงค่าที่วัดได้จาก TM-X โดยตรง ──────────────────────────────────────
-GM_POLL_INTERVAL = 0.02                                  # 20 ms
-GM_MAX_WAIT      = float(os.getenv("GM_MAX_WAIT", 8))    # รอค่าสูงสุดต่อชิ้น
-NO_VALUE_ABS     = 9999.0        # |ค่า| >= นี้ = TM-X ยังวัดไม่เสร็จ/วัดไม่ติด
-# T1 ที่โดน ER,...,03 (READY ยังไม่กลับมาหลัง RESET ที่พ่วงมากับ PW) ยิงซ้ำได้
-
-T1_RETRY = int(os.getenv("T1_RETRY", 3))
-T1_RETRY_WAIT = float(os.getenv("T1_RETRY_WAIT", 0.3))
-
-# รอกี่วินาทีหลังส่ง `PW` ก่อนจะเริ่มวัด — TM-X ต้องโหลดโปรแกรมจากการ์ด SD
-# และ RESET ที่พ่วงมาทำให้ READY ดับชั่วคราว ยิง `T1` เร็วเกินไปจะได้ `ER,T1,03`
-#
-# ⚠ ตัวนี้ถูกใช้ **ทุกครั้งที่ข้ามรอยต่อกลุ่ม** ไม่ใช่แค่ตอนเริ่ม session แล้ว
-#   ตั้งสูงไปจะช้าทุกกลุ่ม ตั้งต่ำไปชิ้นแรกของกลุ่มจะพังแล้วเด้งถามผู้ใช้
-PW_LOAD_WAIT = float(os.getenv("PW_LOAD_WAIT", 1.0))
-
-MAX_ASK_USER_ROUNDS = int(os.getenv("MAX_ASK_USER_ROUNDS", 4))
-
-_answer_event  = threading.Event()
-_answer_action = None                  # "retry" | "stop" | None
-_answer_lock   = threading.Lock()
-
-# รอคำตอบจากคนได้นานสุดกี่วิ — ต้อง **มากกว่า** ตัวนับถอยหลังในหน้าเว็บ (60 วิ)
-# เพราะคนกดหยุดเองหรือหน้าเว็บกดให้อัตโนมัติก็ตาม คำตอบจะวิ่งกลับมาทางเดียวกัน
-# ตัวนี้เป็นแค่ตาข่ายกันค้างถาวรตอนหน้าเว็บไม่ได้เปิดอยู่เลย
-ASK_USER_TIMEOUT = float(os.getenv("ASK_USER_TIMEOUT", 70))
-
-# คำสั่งล้างค่าเก่า — คู่มือหน้า 5-9 พิมพ์ 2 แบบไม่ตรงกันเอง ต้องลองเอง
-CLEAR_CANDIDATES = ["MRS", "MSR"]
-_clear_cmd = None    # None=ยังไม่ได้ลอง · "MRS"/"MSR"=ตัวที่ใช้ได้ · False=ไม่ผ่านทั้งคู่
-MCU_TIMEOUT = float(os.getenv("MCU_TIMEOUT", 10))
-def _idx(name, default):
-    v = os.getenv(name, default)
-    return None if v in ("", "none", "None", None) else int(v)
-
-GM_IDX_X      = _idx("GM_IDX_X", "0")
-GM_IDX_Y      = _idx("GM_IDX_Y", "1")
-# ระยะ opening 4 ด้าน — จับเป็น 2 คู่แกน ไม่ใช่ 4 มุม
-#
-# ⚠⚠ ชื่อคีย์เปลี่ยนแล้ว (เดิม GM_IDX_TR/TL/BL/BR_OFFSET) — **ต้องแก้ `.env` บน
-#     เครื่อง Pi จริงให้ตรงด้วย** ไม่งั้น `_idx()` จะหาคีย์ไม่เจอแล้ว **คืนค่า
-#     default ให้เงียบๆ ไม่มี error** ถ้าเครื่องนั้นเคยตั้งช่องไว้ไม่ตรงกับ
-#     default มันจะอ่านค่าจากช่องผิดตลอดทั้ง session โดยไม่มีอะไรเตือนเลย
-GM_IDX_HORIZON_LEFT    = _idx("GM_IDX_HORIZON_LEFT", "2")
-GM_IDX_HORIZON_RIGHT   = _idx("GM_IDX_HORIZON_RIGHT", "3")
-GM_IDX_VERTICAL_TOP    = _idx("GM_IDX_VERTICAL_TOP", "4")
-GM_IDX_VERTICAL_BOTTOM = _idx("GM_IDX_VERTICAL_BOTTOM", "5")
-GM_IDX_OFFSET_X = _idx("GM_IDX_OFFSET_X", "6")    
-GM_IDX_OFFSET_Y = _idx("GM_IDX_OFFSET_Y", "7") 
-
-# ── สถานะระดับโมดูล ────────────────────────────────────────────────────────
-# ทุกตัวต้องมีค่าตั้งต้นตรงนี้ ห้ามให้ไปเกิดครั้งแรกใน command_flow เท่านั้น
-# เพราะ heartbeat_loop รันใน thread แยกตั้งแต่เปิดโปรแกรม = อ่านก่อนที่จะมีใคร
-# กด Start → NameError
-is_running = False          # ตอนนี้มี session กำลังวัดอยู่ไหม (ไม่ใช่ "สคริปต์รันอยู่ไหม")
-current_session_id = None   # session ที่กำลังวัด (None = idle) heartbeat แนบไปด้วย
-_tmx_sock = None            # socket ที่ค้างไว้คุย TM-X ให้ stop handler ยิง S0 ได้
-_hb_last_ok = time.time()   # เวลาที่ heartbeat ยิงออกสำเร็จครั้งล่าสุด
-
-# "กระดิ่ง" ที่บอกว่าชิ้นงานเข้าที่พร้อมวัดแล้ว — ตอนนี้มาจาก curl /trigger
-# พอต่อ MCU จริงค่อยเพิ่ม thread อ่าน Serial แล้วเรียก _trigger.set() บรรทัดเดียว
-# ตัวรอไม่ต้องแก้เลย เพราะ Event รับสัญญาณจากหลายแหล่งได้
-_trigger = threading.Event()
-
-# ตอนนี้อยู่ในช่วง "รอสัญญาณ" จริงหรือยัง — endpoint ใช้ตอบให้ตรงความจริงว่า
-# สัญญาณที่ยิงมาจะถูกใช้หรือถูกทิ้ง ไม่งั้น curl แล้วเครื่องไม่ขยับจะนึกว่าพัง
-_waiting_for_trigger = False
-
-http_app = FastAPI()
-
-class Limits(BaseModel):
-    x_lo: float; x_hi: float; y_lo: float; y_hi: float
-    offset_max: float | None = None
-
-class Group(BaseModel):
-    template_name: str
-    alpl: list[int]
-    limits: Limits | None = None
-
-class CommandRequest(BaseModel):
-    action: str
-    session_id: int | None = None
-    target_count: int | None = None
-    groups: list[Group] | None = None
-
-@http_app.post("/command")
-async def command(req: CommandRequest):
-    global is_running, _answer_action
-    if req.action == "start":
+    ทำไม: แทนที่ frontend จะ poll backend ทุกวินาที มันเปิด connection ค้างไว้ทีเดียว
+    ที่นี่ แล้วเรา push event ไปให้ตอนมันเกิดขึ้นจริง (ดู push_event) แต่ละ client
+    จะมี queue ของตัวเองที่ลงทะเบียนใน `subscribers` เราจะ yield "ping" ทุก 25 วินาที
+    ตอนไม่มีอะไรใหม่ แค่เพื่อ keep connection ไว้ไม่ให้ proxy/browser ตัดการเชื่อมต่อ
+    ที่ idle อยู่ SSE เป็นทางเดียว (server → client เท่านั้น) — ฝั่ง frontend ยังใช้
+    POST request ปกติในการส่งคำสั่งไปที่ backend
+    """
+    async def generator():
+        queue: asyncio.Queue = asyncio.Queue()
+        subscribers.append(queue)
+        log.info("SSE client connected  (total=%d)", len(subscribers))
         try:
-            httpx.post(f"{BACKEND_URL}/api/heartbeat",
-                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
-                timeout=5)
-        except Exception:
-            pass
-        log.info("\n ได้รับคำสั่ง Start จาก Backend")
-        groups = req.groups
-        if not groups:
-            raise HTTPException(400, "payload ไม่มี `groups`")
-        if any(not g.alpl for g in groups):
-            raise HTTPException(400, "มีกลุ่มที่ `alpl` ว่างเปล่า")
-        if any(g.limits is None for g in groups):
-            raise HTTPException(400, "มีกลุ่มที่ไม่ได้ระบุ `limits`")
+            while True:
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=25)
+                    yield event
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": ""}
+        finally:
+            if queue in subscribers:
+                subscribers.remove(queue)
+            log.info("SSE client disconnected (total=%d)", len(subscribers))
 
-        all_alpl = [a for g in groups for a in g.alpl]
-        if len(set(all_alpl)) != len(all_alpl):
-            raise HTTPException(400, "มี ALPL ซ้ำข้ามกลุ่ม")
-        if req.target_count != len(all_alpl):
-            raise HTTPException(400, f"target_count ({req.target_count}) ไม่เท่ากับจำนวน ALPL รวมทุกกลุ่ม ({len(all_alpl)})")
-        if any(not g.template_name for g in groups):
-            raise HTTPException(400, "มีกลุ่มที่ไม่ได้ระบุ `template_name`")
+    return EventSourceResponse(generator())
 
-        with _answer_lock:
-            _answer_action = None
-            _answer_event.clear()
-        
-        threading.Thread(
-            target=command_flow,
-            args=(req.session_id, groups, req.target_count),
-            daemon=True,
-        ).start()
+@router.get("/api/config")
+def get_ui_config():
+    """ค่าจาก .env ที่ฝั่งหน้าเว็บต้องใช้ — เบราว์เซอร์อ่านไฟล์ .env เองไม่ได้
 
-    elif req.action == "retry":
-        with _answer_lock:
-            _answer_action = "retry"
-        _answer_event.set()
+    หน้าเว็บเรียกครั้งเดียวตอนโหลด แล้วเอาไปตั้ง setInterval ของ pollSessionState
+    ถ้าเรียกไม่สำเร็จให้ใช้ค่า default ฝั่ง JS ไปก่อน (หน้าเว็บต้องทำงานได้เสมอ
+    แม้ endpoint นี้ล่ม — มันเป็นแค่การปรับจูน ไม่ใช่ข้อมูลที่ขาดไม่ได้)
 
-    elif req.action == "accept":
-        # ผู้ใช้กด "รับค่าจาก Pi (ไม่มีรูป)" — ใช้เฉพาะเคสที่ wait_for_measurement
-        # หมดเวลา คือ **วัดสำเร็จแล้วแต่ค่าไม่ถึง DB** (Recieve ส่งไม่ถึง)
-        #
-        # ⚠ ไม่ใช่การวัดใหม่ — ชิ้นงานถูก MCU คัดแยกออกไปแล้ว ไม่มีอะไรให้วัด
-        #   Pi แค่ POST ค่าที่อ่านจาก GM ไว้แล้วเข้า /api/measurements เอง
-        #
-        # ⚠ ห้ามแตะ is_running เหมือน retry — session ยังเดินต่อหลังบันทึกเสร็จ
-        log.info("📥 ได้รับคำสั่ง Accept จาก Backend")
-        with _answer_lock:
-            _answer_action = "accept"
-        _answer_event.set()    
+    ไม่แตะ DB เลย จึงไม่มีทางตอบ 503 เหมือน endpoint อื่น
 
-    elif req.action == "trigger":
-        # ปุ่มจำลองทริกเกอร์บนหน้าเว็บ (ใช้ชั่วคราวระหว่างที่ยังไม่มี MCU)
-        #
-        # เส้นทางคือ เบราว์เซอร์ → Backend → ที่นี่ **ไม่ให้เบราว์เซอร์ยิงตรงมา**
-        # เพราะหน้าเว็บจะต้องรู้ IP ของ Pi เอง และต้องเปิด CORS ที่นี่เพิ่ม
-        #
-        # guard ชุดเดียวกับ /trigger เป๊ะ แต่ตอบเป็น HTTP error แทน {"ok": False}
-        # เพื่อให้ Backend แยกออกว่าถูกปฏิเสธ ไม่ใช่สำเร็จ แล้วส่งเหตุผลถึงหน้าเว็บได้
-        if not is_running:
-            raise HTTPException(400, "ไม่มี session กำลังวัดอยู่ — กด Start ที่หน้าเว็บก่อน")
-        if not _waiting_for_trigger:
-            raise HTTPException(
-                409,
-                "ยังไม่ถึงช่วงรอสัญญาณ — ระบบกำลังโหลดโปรแกรมวัด "
-                "หรือกำลังรอผลของชิ้นก่อนหน้าอยู่",
+    ⚠ ห้ามใส่ความลับ (รหัส DB / path ภายในเครื่อง) ลงใน response นี้เด็ดขาด —
+      ใครเปิดหน้าเว็บได้ก็เรียกได้ และตอนนี้ระบบยังไม่มี auth เลย
+    """
+    return {
+        # ส่งเป็น ms ให้ตรงกับหน่วยที่ setInterval ใช้ จะได้ไม่ต้องคูณฝั่ง JS
+        # แล้วเผลอลืมจนกลายเป็น poll ทุก 2 ms
+        "poll_interval_ms": int(UI_POLL_INTERVAL * 1000),
+        # ส่งไปด้วยเพื่อให้หน้าเว็บอธิบายผู้ใช้ได้ว่า "เงียบเกินกี่วิถึงนับว่าออฟไลน์"
+        "heartbeat_timeout": HEARTBEAT_TIMEOUT,
+    }
+
+
+@router.get("/api/session/state")
+def get_session_state():
+    """คืนสถานะปัจจุบันของ session ล่าสุด
+
+    ทำไม: ตอน dashboard โหลดครั้งแรก (หรือ refresh) มันต้องรู้ว่า "มี run การวัด
+    กำลังทำงานอยู่ไหม" ก่อนที่ SSE connection จะเปิดเสียอีก นี่คือ snapshot
+    แบบครั้งเดียวที่ใช้ sync ตอนเริ่ม หลังจากนั้น SSE event จะคอยอัปเดตให้ real-time
+
+    ── pi_status ────────────────────────────────────────────────────────────
+    แนบสถานะ Pi มากับ response นี้ด้วย **แทนที่จะทำ SSE event หรือ endpoint ใหม่**
+    เพราะหน้าเว็บ poll เส้นนี้ทุก 5 วิอยู่แล้ว (setInterval(pollSessionState, 5000)
+    ใน index.html) จึงได้ชิปที่อัปเดตสดโดยไม่เพิ่ม request สักตัว และจังหวะลงตัว
+    พอดี — Pi ยิง heartbeat ทุก 5 วิ · หน้าเว็บ poll ทุก 5 วิ · เกณฑ์ 15 วิ
+    ผลคือ Pi ตายแล้วชิปเปลี่ยนภายใน 15-20 วิ ซึ่งพร้อมกับที่ session ขึ้น timeout
+
+    ค่าที่เป็นไปได้มี 3 อย่าง ไม่ใช่ 2:
+        true  = ได้ heartbeat ภายใน HEARTBEAT_TIMEOUT
+        false = เงียบเกินเกณฑ์แล้ว
+        null  = **ไม่ทราบ** (อ่านตารางไม่ได้ / ยังไม่ได้ migrate)
+    หน้าเว็บต้องแยก null ออกจาก false ห้ามยุบรวม ไม่งั้นจะกลายเป็นบอกว่า
+    "Pi ตาย" ทั้งที่จริงคือ "เราไม่รู้" — คนละเรื่องกันตอนไล่หาสาเหตุ
+
+    ⚠ ต้องใส่ pi_status ให้ **ทั้ง 3 ทางออก** ของฟังก์ชันนี้ (มี session ·
+      ไม่มี session เลย · ต่อ DB ไม่ติด) ไม่งั้นทางที่ตกหล่นจะไม่มีคีย์นี้ →
+      หน้าเว็บได้ undefined → ชิปเพี้ยนแบบเงียบๆ
+    """
+    pi_status = read_pi_status()   # อ่านนอก try ของ sessions — ล้มเหลวได้โดยไม่ลากทั้ง endpoint
+    # ⚠ ต้องแนบไปทั้ง 3 ทางออกเหมือน pi_status ไม่งั้นทางที่ตกหล่นจะได้ undefined
+    #   แล้วปุ่มทริกเกอร์บนหน้าเว็บจะดับค้างแบบไม่มี error ให้เห็น
+    trigger_ready = read_trigger_ready()
+    # ค่าคงที่จาก .env — ส่งมากับเส้นนี้เพราะหน้าเว็บต้องรู้ว่าจะ "แสดงปุ่มไหม"
+    # ต่างจาก trigger_ready ที่บอกว่า "กดได้ไหม" · ปิดสวิตช์แล้วปุ่มต้องหายไปเลย
+    # ไม่ใช่โผล่มาแล้วกดไม่ได้ ซึ่งจะทำให้ operator สงสัยว่าระบบพัง
+    manual_trigger_on = ALLOW_MANUAL_TRIGGER
+
+    # ── ต่อ MySQL ไม่ติด ──────────────────────────────────────────────────────
+    # pi_status อยู่ใน memory ล้วน (_pi_last_seen) ไม่พึ่ง DB เลย — ตอน MySQL ดับ
+    # เราจึง "รู้อยู่แล้ว" ว่า Pi เป็นยังไง แต่เดิมค่านั้นตายคาบรรทัด get_db()
+    # เพราะมัน raise HTTPException(503) ออกไปทั้งดุ้น หน้าเว็บเลยได้แต่ 503 เปล่าๆ
+    # แล้วต้องเดาว่า Pi = ไม่ทราบ (🟡) ทั้งที่ backend ตอบได้สบายๆ
+    #
+    # แก้โดยจับ 503 ตรงนี้แล้วคืน body ที่มี pi_status ติดไปด้วย → หน้าเว็บขึ้น
+    # 🟡 DB Offline + 🟢 Pi Online พร้อมกันได้ = เห็นทันทีว่าพังแค่ MySQL ตัวเดียว
+    # ไม่ใช่ทั้งระบบ
+    #
+    # ⚠ ยังคง **สถานะ 503 เหมือนเดิม** ไม่เปลี่ยนเป็น 200 เพราะเส้นนี้มีคนเรียกอีก
+    #   4 ที่ที่เช็คแค่ ok/ไม่ ok แล้วอ่าน state/measured_count ต่อ — Pi.py,
+    #   Recieve_tm-x.py, edit.html, DashboardPage.tsx ถ้าตอบ 200 พร้อม
+    #   state="unknown" พวกนี้จะหลงคิดว่าได้ session จริงมาแล้วเดินตรรกะผิด
+    #   เปลี่ยนแค่ "เนื้อใน" ของ 503 ที่เมื่อก่อนไม่มีใครอ่าน
+    try:
+        db = get_db()
+    except HTTPException as exc:
+        if exc.status_code != 503:
+            raise
+        return JSONResponse(
+            status_code=503,
+            content={
+                "detail": exc.detail,
+                "db": False,
+                # อ่านใหม่ตรงนี้ ไม่ใช้ค่าที่อ่านไว้ข้างบน — ระหว่างนั้น get_db()
+                # อาจกิน connect_timeout ไปหลายวินาที (ตอน MySQL เงียบไม่ตอบ)
+                # ค่าเก่าจึงเป็น "อดีต" ไปแล้ว ส่งไปจะทำให้ชิปขึ้น 🟢 ค้างทั้งที่
+                # Pi เงียบเกินเกณฑ์ไปเรียบร้อย · การอ่านฟรีอยู่แล้ว (ลบเวลา 2 ตัว)
+                "pi_status": read_pi_status(),
+                "trigger_ready": read_trigger_ready(),
+                "manual_trigger": ALLOW_MANUAL_TRIGGER,
+            },
+        )
+
+    try:
+        with db.cursor() as cur:
+            # queue_state แนบไปด้วย — frontend ใช้วาดแถบคิว ALPL ใน Live Telemetry
+            # (ต้องได้คิวเต็มไม่ใช่แค่ ALPL ตัวแรก) และทำให้แถบนี้รอดการ refresh
+            # หน้าเว็บกลาง session ด้วย เพราะอ่านคิวกลับจาก DB ได้ตรงๆ
+            cur.execute(
+                "SELECT session_id, state, target_count, measured_count, "
+                "queue_state, last_seen, started_at, ended_at "
+                "FROM sessions ORDER BY session_id DESC LIMIT 1"
             )
-        _trigger.set()
-        log.info("⚡ ได้รับสัญญาณ trigger (จากปุ่มบนหน้าเว็บ)")
+            row = cur.fetchone()
+        if row:
+            row["pi_status"] = pi_status
+            row["trigger_ready"] = trigger_ready
+            row["manual_trigger"] = manual_trigger_on
+            return row
+        return {"state": "idle", "pi_status": pi_status,
+                "trigger_ready": trigger_ready, "manual_trigger": manual_trigger_on}
+    finally:
+        db.close()
 
-    elif req.action == "stop":
-        is_running = False
-        # ⚠ ต้อง set ด้วย ไม่งั้นกด Stop ตอน modal เปิดอยู่
-        #   ask_user() จะค้างรอต่ออีก 90 วิทั้งที่ session จบไปแล้ว
-        with _answer_lock:
-            _answer_action = "stop"
-        _answer_event.set()
-    else:
+def _limits_of(row, measure_type: str) -> Dict[str, Any]:
+    """แปลง nominal/tolerance เป็น "ขอบเขตสำเร็จรูป" ที่ Pi เอาไปเทียบตรงๆ
+
+    **ส่งขอบ ไม่ส่ง nominal/tol ดิบ** — จำนวนตัวเลขเท่ากัน (4 ตัว) แต่ Pi ไม่ต้อง
+    ลอกกฎการปัดทศนิยมมาไว้ที่ตัวเอง ถ้าลืมเมื่อไหร่จะตัดสินไม่ตรงกับ backend
+    **เฉพาะชิ้นที่ตกขอบพอดี** ซึ่งเป็นชิ้นที่สำคัญที่สุดและหาสาเหตุยากที่สุด
+    (คอลัมน์เป็น FLOAT — `5.02` อ่านกลับได้ `5.0199999809265137`)
+
+    ⚠⚠ **ต้องคืนเป็น `float` เท่านั้น ห้ามเป็น `Decimal` เด็ดขาด** — dict ก้อนนี้
+      ถูกยัดเข้า `POST /command` ด้วย `json=payload` (:326) และ
+      `json.dumps(Decimal)` โยน `TypeError` ทันที → **กด Start แล้วไม่มีอะไร
+      เกิดขึ้นเลย** Pi ไม่เคยได้รับคำสั่ง · JSON มีชนิดตัวเลขแบบเดียวคือ
+      `number` ซึ่งทุกภาษาถอดเป็น float เสมอ ส่ง Decimal ข้ามไปไม่ได้
+      (ถ้าอยากคำนวณด้วย Decimal ข้างในก็ได้ แต่ต้อง `float()` ก่อน return)
+
+    ⚠⚠ **ขอบถูกปัดด้วย `_DP` มาแล้ว ส่วน Pi เทียบดิบ ๆ ไม่ปัดอะไรเลย** — ที่ทำ
+      แบบนี้ได้เพราะค่าฝั่ง Pi มาจากการ parse ข้อความ `GM` ตรง ๆ
+      **ไม่เคยผ่านคอลัมน์ FLOAT** จึงไม่มีหางแบบที่ฝั่ง DB มี · `float("8.05")`
+      กับ `round(8.049999732…, 3)` ให้ double ตัวเดียวกันเป๊ะ สองฝั่งจึงตัดสิน
+      ตรงกัน 100% (ทดสอบแล้ว 11,010 เคสที่ตกขอบพอดี ไม่ตรงกัน 0 เคส)
+
+      ⚠ ถ้าวันหลังเปลี่ยนให้ Pi อ่านค่าจาก DB แทนการ parse เอง สมมติฐานนี้พังทันที
+        ต้องให้ Pi ปัดด้วย `_DP` เหมือนกันก่อนเทียบ
+
+    `offset_max: null` = ไม่ต้องตรวจข้อนี้ — **ไม่ส่ง `measure_type` ไปด้วย**
+    เพราะจะเปิดช่องให้มีคนเขียน `if measure_type == "IPM"` ที่ฝั่ง Pi แล้วกฎ
+    เรื่องโหมดจะไปอยู่ 2 ที่ (`_offset_limit` ที่นี่ควรเป็นที่เดียว)
+    """
+    return {
+        "x_lo": round(row["nominal_x"] - row["lower_tol"], _DP),
+        "x_hi": round(row["nominal_x"] + row["upper_tol"], _DP),
+        "y_lo": round(row["nominal_y"] - row["lower_tol"], _DP),
+        "y_hi": round(row["nominal_y"] + row["upper_tol"], _DP),
+        "offset_max": _offset_limit(measure_type, row),
+    }
+
+def _criteria_from_config(cur, gi: int, group: Dict[str, Any], entry_mode: str):
+    """เกณฑ์ของกลุ่ม — อ่านจาก **config ที่ผู้ใช้กรอก** ไม่ใช่จากแถว Part
+
+    จำเป็นต้องเป็นแบบนี้เพราะตอนกด Start ยังไม่มีแถว Part ให้ query เลยในโหมด
+    New (Part ถูกสร้างพร้อม measurement ของชิ้นนั้น — ดู `create_measurement`)
+    และโหมด IPM ก็มี ALPL บางตัวที่ยังไม่ลงทะเบียน
+
+    ใช้ตารางเดียวกับ `_load_criteria` คือ **`package_size` ทุกโหมด** ค่าที่ได้
+    จึงตรงกับที่ backend จะใช้ตัดสินจริงตอน measurement เข้ามา
+
+    ⚠ เดิมแตกเป็น 2 กิ่ง (IPM → `package_size` · New/Rework → `part_number`)
+      ตอนนี้ยุบเหลือทางเดียวแล้ว **ถ้าจะแก้ตรงนี้ต้องแก้ `_load_criteria` คู่กันเสมอ**
+      สองตัวนี้ต้องอ่านจากที่เดียวกัน ไม่งั้นจะเกิดสภาพที่ Pi คัดของตามเกณฑ์ของ
+      กลุ่ม (มาจากที่นี่) ส่วน backend บันทึกตามเกณฑ์รายตัว (มาจาก _load_criteria)
+      แล้วสองฝั่งตัดสินคนละอย่างโดยไม่มีอะไรเตือน
+
+    ⚠ `entry_mode` ยังรับไว้เพราะยังใช้ตัดสินเรื่อง **offset** อยู่ (ผ่าน
+      `_offset_limit()` ที่ `_limits_of()` เรียกต่อ) — IPM ไม่ตรวจ offset
+      ส่วน New/Rework ตรวจ · ไม่เกี่ยวกับการเลือกตารางอีกแล้ว
+    """
+    cur.execute(
+        "SELECT nominal_x, nominal_y, upper_tol, lower_tol, offset_tol "
+        "FROM package_size WHERE package_size = %s",
+        ((group.get("package_size") or "").strip(),),
+    )
+    row = cur.fetchone()
+    if not row:
+        raise HTTPException(400, f"กลุ่มที่ {gi + 1}: หาเกณฑ์ตัดสินของกลุ่มนี้ไม่เจอ")
+    return row
+
+def _build_groups(cur, groups, group_of, queue, templates, entry_mode: str):
+    """สร้างฟิลด์ `groups` ที่แนบไปกับ `POST /command` ให้ Pi
+
+    Pi เอาไปทำ 2 อย่าง: รู้ว่าถึง ALPL ตัวไหนต้องสลับ `PW` เป็น template อะไร
+    และตัดสิน OK/NG เองจากค่าที่อ่านผ่าน `GM` เพื่อสั่ง MCU ได้ทันทีโดยไม่ต้อง
+    ถาม backend กลับ (ดู PLAN_criteria_and_multigroup.md ข้อ F)
+
+    **payload ของ IPM กับ New/Rework หน้าตาเหมือนกันเป๊ะ** ต่างแค่ตัวเลข →
+    Pi มี code path เดียว ตรงกับที่เป็นอยู่แล้ววันนี้ (Pi ไม่เคยรู้เรื่องโหมด)
+
+    **ไม่ส่ง `queue` แยก** — เป็น `[a for g in groups for a in g["alpl"]]`
+    บรรทัดเดียว ส่งซ้ำมีแต่จะเสี่ยงไม่ตรงกันเอง
+    """
+    out = []
+    for gi, g in enumerate(groups):
+        alpl = [queue[i] for i, gg in enumerate(group_of) if gg == gi]
+        crit = _criteria_from_config(cur, gi, g, entry_mode)
+
+        # ── กันเกณฑ์ 2 ฝั่งไม่ตรงกันแบบเงียบๆ (เฉพาะ IPM) ──────────────────
+        # IPM ไม่แตะ config ของ Part ที่ลงทะเบียนไว้แล้ว ถ้าผู้ใช้พิมพ์ Package
+        # Size ในฟอร์มไม่ตรงกับที่ Part ตัวนั้นผูกไว้จริง จะเกิดสภาพ:
+        #   Pi คัดของตามเกณฑ์ของกลุ่ม · backend บันทึกตามเกณฑ์รายตัว
+        # ไม่มีใครรู้จนกว่าจะไปนับของจริง — เปลี่ยนเป็นข้อความตอนกด Start แทน
+        #
+        # New: ยังไม่มีแถว Part เลย (validate แล้ว) ไม่มีอะไรให้ชน
+        # Rework: `_update_part_row` จะเขียนทับ config เดิมด้วยค่าจากฟอร์มอยู่แล้ว
+        #         "ไม่ตรง" คือเจตนาของผู้ใช้ ไม่ใช่ความผิดพลาด
+        if entry_mode == "IPM":
+            want = _limits_of(crit, entry_mode)
+            for a in alpl:
+                cur.execute("SELECT 1 FROM parts_specifications WHERE number_alpl = %s", (a,))
+                if not cur.fetchone():
+                    continue                      # ยังไม่ลงทะเบียน — จะถูกสร้างด้วย config นี้อยู่แล้ว
+                got = _limits_of(_load_criteria(cur, a), entry_mode)
+                if got != want:
+                    raise HTTPException(
+                        400,
+                        f"เริ่มวัดไม่ได้ — ALPL {a} ที่ลงทะเบียนไว้ใช้เกณฑ์ไม่ตรงกับ "
+                        f"Package Size \"{g.get('package_size')}\" ที่กรอกในกลุ่มที่ {gi + 1} "
+                        f"(X {got['x_lo']:.3f}–{got['x_hi']:.3f} vs {want['x_lo']:.3f}–{want['x_hi']:.3f}) "
+                        f"— แก้ Package Size ของ ALPL นี้ที่หน้า Edit › Parts หรือแยกไปกรอกคนละกลุ่ม",
+                    )
+
+        out.append({
+            "template_name": templates[gi],
+            "alpl": alpl,
+            "limits": _limits_of(crit, entry_mode),
+        })
+    return out
+
+async def _notify_agent_start(
+    session_id: int,
+    target_count: int,
+    groups: List[Dict[str, Any]],
+) -> None:
+    """ยิง POST ไปที่ Agent (`send_command.py` บน Pi / `mockup.py`) ให้เริ่มวัด
+
+    ```json
+    {"action": "start", "session_id": 42, "target_count": 6,
+     "groups": [
+       {"template_name": "021", "alpl": [400, 401, 402],
+        "limits": {"x_lo": 5.009999, "x_hi": 5.030001,
+                   "y_lo": 3.389999, "y_hi": 3.410001, "offset_max": null}},
+       {"template_name": "007", "alpl": [501, 502, 503],
+        "limits": {"x_lo": 3.199999, "x_hi": 3.240001,
+                   "y_lo": 3.199999, "y_hi": 3.240001, "offset_max": 0.03}}
+     ]}
+    ```
+
+    **ไม่มี `template_name` / `number_alpl` ระดับบนสุดแล้ว** — ทั้งคู่เป็นของ
+    "กลุ่มแรก" ซึ่งอยู่ใน `groups[0]` อยู่แล้ว ถ้าส่งซ้ำไว้ข้างบนด้วยจะมีแหล่ง
+    ความจริง 2 ที่ แล้ววันหนึ่งจะมีโค้ดฝั่ง Agent ที่อ่านตัวข้างบน (= ของกลุ่มแรก)
+    ไปใช้กับทุกกลุ่มโดยไม่มีใครรู้ตัว
+
+    **ไม่ส่ง `queue` แยก** — คือ `[a for g in groups for a in g["alpl"]]`
+    บรรทัดเดียว ส่งซ้ำมีแต่จะเสี่ยงไม่ตรงกันเอง (`target_count` ส่งไว้เพราะเป็น
+    ตัวที่ Agent ใช้วนลูป และตรวจได้ทันทีว่าตรงกับผลรวมของ `groups` ไหม)
+
+    ╔═══ ถ้าสั่งไม่สำเร็จ ต้องเคลียร์ให้สะอาด (Handle_Pi_Error.md ข้อ 1.3) ═══╗
+    ของเดิม `await client.post(...)` เฉยๆ ไม่เก็บผลลัพธ์เลย — Pi ตอบ 400/500
+    หรือไม่ได้รันอยู่ ก็เดินหน้าต่อเหมือนกันหมด แล้ว session ค้างที่ `running`
+    จนกว่า `heartbeat_checker` จะ mark เป็น `timeout` ใน 15 วิ ซึ่ง**ชี้ผิดสาเหตุ**
+    (ผู้ใช้เห็นแค่ "กด Start แล้วไม่มีอะไรเกิดขึ้น")
+
+    ตอนนี้ทุกทางที่พังวิ่งไปที่ `_fail_start()` ซึ่งเคลียร์ทุกอย่างแล้ว raise 502
+    ออกไปให้หน้าเว็บขึ้น popup — ต้อง raise **ก่อน** `push_event("session_started")`
+    ไม่งั้นหน้าเว็บทุกเครื่องจะเข้าโหมดวัดพร้อมกันทั้งที่ไม่มีอะไรเกิดขึ้น
+
+    **timeout แยก 2 ค่า** — `connect=3` เพราะอยู่วง LAN เดียวกัน (ปกติต่อติดใน
+    ~10 ms) ถ้า IP ผิดจะรู้ผลใน 3 วิแทนที่จะกิน 10 วิเต็ม · `read=10` ต้องเผื่อ
+    ให้ Pi ประมวลผล  → จับเวลาแล้วเดาสาเหตุได้เลย: ~3 วิ = หา Pi ไม่เจอ ·
+    ~10 วิ = Pi ค้าง
+    ╚═══════════════════════════════════════════════════════════════════════╝
+    """
+    payload: Dict[str, Any] = {
+        "action": "start",
+        "session_id": session_id,
+        "target_count": target_count,
+        "groups": groups,
+    }
+    # log ก่อนยิงเสมอ — เป็นจุดเดียวที่เห็น "สิ่งที่ backend ส่งให้ Agent" ได้จริง
+    # (POST นี้ไม่ผ่านเบราว์เซอร์ DevTools จึงมองไม่เห็น) ถ้า Agent ไม่ตอบ
+    # อย่างน้อยยังรู้ว่าเราส่งอะไรออกไป ไม่ต้องเดา
+    log.info("📤 ส่งไป Agent %s/command:\n%s",
+             AGENT_BASE_URL, json.dumps(payload, ensure_ascii=False, indent=2))
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{AGENT_BASE_URL}/command", json=payload,
+                timeout=httpx.Timeout(connect=3.0, read=10.0, write=10.0, pool=3.0),
+            )
+    # ⚠ ลำดับ except สำคัญมาก — `ConnectTimeout` เป็นลูกของ `TimeoutException`
+    #   ถ้าเขียน TimeoutException ไว้บนสุดจะกลืน ConnectTimeout ไปด้วย แล้ว
+    #   ข้อความจะบอกว่า "Pi ค้าง" ทั้งที่จริงคือ "หา Pi ไม่เจอ" — ชี้ผิดทางเลย
+    except httpx.ConnectError:
+        # ต่อไปถึงเครื่องแล้วแต่ไม่มีใครฟังพอร์ตนั้น (โดน RST กลับมาทันที)
+        await _fail_start(session_id,
+                          f"ติดต่อโปรแกรมบนเครื่อง Pi ไม่ได้ ({AGENT_BASE_URL}) — "
+                          f"ตรวจว่า send_command.py รันอยู่ไหม · สาย LAN · IP ของ Pi เปลี่ยนหรือเปล่า")
+    except httpx.ConnectTimeout:
+        # ไม่มีใครอยู่ที่ IP นั้นเลย (ไม่มีแม้แต่ RST) — IP ผิด/เครื่องดับ/สายหลุด
+        await _fail_start(session_id,
+                          f"หาเครื่อง Pi ไม่เจอที่ {AGENT_BASE_URL} — ตรวจ IP หรือสาย LAN")
+    except httpx.TimeoutException:
+        # ── ReadTimeout: อันตรายที่สุดในกลุ่มนี้ ──────────────────────────
+        # ต่อติดแล้ว payload ส่งออกไปแล้ว แต่ Pi ไม่ตอบใน 10 วิ — **เป็นไปได้ว่า
+        # มันรับไปแล้วและกำลังยิง T1 อยู่** ต่างจาก ConnectError/ConnectTimeout
+        # ที่รู้แน่ว่าไม่มีอะไรเริ่ม
+        #
+        # ถ้าปิด session เงียบๆ โดยไม่บอก Pi จะได้สภาพ: DB บอก stopped แต่ Pi
+        # ยังวัดต่อและยิงค่าเข้ามาเรื่อยๆ → create_measurement ปฏิเสธ → Pi รอ
+        # measured_count ขยับจนครบ MEASURE_TIMEOUT → เด้ง modal ถามผู้ใช้ทั้งที่
+        # หน้าเว็บบอกว่าไม่มี session แล้ว
+        #
+        # ⚠ ส่ง notify_stop=True ให้ _fail_start จัดลำดับให้ **ห้ามยิง stop เองตรงนี้**
+        #   ของเดิมยิง stop ก่อนอัปเดต DB → มีช่วงที่ "Pi รู้แล้วว่าต้องหยุด แต่ DB
+        #   ยังบอก running" → บล็อกเก็บกวาดฝั่ง Pi/mockup ถามความจริงกลับมาตอนนั้น
+        #   พอดี เห็น running เลยยิง POST /api/session/stop ซ้ำพร้อม reason กลาง ๆ
+        #   ไปเขียนทับ START_FAILED ที่บอกสาเหตุจริง → หน้าเว็บชี้ผิดสาเหตุ
+        #   (เกิดจริงแล้ว: last_event กลายเป็น PI_ERROR "ไม่ทราบสาเหตุแน่ชัด")
+        await _fail_start(session_id,
+                          "Pi ไม่ตอบภายใน 10 วินาที — อาจติดคำสั่งเดิมค้างอยู่ "
+                          "(สั่งหยุดกลับไปแล้ว) ลองรีสตาร์ท send_command.py",
+                          notify_stop=True)
+    except Exception as exc:
+        # กันไว้ไม่ให้ exception แปลกๆ หลุดออกไปเป็น 500 ที่ไม่มี CORS header
+        # (browser จะเข้าใจผิดว่าเป็น CORS error ทั้งที่จริงคือ Agent ไม่ตอบ)
+        await _fail_start(session_id, f"สั่งงาน Pi ไม่สำเร็จ: {exc}")
+
+    # ต่อติดและตอบกลับมาแล้ว — แต่ยังต้องดูว่า "ตอบว่าอะไร"
+    # Pi ปฏิเสธด้วย 400 ได้ 2 กรณี: action ที่ไม่รู้จัก · payload ไม่สมเหตุสมผล
+    # (เช่น len(groups) ไม่ตรงกับ target_count) ทั้งคู่แปลว่า **Pi ไม่ได้เริ่มวัด**
+    # จึงไม่ต้องส่ง stop ตามไป ต่างจากเคส ReadTimeout ข้างบน
+    if resp.status_code != 200:
+        await _fail_start(session_id, f"Pi ปฏิเสธคำสั่ง (HTTP {resp.status_code}): {resp.text[:300]}")
+
+async def _fail_start(session_id: int, msg: str, *, notify_stop: bool = False) -> None:
+    """เคลียร์ session ที่เพิ่งสร้างแล้วโยน 502 ออกไป — ใช้ตอนสั่ง Pi ไม่สำเร็จ
+
+    ทำ 4 อย่างที่ลืมง่ายทั้งหมด:
+
+    ① `session_queues.pop()` — เป็น dict ในหน่วยความจำล้วนๆ ไม่มีใครมาเก็บกวาดให้
+       กด Start ไม่ติด 20 ครั้งก็ค้าง 20 คิว
+    ② ปิด session ใน DB ทันที — อย่าทิ้ง `running` ไว้ให้ `heartbeat_checker`
+       มาเก็บใน 15 วิ เพราะมันจะขึ้นเป็น `timeout` ซึ่งชี้ผิดสาเหตุ
+    ③ `notify_stop=True` — สั่ง Pi ให้หยุดด้วย ใช้เฉพาะเคส ReadTimeout ที่
+       **ไม่รู้ว่า Pi เริ่มวัดไปแล้วหรือยัง** (ConnectError / HTTP 400 ไม่ต้อง
+       เพราะรู้แน่ว่าไม่มีอะไรเริ่ม)
+    ④ `raise HTTPException(502)` — ต้องเกิด **ก่อน** `push_event("session_started")`
+       ใน start_session ไม่งั้นหน้าเว็บทุกเครื่องเข้าโหมดวัดพร้อมกันทั้งที่ไม่มี
+       อะไรเกิดขึ้น · การ raise ยังทำให้ fetch ฝั่งเว็บพัง → ขึ้น popup แทนที่จะ
+       แสดงหน้าจอวัดงานปลอมๆ
+
+    ╔═══ ⚠⚠ ลำดับของ ② กับ ③ ห้ามสลับ — แก้ 22 ส.ค. 2569 ════════════════════╗
+    ต้องอัปเดต DB ให้เป็น `stopped` **ก่อน** บอก Pi เสมอ
+
+    ของเดิมยิง stop ที่ตัวเรียก (ก่อนเข้าฟังก์ชันนี้) จึงมีช่วงสั้น ๆ ที่ Pi รู้แล้ว
+    ว่าต้องหยุด **แต่ DB ยังบอก `running`** — บล็อกเก็บกวาดใน `finally` ของ
+    `Pi.py` / `mockup.py` ถาม `/api/session/state` กลับมาตอนนั้นพอดี เห็น
+    `running` เลยยิง `POST /api/session/stop` ซ้ำพร้อม reason กลาง ๆ
+    ("ไม่ทราบสาเหตุแน่ชัด") ไปเขียนทับ `START_FAILED` ที่บอกสาเหตุจริง
+    → หน้าเว็บชี้ผิดสาเหตุ หาต้นตอไม่เจอ
+
+    เกิดจริงแล้ว (session 57): `last_event` กลายเป็น `PI_ERROR`
+    กติกาเดียวกับ `stop_session` ที่ UPDATE ก่อน notify เสมออยู่แล้ว
+    ╚═══════════════════════════════════════════════════════════════════════════╝
+
+    **ไม่ broadcast SSE `session_stopped`** ต่างจากปุ่ม Stop โดยตั้งใจ — เพราะยัง
+    ไม่มีแท็บไหนเคยได้ `session_started` เลย (raise เกิดก่อน) จึงไม่มีใครอยู่ใน
+    โหมดวัดให้ต้องพาออกมา ส่วนแท็บอื่นจะเห็น state='stopped' เองในรอบ poll ถัดไป
+    """
+    session_queues.pop(session_id, None)
+    measure_timeouts.pop(session_id, None)
+    try:
+        db = get_db()
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "UPDATE sessions SET state = 'stopped', ended_at = NOW(), "
+                    "last_event = 'START_FAILED', last_event_detail = %s, last_event_at = NOW() "
+                    "WHERE session_id = %s",
+                    (msg, session_id),
+                )
+        finally:
+            db.close()
+    except Exception as exc:
+        # ปิด session ไม่สำเร็จก็ยังต้องแจ้งผู้ใช้ให้ได้ — ห้ามกลืน error ต้นทาง
+        log.error("_fail_start: ปิด session %s ไม่สำเร็จ: %s", session_id, exc)
+
+    # ── บอก Pi "หลัง" DB เป็น stopped แล้วเท่านั้น (ดูกรอบเตือนใน docstring) ──
+    if notify_stop:
+        await _notify_agent_action("stop", session_id)
+
+    log.warning("Start session %s ล้มเหลว — %s", session_id, msg)
+    raise HTTPException(502, msg)
+
+def _parse_entry_groups(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """แปลง payload ของ /api/session/start ให้เป็น "ลิสต์ของกลุ่ม" เสมอ
+
+    ฟอร์ม Part Entry กด +Add เพิ่มกลุ่มได้ แต่ละกลุ่มมี ALPL ได้หลายตัวและมี
+    config ของตัวเอง (Package Size / Part Number / PO / Vendor / Owner / …)
+    ส่วน Operator อยู่นอกกลุ่ม ใช้ร่วมกันทั้ง session (คนวัดคนเดียวกัน)
+
+        {"Measure_Type": "New", "Operator": "somchai",
+         "groups": [{"number_alpl": [400,401], "package_size": "5x5", ...},
+                    {"number_alpl": [501],     "package_size": "3x3", ...}]}
+
+    ยังรับ payload แบบเก่า (field อยู่ระดับบนสุด ไม่มี `groups`) ได้ด้วย โดยตี
+    ความว่าเป็น "กลุ่มเดียว" — ไม่ใช่เพื่อรองรับหน้าเว็บเก่า (ย้ายพร้อมกันอยู่แล้ว)
+    แต่เพื่อให้เครื่องมือทดสอบ/สคริปต์เดิมที่ยิง payload ตรงๆ ไม่พังหมดทีเดียว
+    """
+    groups = data.get("groups")
+    if groups is None:
+        return [data]
+    if not isinstance(groups, list) or not groups:
+        raise HTTPException(400, "groups ต้องเป็น array และมีอย่างน้อย 1 กลุ่ม")
+    for i, g in enumerate(groups):
+        if not isinstance(g, dict):
+            raise HTTPException(400, f"groups[{i}] ต้องเป็น object")
+    return groups
+
+def _flatten_groups(groups: List[Dict[str, Any]]) -> tuple:
+    """คลี่ ALPL ของทุกกลุ่มออกเป็นคิวเส้นเดียว พร้อม "แผนที่ชิ้น → กลุ่ม"
+
+    คืน (queue, group_of) ที่ยาวเท่ากัน — `group_of[i]` คือลำดับกลุ่มของชิ้นที่ i
+    create_measurement ใช้ค่านี้หา config ที่ถูกต้องของชิ้นที่กำลังวัดอยู่
+    (ไม่ใช่ config ของกลุ่มแรกเสมอแบบเดิม)
+
+    ⚠ ALPL ห้ามซ้ำ **ข้ามกลุ่ม** ด้วย ไม่ใช่แค่ในกลุ่มเดียวกัน — ถ้าปล่อยให้ซ้ำ
+      ชิ้นเดียวกันจะถูกวัด 2 ครั้งด้วย config คนละชุด แล้วอันหลังเขียนทับ Part
+      ของอันแรกโดยที่ผู้ใช้ไม่รู้ตัว
+    """
+    queue: List[int] = []
+    group_of: List[int] = []
+    seen: Dict[int, int] = {}
+    for gi, g in enumerate(groups):
+        try:
+            alpls = [int(x) for x in g["number_alpl"]]
+        except KeyError:
+            raise HTTPException(400, f"กลุ่มที่ {gi + 1} ไม่มี field 'number_alpl'")
+        except (ValueError, TypeError):
+            raise HTTPException(400, f"กลุ่มที่ {gi + 1}: number_alpl ต้องเป็นเลขจำนวนเต็มทั้งหมด")
+        if not alpls:
+            raise HTTPException(400, f"กลุ่มที่ {gi + 1} ต้องมี ALPL อย่างน้อย 1 ตัว")
+        for a in alpls:
+            if a in seen:
+                where = ("ในกลุ่มเดียวกัน" if seen[a] == gi
+                         else f"ซ้ำกับกลุ่มที่ {seen[a] + 1}")
+                raise HTTPException(400, f"ALPL {a} ซ้ำ ({where}) — แก้ให้ไม่ซ้ำก่อนเริ่มวัด")
+            seen[a] = gi
+            queue.append(a)
+            group_of.append(gi)
+    return queue, group_of
+
+def _validate_group(cur, gi: int, group: Dict[str, Any], measure_type: str,
+                    alpls: List[int]) -> str:
+    """ตรวจกลุ่มหนึ่งให้ครบ **โดยไม่เขียนอะไรลง DB เลย** แล้วคืน template_name
+
+    เจตนา: ให้ผู้ใช้รู้ทุกปัญหา "ตั้งแต่กด Start" ไม่ใช่ไปรู้ตอนวัดชิ้นแรกเสร็จ
+    แล้ว Part insert ไม่ผ่าน (ดู PLAN_criteria_and_multigroup.md ข้อ C2)
+
+    เงื่อนไข ALPL ต่อโหมดตรงข้ามกัน (ข้อ D5) — หน้าเว็บเช็คให้แล้วตอนกด Save
+    แต่ backend ต้องเช็คซ้ำ เพราะหน้าเว็บไม่ใช่ที่กันข้อมูลเสีย มันแค่ทำให้
+    ผู้ใช้รู้เร็วขึ้น
+    """
+    label = f"กลุ่มที่ {gi + 1}"
+
+    pkg = (group.get("package_size") or "").strip()
+    if not pkg:
+        raise HTTPException(400, f"{label}: ต้องเลือก Package Size")
+    cur.execute("SELECT package_size_id FROM package_size WHERE package_size = %s", (pkg,))
+    if not cur.fetchone():
+        raise HTTPException(400, f"{label}: ไม่รู้จัก Package Size \"{pkg}\"")
+
+    part_number = (group.get("part_number") or "").strip()
+    if measure_type in ("New", "Rework"):
+        if not part_number:
+            raise HTTPException(400, f"{label}: โหมด {measure_type} ต้องเลือก Part Number")
+        cur.execute(
+            "SELECT 1 FROM part_number WHERE part_number_name = %s", (part_number,)
+        )
+        if not cur.fetchone():
+            raise HTTPException(400, f"{label}: ไม่รู้จัก Part Number \"{part_number}\"")
+
+    # ── ALPL มี/ไม่มีใน DB ตามที่โหมดนั้นต้องการไหม ──────────────────────
+    placeholders = ", ".join(["%s"] * len(alpls))
+    cur.execute(
+        f"SELECT number_alpl FROM parts_specifications WHERE number_alpl IN ({placeholders})",
+        alpls,
+    )
+    found = {r["number_alpl"] for r in cur.fetchall()}
+    missing = [a for a in alpls if a not in found]
+    existing = [a for a in alpls if a in found]
+
+    if measure_type == "New" and existing:
+        raise HTTPException(
+            409,
+            f"{label}: ALPL {', '.join(map(str, existing))} มีอยู่ในระบบแล้ว — "
+            f"ถ้าจะวัดซ้ำใช้โหมด IPM · ถ้าเป็นงานแก้จาก vendor ใช้ Rework",
+        )
+    if measure_type == "Rework" and missing:
+        raise HTTPException(
+            404,
+            f"{label}: ALPL {', '.join(map(str, missing))} ไม่มีในระบบ — "
+            f"Rework ต้องเป็นชิ้นที่เคยวัดมาก่อนเท่านั้น ถ้าเป็นชิ้นใหม่ให้ใช้โหมด New",
+        )
+    # IPM: ตัวที่ยังไม่มีจะถูกลงทะเบียนให้ตอนวัดจริง (ผู้ใช้ยืนยันมาแล้วจากหน้าเว็บ)
+    # จึงไม่บล็อกที่นี่ — แต่ต้องมี Package Size ในกลุ่ม ซึ่งเช็คไปแล้วข้างบน
+
+    # template ผูกกับ package_size ของกลุ่ม (ไม่ต้องพึ่ง Part ที่อาจยังไม่มี)
+    cur.execute(
+        "SELECT t.template_name FROM package_size ps "
+        "LEFT JOIN template t ON ps.template_id = t.template_id "
+        "WHERE ps.package_size = %s",
+        (pkg,),
+    )
+    row = cur.fetchone()
+    if not row or not row["template_name"]:
         raise HTTPException(
             400,
-            f"ไม่รู้จัก action '{req.action}' — ตอนนี้รองรับแค่ "
-            f"start/stop/retry/accept/trigger",
+            f"{label}: Package Size \"{pkg}\" ยังไม่ได้ตั้ง Template ของเครื่อง TM-X "
+            f"(แก้ที่หน้า Edit › Lookup Tables › Package Size)",
         )
-    return {"status": "ok", "action": req.action}
+    return row["template_name"]
 
-@http_app.api_route("/trigger", methods=["GET", "POST"])
-async def trigger():
-    """จำลองเซนเซอร์ — ยิงอะไรมาก็ได้ที่ URL นี้ = "ชิ้นงานเข้าที่แล้ว วัดได้เลย"
+@router.post("/api/session/start")
+async def start_session(request: Request):
+    """เริ่ม session การวัดใหม่ จาก Part Entry card (โหมด IPM, New หรือ Rework)
 
-        curl -X POST http://<ip-ของ-pi>:9998/trigger
+    **ฟอร์มส่งมาเป็น "กลุ่ม"** — 1 กลุ่ม = ALPL หลายตัวที่ใช้ config ชุดเดียวกัน
+    กด +Add เพิ่มกลุ่มได้ (ดู `_parse_entry_groups`) ทั้ง 3 โหมดใช้โครงเดียวกัน
+    ต่างกันแค่ลิสต์ field ในกลุ่มและเงื่อนไขว่า ALPL ต้องมี/ต้องไม่มีใน DB
 
-    guard 2 ชั้น ตอบให้ตรงความจริงว่าสัญญาณจะถูกใช้หรือถูกทิ้ง — ไม่งั้นยิงมาแล้ว
-    เครื่องไม่ขยับจะนึกว่าระบบพัง แล้วหาสาเหตุไม่เจอ
+    **ไม่มีการเขียน Part ลง DB ที่นี่เลยทุกโหมด** — ตรวจอย่างเดียว (`_validate_group`)
+    แล้วเก็บ config ไว้ใน `queue_state` ให้ `create_measurement` เอาไปสร้าง/อัปเดต
+    Part "พร้อมกับ measurement ของชิ้นนั้น" ทีละชิ้น ผลคือ
+
+        กด Start แล้วกด Stop ทันที   → ไม่มีอะไรเกิดขึ้นใน DB เลย
+        วัดชิ้นที่ 1 สำเร็จ            → Part + Measurement เกิดพร้อมกัน
+        วัดชิ้นที่ 1 ไม่ติด            → ไม่มีอะไรเกิดขึ้น
+
+    เดิม New insert Part ตัวแรกไว้ก่อนเพราะ `sessions.number_alpl` มี FK — ตอนนี้
+    คอลัมน์นั้นถูกถอดออกไปแล้ว จึงไม่มีเหตุผลให้ insert ล่วงหน้าอีก
+
+    ทั้ง 3 กรณี — Agent ไม่ต้องรู้ความต่างเลย ได้รับ payload หน้าตาเดียวกัน
+    (action/session_id/template_name/target_count/number_alpl ตัวแรก) ส่วน
+    การ map ALPL ตัวต่อๆไปในคิวเข้ากับ measurement ที่จะตามมา เป็นเรื่องที่
+    backend จัดการเองทั้งหมดผ่าน session_queues (ดู create_measurement)
+
+    หมายเหตุ (เพิ่มเข้ามาทีหลัง): Race condition ตอนกด Start ซ้ำเร็วๆ — ครอบ
+    check+insert ด้วย MySQL GET_LOCK/RELEASE_LOCK กันสอง request แข่งกันผ่าน
+    Button Guard พร้อมกันได้ (เดิมเช็คแล้ว insert คนละคำสั่ง ไม่มีอะไรล็อก
+    ระหว่างนั้นเลย)
     """
-    if not is_running:
-        return {"ok": False, "reason": "ไม่มี session กำลังวัดอยู่ — กด Start ที่หน้าเว็บก่อน"}
-    if not _waiting_for_trigger:
-        # ยิงมาถูกจังหวะแต่ยังไม่ถึงช่วงรอ (กำลังส่ง R0/PW อยู่ หรือกำลังรอผลวัด
-        # ของชิ้นก่อนหน้า) — สัญญาณนี้จะโดน _trigger.clear() ล้างทิ้งอยู่ดี
-        return {"ok": False,
-                "reason": "ยังไม่ถึงช่วงรอสัญญาณ — รอข้อความ 'รอสัญญาณ trigger ...' ก่อนแล้วยิงใหม่"}
-    _trigger.set()
-    log.info("⚡ ได้รับสัญญาณ trigger")
+    data = await request.json()
+    log.info("📥 ได้รับ payload จาก /api/session/start:\n%s", json.dumps(data, ensure_ascii=False, indent=2))
+
+    measure_type = data.get("Measure_Type")
+    if measure_type not in ("New", "IPM", "Rework"):
+        raise HTTPException(400, "Measure_Type ต้องเป็น 'New', 'IPM' หรือ 'Rework'")
+
+    groups = _parse_entry_groups(data)
+    alpl_queue, group_of = _flatten_groups(groups)
+    first_alpl = alpl_queue[0]
+    target_count = len(alpl_queue)
+
+    # **การ map โหมดที่เลือกหน้าเว็บ → ค่าที่บันทึกลง measurements**
+    # (ตามที่ตกลงกันไว้ — Rework ไม่ใช่ measure_type ของตัวเอง แต่ถือเป็นการวัด
+    # แบบ New ที่มีหมายเหตุกำกับว่าเป็นงาน Rework):
+    #   หน้าเว็บเลือก "Rework" → measure_type = 'New',  note = 'Rework'
+    #   หน้าเว็บเลือก "New"    → measure_type = 'New',  note = NULL
+    #   หน้าเว็บเลือก "IPM"    → measure_type = 'IPM',  note = NULL
+    # entry_mode ตรงนี้คือค่าที่ create_measurement จะเอาไปใส่คอลัมน์ measure_type
+    # ตรงๆ และเป็นตัวเลือกแหล่งเกณฑ์ (`_load_criteria`) ด้วย จึงต้อง map ให้เสร็จ
+    # ตั้งแต่ก่อนเข้า DB block เพราะ `_build_groups` ต้องใช้
+    entry_mode = "New" if measure_type in ("New", "Rework") else "IPM"
+    entry_note = "Rework" if measure_type == "Rework" else None
+
+    db = get_db()
+    try:
+        # GET_LOCK ครอบทั้ง Button Guard + insert — ให้ทั้งสองเป็น atomic
+        # section เดียวกันจริงๆ ในระดับ DB (ไม่ใช่แค่ระดับ Python) กันสอง
+        # request "Start" ที่มาถึงพร้อมกันเป๊ะๆ ผ่าน check ทั้งคู่ก่อนจะมีใคร
+        # insert ทัน — timeout 5 วิ พอสำหรับ critical section สั้นๆ นี้
+        with db.cursor() as cur:
+            cur.execute("SELECT GET_LOCK('tmx_start_session', 5) AS got")
+            if not cur.fetchone()["got"]:
+                raise HTTPException(503, "ระบบกำลังประมวลผลคำสั่ง Start อื่นอยู่ ลองใหม่อีกครั้ง")
+
+        try:
+            with db.cursor() as cur:
+                # Button Guard — กันรัน 2 session ซ้อนกัน (เหมือนของเดิมก่อนหน้านี้)
+                cur.execute("SELECT session_id FROM sessions WHERE state = 'running'")
+                if cur.fetchone():
+                    raise HTTPException(400, "A session is already running")
+
+                # 1) ตรวจทุกกลุ่มให้ครบก่อน — **ยังไม่เขียนอะไรลง DB**
+                #    ตรวจให้จบทุกกลุ่มแล้วค่อยตัดสิน ไม่ใช่เจอกลุ่มแรกผิดแล้วหยุด
+                #    เพราะผู้ใช้ควรได้แก้ทีเดียวจบ ไม่ใช่กด Start ซ้ำทีละรอบ
+                #    ต่อ 1 กลุ่มที่ผิด (ตอนนี้ _validate_group ยัง raise ทันทีที่
+                #    เจอ — ยอมรับได้เพราะหน้าเว็บกรองชั้นแรกให้แล้วตอนกด Save)
+                templates: List[str] = []
+                for gi, g in enumerate(groups):
+                    alpls_of_group = [a for a, gg in zip(alpl_queue, group_of) if gg == gi]
+                    templates.append(_validate_group(cur, gi, g, measure_type, alpls_of_group))
+
+                # ── หลาย template ในรอบเดียวกันได้แล้ว (แผน E) ─────────────────
+                # Pi สลับ `PW` เองเมื่อข้ามรอยต่อกลุ่ม โดยดูจาก `groups[].template_name`
+                # ที่แนบไปกับ /command — ดู `command_flow()` ใน Pi.py
+                #
+                # ⚠ ทำได้เพราะ `_flatten_groups` ต่อ ALPL ของแต่ละกลุ่มเป็นบล็อกติดกัน
+                #   (ไม่สลับกลุ่มกลางคิว) `template` จึงเปลี่ยนแค่ตอนข้ามรอยต่อ
+                #   ไม่ใช่เปลี่ยนได้ทุกชิ้น — ถ้าวันหลังเปลี่ยนวิธีเรียงคิวให้สลับกลุ่มได้
+                #   ต้องกลับมาคิดเรื่องนี้ใหม่ เพราะ `PW` แต่ละครั้งกินเวลาโหลด ~1 วิ
+                #
+                # `template_name` ตัวนี้เหลือไว้แค่โชว์บนหน้าเว็บ **ห้ามเอาไปใช้สั่งงาน**
+                # ของจริงที่ Pi ใช้คือ `groups[gi].template_name` รายกลุ่ม
+                distinct = sorted(set(templates))
+                template_name = distinct[0] if len(distinct) == 1 else " + ".join(distinct)
+
+                # 1.5) ประกอบ `groups` ที่จะแนบไปกับ /command ให้ Pi
+                #      ทำ "ก่อน" insert sessions โดยตั้งใจ — ถ้าเกณฑ์ 2 ฝั่งไม่ตรงกัน
+                #      (ดู _build_groups) จะ raise ตรงนี้แล้วไม่มี session ค้างใน DB
+                agent_groups = _build_groups(
+                    cur, groups, group_of, alpl_queue, templates, entry_mode
+                )
+
+                # 2) Insert sessions row — ไม่มี number_alpl แล้ว (ถอดออกพร้อม FK
+                #    เพราะเก็บได้แค่ ALPL ตัวแรกของคิว ไม่เคยถูก UPDATE ระหว่าง
+                #    session จึงไม่มีใครใช้ได้จริง — คิวตัวจริงอยู่ใน queue_state)
+                cur.execute(
+                    "INSERT INTO sessions (state, target_count, measured_count) "
+                    "VALUES ('running', %s, 0)",
+                    (target_count,),
+                )
+                session_id = cur.lastrowid
+        finally:
+            with db.cursor() as cur:
+                cur.execute("SELECT RELEASE_LOCK('tmx_start_session')")
+
+        # 3) เก็บคิวไว้ใน memory ผูกกับ session_id นี้ (หลัง insert สำเร็จแล้ว
+        # ค่อยผูก กัน insert fail แล้วมี state ค้างอยู่ใน session_queues)
+        # entry_mode / entry_note ถูก map ไว้ตั้งแต่ต้นฟังก์ชันแล้ว
+        queue_state = {
+            "entry_mode": entry_mode,
+            "measure_mode": measure_type,   # โหมดดิบที่ผู้ใช้เลือก (แยก New/Rework ออกจากกัน)
+            "queue": alpl_queue,
+            # group_of[i] = ชิ้นที่ i อยู่กลุ่มไหน — create_measurement ใช้หา
+            # config ของชิ้นที่กำลังวัด ไม่ใช่ใช้ config ของกลุ่มแรกกับทุกชิ้น
+            "group_of": group_of,
+            # config ของแต่ละกลุ่ม (part_number/package_size/vendor/owner/PO/…)
+            # เก็บไว้ให้ create_measurement สร้าง/อัปเดต Part พร้อม measurement
+            # ของชิ้นนั้น — ไม่มีการเขียน Part ล่วงหน้าตอน Start อีกแล้วทุกโหมด
+            "groups": groups,
+            # template ต่อกลุ่ม — ตอนนี้บังคับให้เหมือนกันหมด (ดูเช็คด้านบน)
+            # แต่เก็บแยกรายกลุ่มไว้ก่อน เพื่อให้แผน E (Pi สลับ PW กลางคิว) มา
+            # ต่อได้เลยโดยไม่ต้องรื้อโครงสร้างนี้ใหม่
+            "group_templates": templates,
+            "position": 0,
+            "operator": data.get("Operator"),
+            "note": entry_note,
+        }
+        session_queues[session_id] = queue_state
+        measure_timeouts.pop(session_id, None)  # session ใหม่ต้องไม่มีคำถามค้างจากรอบก่อน
+
+        # เขียนสำเนา queue_state ลง DB ด้วย (คอลัมน์ sessions.queue_state) — ถ้า
+        # backend restart กลาง session นี้ จะโหลดกลับเข้า memory ได้ตอน boot
+        # แทนที่จะ fallback ไปใช้ ALPL ตัวแรกผิดๆ ตลอดที่เหลือ (ดู create_measurement
+        # และ lifespan())
+        with db.cursor() as cur:
+            cur.execute(
+                "UPDATE sessions SET queue_state = %s WHERE session_id = %s",
+                (json.dumps(queue_state), session_id),
+            )
+
+        # 4) Notify Agent ให้เริ่มวัด — ส่ง groups (template + ขอบเขต OK/NG
+        #    รายกลุ่ม) ไปทั้งก้อน เพื่อให้ Pi สลับ PW ได้เองและตัดสิน OK/NG เอง
+        #    แล้วสั่ง MCU ได้โดยไม่ต้องถาม backend กลับ (ดู _build_groups / PLAN ข้อ F)
+        await _notify_agent_start(session_id, target_count, agent_groups)
+
+        await push_event(
+            "session_started",
+            {
+                "session_id": session_id,
+                "number_alpl": first_alpl,
+                "template_name": template_name,
+                "target_count": target_count,
+            },
+        )
+        return {"session_id": session_id, "template_name": template_name, "target_count": target_count}
+    finally:
+        db.close()
+
+@router.post("/api/session/stop")
+async def stop_session(req: StopSessionRequest):
+    """หยุด session ที่กำลัง running จากปุ่ม Stop บน dashboard
+
+    ทำไมเรื่องนี้สำคัญ: นี่คือ path "web-initiated stop" — มันอัปเดต DB
+    (state='stopped', ended_at=NOW()) แล้วบอก Agent ให้หยุด ซึ่งต่างจากปุ่ม
+    Stop ทางกายภาพที่ MCU (ในการ implement ปัจจุบันของ Agent) ที่แค่ flip
+    flag ใน memory ฝั่ง Agent โดยไม่แตะ DB เลย — เป็นความไม่สมดุล (asymmetry)
+    ที่รู้กันอยู่ระหว่าง stop ทั้ง 2 path นี้
+
+    **นี่คือทางเดียวในระบบที่ปิด session ได้** — ทุกปุ่มและทุกเส้นทางวิ่งมาที่นี่หมด
+    (ปุ่ม Stop บนเว็บ · "หยุดการวัด" ใน modal · modal หมดเวลา 60 วิ · Pi ล้มเลิกเอง)
+    ตั้งใจไม่ให้มีทางที่สอง เพราะถ้าแยกกันแล้วลืมทำอะไรสักอย่างในเส้นทางไหน
+    จะเกิดอาการ "กดหยุดจากตรงนี้แล้วค้าง แต่กดจากตรงนั้นแล้วปกติ" ซึ่งหาสาเหตุยากมาก
+
+    reason: Pi ส่งมาตอนล้มเลิกเอง (ER,PW / T1 retry ครบ / สาย TM-X ขาด) เพื่อให้
+            หน้าเว็บบอกผู้ใช้ได้ว่าหยุดเพราะอะไร — หน้าเว็บไม่ต้องส่งมา (None)
+    """
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT state FROM sessions WHERE session_id = %s", (req.session_id,))
+            if not cur.fetchone():
+                raise HTTPException(404, "Session not found")
+            if req.reason:
+                # Pi ล้มเลิกเอง — เก็บสาเหตุไว้เป็นบันทึกถาวรว่า session นี้จบเพราะอะไร
+                # (session ปิดแล้ว จึงไม่มีอะไรมาเขียนทับ last_event อีก)
+                cur.execute(
+                    "UPDATE sessions SET state = 'stopped', ended_at = NOW(), "
+                    "last_event = 'PI_ERROR', last_event_detail = %s, last_event_at = NOW() "
+                    "WHERE session_id = %s",
+                    (req.reason, req.session_id),
+                )
+                log.warning("Session %s: Pi ล้มเลิกเอง — %s", req.session_id, req.reason)
+            else:
+                cur.execute(
+                    "UPDATE sessions SET state = 'stopped', ended_at = NOW() "
+                    "WHERE session_id = %s",
+                    (req.session_id,),
+                )
+
+        agent_err = await _notify_agent_action("stop", req.session_id)
+
+        session_queues.pop(req.session_id, None)  # กดหยุดเองก่อนคิวหมด ก็เคลียร์ memory ทิ้งด้วย
+        measure_timeouts.pop(req.session_id, None)  # กันคำถามค้างจาก session ที่จบไปแล้ว
+
+        # ⚠ สั่ง Pi ไม่สำเร็จ = **เครื่องอาจยังวัดอยู่จริง** ทั้งที่ DB ปิดไปแล้ว
+        #   ไม่ raise (DB หยุดไปเรียบร้อยแล้ว กดซ้ำไม่ช่วยอะไร) แต่ต้องบอกให้คน
+        #   หน้าเครื่องรู้ว่า "ต้องไปกดหยุดที่เครื่องเอง" ไม่งั้นของจะไหลต่อโดย
+        #   ไม่มีใครบันทึก — อันตรายกว่ากรณี Start พังมาก
+        if agent_err:
+            with db.cursor() as cur:
+                cur.execute(
+                    "UPDATE sessions SET last_event = 'STOP_NOT_DELIVERED', "
+                    "last_event_detail = %s, last_event_at = NOW() WHERE session_id = %s",
+                    (agent_err, req.session_id),
+                )
+
+        await push_event(
+            "session_stopped",
+            {"session_id": req.session_id, "reason": req.reason, "agent_error": agent_err},
+        )
+        return {"ok": True, "agent_error": agent_err}
+    finally:
+        db.close()
+
+async def _notify_agent_action(action: str, session_id: int | None = None) -> Optional[str]:
+    """ยิงคำสั่งสั้นๆ ไปหา Pi (stop / continue) — คืนข้อความ error ถ้าสั่งไม่สำเร็จ
+
+    ╔═══ ทำไม stop ต้องปฏิบัติต่างจาก start (Handle_Pi_Error.md ข้อ 1.4) ═══╗
+    **Start พังแล้วเคลียร์ทิ้งได้** เพราะรู้ว่ายังไม่มีอะไรเกิดขึ้น
+    **Stop พังแปลว่าเครื่องอาจยังวัดอยู่จริง** — จะไปเคลียร์ session ทิ้งเฉยๆ
+    ไม่ได้ เพราะ DB จะบอกว่าจบแล้วทั้งที่ของยังไหลอยู่บนสายพาน
+
+    ที่นี่จึง **ไม่ raise และไม่แตะสถานะ session เลย** — DB ถูกอัปเดตไปแล้วก่อน
+    เรียกฟังก์ชันนี้ (ดู stop_session) การโยน exception ออกไปจะทำให้ผู้ใช้เข้าใจ
+    ว่า "กดหยุดไม่สำเร็จ" แล้วกดซ้ำ ทั้งที่ฝั่ง DB หยุดไปเรียบร้อยแล้ว
+
+    แค่ **คืนข้อความกลับไปให้ผู้เรียกตัดสินใจ** ว่าจะเอาไปบอกผู้ใช้ยังไง
+    (`stop_session` เอาไปแนบใน SSE `session_stopped` → หน้าเว็บเด้งเตือนว่า
+     "หยุดในระบบแล้ว แต่สั่ง Pi ไม่ได้ — ไปกดหยุดที่เครื่องด้วย")
+    ╚═══════════════════════════════════════════════════════════════════════╝
+    """
+    body: dict = {"action": action}
+    if session_id is not None:
+        body["session_id"] = session_id
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{AGENT_BASE_URL}/command", json=body,
+                timeout=httpx.Timeout(connect=3.0, read=10.0, write=10.0, pool=3.0),
+            )
+    # ลำดับ except เดียวกับ _notify_agent_start — ConnectTimeout ต้องมาก่อน
+    # TimeoutException ไม่งั้นโดนกลืนแล้วข้อความชี้ผิดสาเหตุ
+    except httpx.ConnectError:
+        msg = (f"ติดต่อโปรแกรมบนเครื่อง Pi ไม่ได้ ({AGENT_BASE_URL}) — "
+               f"ตรวจว่า send_command.py รันอยู่ไหม")
+    except httpx.ConnectTimeout:
+        msg = f"หาเครื่อง Pi ไม่เจอที่ {AGENT_BASE_URL} — ตรวจ IP หรือสาย LAN"
+    except httpx.TimeoutException:
+        msg = "Pi ไม่ตอบภายใน 10 วินาที — อาจติดคำสั่งเดิมค้างอยู่"
+    except Exception as exc:
+        msg = f"สั่งงาน Pi ไม่สำเร็จ: {exc}"
+    else:
+        if resp.status_code == 200:
+            return None
+        msg = f"Pi ปฏิเสธคำสั่ง '{action}' (HTTP {resp.status_code}): {resp.text[:200]}"
+
+    log.warning("Agent %s notify failed: %s", action, msg)
+    return msg
+
+@router.post("/api/session/event")
+async def session_event(body: SessionEventRequest):
+    """รับรายงานสาเหตุจาก Recieve_tm-x.py
+
+    ⚠ last_event มีช่องเดียว ค่าใหม่ทับค่าเก่า — จึงเก็บเฉพาะเรื่องที่ "มีคนรอ
+      คำตอบอยู่" (ค่าไม่ลง DB แล้ว Pi กำลังนับถอยหลัง) ส่วนเรื่องที่ค่าลงไปแล้ว
+      เช่น IMAGE_UPLOAD_FAILED ต้องส่ง persist=False มา ไม่งั้นจะไปทับสาเหตุที่
+      Backend ต้องหยิบไปตอบ Pi ตอน measure-timeout
+    """
+    if body.persist:
+        db = get_db()
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "UPDATE sessions SET last_event = %s, last_event_detail = %s, "
+                    "last_event_at = NOW() WHERE state = 'running'",
+                    (body.event, body.detail),
+                )
+        finally:
+            db.close()
+
+    log.warning("Station event: %s — %s", body.event, body.detail)
+    await push_event("station_event", {"event": body.event, "detail": body.detail})
+    return {"ok": True}
+
+@router.post("/api/measure-timeout")
+async def report_measure_timeout(req: MeasureTimeoutRequest):
+    """Pi แจ้งว่ารอค่าการวัดชิ้นนี้จนหมดเวลาแล้วยังไม่มาถึง
+
+    Pi รู้แค่ "ไม่ได้ค่า" ไม่รู้สาเหตุ — Backend เป็นคนเติมให้ 2 อย่างก่อน broadcast:
+      number_alpl  จาก queue[position] ของตัวเอง (ห้ามให้ Pi ส่งมา ไม่งั้นมี 2 แหล่ง
+                   ที่บอกว่าชิ้นนี้คือ ALPL อะไร แล้วเหลื่อมกันได้)
+      detail       จาก last_event ที่ Recieve เขียนไว้ก่อนหน้า (ถ้ายังสด)
+
+    detail เป็น None ได้ — เกิดเมื่อรูปไม่มาเลย (Recieve ไม่เคยรายงาน) หรือ
+    last_event เก่าเกินไป · หน้าเว็บต้องรองรับกรณีนี้ด้วยข้อความกลางๆ
+    """
+    measure_timeouts[req.session_id] = {"piece": req.piece, "target": req.target}
+
+    detail = None
+    event  = None
+    db = get_db()
+    try:
+        with db.cursor() as cur:
+            cur.execute(
+                "SELECT last_event, last_event_detail, last_event_at "
+                "FROM sessions WHERE session_id = %s",
+                (req.session_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        db.close()
+
+    if row and row["last_event_at"]:
+        age = (datetime.now() - row["last_event_at"]).total_seconds()
+        if age < LAST_EVENT_FRESH_SEC:
+            detail = row["last_event_detail"]
+            # ⚠ ต้องส่ง `event` (รหัส) ไปด้วย ไม่ใช่แค่ `detail` (ข้อความ) —
+            #   หน้าเว็บใช้ตัวนี้เลือกว่าจะขึ้นปุ่มไหน:
+            #     T1_FAILED / GM_NO_VALUE → "ลองใหม่"      (ของยังอยู่ในเครื่อง)
+            #     NO_DB_ROW               → "รับค่าจาก Pi"  (วัดแล้ว แค่ค่าไม่ถึง DB)
+            #   ห้ามให้หน้าเว็บไปเดาจากข้อความใน detail เพราะข้อความเปลี่ยนได้ตลอด
+            event = row["last_event"]
+
+    # ALPL ที่กำลังวัดอยู่ — มาจากคิวของ Backend เท่านั้น
+    number_alpl = None
+    qstate = session_queues.get(req.session_id)
+    if qstate is not None:
+        queue = qstate.get("queue") or []
+        pos = qstate.get("position", 0)
+        if 0 <= pos < len(queue):
+            number_alpl = queue[pos]
+
+    await push_event(
+        "measure_timeout",
+        {
+            "session_id":  req.session_id,
+            "piece":       req.piece,
+            "target":      req.target,
+            "number_alpl": number_alpl,
+            "event":       event,      # รหัสสาเหตุ — หน้าเว็บใช้เลือกปุ่ม
+            "detail":      detail,     # ข้อความไทย — เอาไว้แสดงให้คนอ่าน
+        },
+    )
+    log.warning(
+        "Measure timeout: session=%s piece=%s alpl=%s event=%s — รอผู้ใช้ตัดสินใจ (สาเหตุ: %s)",
+        req.session_id, req.piece, number_alpl, event or "-", detail or "ไม่ทราบ",
+    )
+    return {"ok": True}
+
+@router.post("/api/session/retry")
+async def retry_session(body: SessionContinueRequest):
+    """ผู้ใช้กด "ลองใหม่" ใน modal — สั่ง Pi ให้ลอง **ชิ้นเดิม** อีกครั้ง
+
+    ╔═══ ทำไมไม่มี "ข้ามชิ้นนี้" (action `continue`) แล้ว — 22 ส.ค. 2569 ═══════╗
+    ของเดิมมี `/api/session/continue` ที่ข้ามชิ้นแล้ว `position += 1` ให้ แต่
+    **`Pi.py` ไม่เคยรองรับ action `continue` เลย** (ตอบ 400 กลับมา) ผลคือกดปุ่ม
+    แล้ว backend ขยับคิวไปเรียบร้อยแต่สั่ง Pi ไม่ผ่าน → 502 → **คิวเหลื่อมไป
+    หนึ่งช่องถาวรโดยไม่มีใครรู้** เป็นบั๊กแบบเดียวกับ `pause` ที่เคยเจอ
+    (`mockup.py` รองรับ แต่ Pi ไม่รองรับ → เทสต์ผ่านหมดแต่เครื่องจริงพัง)
+
+    ตัดสินใจถอดทิ้งแทนที่จะไปเติมให้ Pi เพราะเคส "ข้ามชิ้นนี้แต่วัดที่เหลือต่อ"
+    ไม่เกิดขึ้นจริงหน้างาน — ชิ้นที่วัดไม่ได้ต้องเอามาวัดใหม่อยู่ดี
+    modal จึงเหลือ 2 ทาง: **หยุดการวัด** กับ **ลองใหม่**
+    ╚═══════════════════════════════════════════════════════════════════════════╝
+
+    ⚠⚠ **ห้ามใส่ `position += 1` ที่นี่เด็ดขาด** — นี่คือชิ้นเดิม ไม่ใช่ชิ้นถัดไป
+       ถ้าขยับ ผลที่กำลังจะได้มาจะถูกแปะ ALPL ตัวถัดไปทันที แล้วเลื่อนผิดทั้งคิว
+       (`number_alpl` ไม่ได้มาจาก Pi แต่ backend เลือกเองจาก `queue[position]`
+        ดู `create_measurement` — และตำแหน่งนั้นขยับที่เดียวคือตอน INSERT สำเร็จ)
+
+    ส่วน "หยุดการวัด" ไม่ผ่านที่นี่ — หน้าเว็บเรียก `POST /api/session/stop`
+    ตรงๆ เพื่อให้เส้นทางการหยุด session มีทางเดียวตลอดทั้งระบบ
+    """
+    session_id = body.session_id
+
+    # คำถามค้างต้องมีอยู่จริง — กันกดปุ่มรัว ๆ (ยิง retry ซ้ำจะ set _answer_event
+    # หลายครั้งแล้ววนเกินโควตา) และกันกดหลัง modal หมดอายุ (Pi เลิกรอไปแล้ว)
+    if measure_timeouts.get(session_id) is None:
+        raise HTTPException(404, "ไม่พบคำถามค้างของ session นี้ (อาจหมดอายุไปแล้ว)")
+    pending = measure_timeouts.pop(session_id)
+
+    # ⚠ ต่างจาก stop: retry สั่งไม่ถึง = **Pi ยังบล็อกรอคำตอบอยู่เฉย ๆ**
+    #   ไม่มีอะไรเดินหน้า ต้องบอกผู้ใช้ให้ชัดว่ากดแล้วไม่ผ่าน จะได้กดซ้ำหรือไป
+    #   กด Stop — ถ้าเงียบไว้ผู้ใช้จะยืนรอเครื่องที่ไม่มีวันขยับ
+    agent_err = await _notify_agent_action("retry", session_id)
+    if agent_err:
+        # คืนคำถามค้างกลับไป — ยังสั่งไม่สำเร็จ Pi ยังรออยู่จริง ถ้าไม่คืน
+        # ผู้ใช้จะกดปุ่มไหนก็ได้ 404 หมดทั้งที่เครื่องยังค้างรอคำตอบ
+        measure_timeouts[session_id] = pending
+        raise HTTPException(502, f"สั่งให้ Pi ลองใหม่ไม่สำเร็จ — {agent_err}")
+
+    log.info("Session %s: ผู้ใช้เลือกลองใหม่ — ชิ้นเดิม ตำแหน่งคิวไม่ขยับ", session_id)
     return {"ok": True}
 
 
-def heartbeat_loop():
-    global is_running, _hb_last_ok
-    while True:
-        try:
-            httpx.post(
-                f"{BACKEND_URL}/api/heartbeat",
-                json={
-                    "session_id": current_session_id,
-                    "waiting_for_trigger": _waiting_for_trigger,
-                },
-                timeout=5,
-            )
-            _hb_last_ok = time.time()
-        except Exception:
-            pass  # backend ล่มชั่วคราวไม่เป็นไร รอบหน้าค่อยยิงใหม่
-                  # (ไม่ต้องนับอะไร แค่ "ไม่อัปเดตเวลา" ก็พอ)
+@router.post("/api/session/trigger")
+async def manual_trigger(body: SessionContinueRequest):
+    """ปุ่มจำลองสัญญาณทริกเกอร์บนหน้าเว็บ — ใช้ระหว่างที่ยังไม่ได้ต่อ MCU
 
-        # เช็คนอก try เสมอ — ต้องทำงานทุกรอบไม่ว่ารอบนี้จะยิงออกหรือไม่
-        if is_running and time.time() - _hb_last_ok > HB_TIMEOUT_HINT:
-            log.info(f"\n⏹ ติดต่อ Backend ไม่ได้เกิน {HB_TIMEOUT_HINT:g} วิ — หยุดวัด")
-            log.info(f"   (backend น่าจะ mark session เป็น 'timeout' ไปแล้ว วัดต่อไปค่าก็ถูกทิ้ง)")
-            is_running = False
-        time.sleep(HB_INTERVAL)
+    **ทำไมต้องผ่าน Backend ไม่ให้เบราว์เซอร์ยิงตรงไปที่ Pi**
+    ① หน้าเว็บไม่ต้องรู้ IP ของ Pi — `AGENT_HOST` อยู่ใน .env ของ Backend อยู่แล้ว
+       ถ้ายิงตรงต้องฝัง IP ไว้ในหน้าเว็บ พอ Pi ย้ายเครื่องต้อง build ใหม่
+    ② ไม่ต้องเปิด CORS ที่ Pi (ตอนนี้ไม่ได้ตั้งไว้ ยิงตรงจากเบราว์เซอร์จะโดนบล็อก)
+    ③ เครื่องของ operator อาจเข้าถึง Pi ไม่ได้ แต่เข้าถึง Backend ได้แน่นอน
+       เพราะกำลังเปิดหน้าเว็บอยู่
+    ④ คงหลัก "ทุกคำสั่งไป Pi ผ่าน Backend ที่เดียว" เหมือน start/stop/retry/accept
 
-
-def send_command(sock, command):
-    cmd_to_send = command + "\r"  # ต้องต่อท้ายด้วยตัวคั่น CR (\r) เสมอ
-    sock.sendall(cmd_to_send.encode("ascii"))
-    time.sleep(0.1)  # หน่วงเวลาให้กล้องประมวลผลเล็กน้อย
-    response = sock.recv(BUFFER_SIZE).decode("ascii").strip()
-    return response
-
-def get_measured_count(session_id):
-    try:
-        data = httpx.get(f"{BACKEND_URL}/api/session/state", timeout=5).json()
-    except Exception as exc:
-        log.info(f"   ⚠️ อ่าน session state ไม่ได้: {exc}")
-        return None
-    if data.get("session_id") != session_id:
-        return None
-    return data.get("measured_count")
-
-# curl -X POST http://<ip-ของ-pi>:9998/trigger
-# วนถามจนกว่ามันจะตอบ is_ready 
-# รอ Trigger จาก MCU
-def wait_for_trigger_mcu():
-    log.info("arrive")
-    global _waiting_for_trigger
-    _trigger.clear()
-    _waiting_for_trigger = True
-    # บอก Backend ทันทีว่าพร้อมรับ trigger — ไม่ต้องรอ heartbeat รอบถัดไป
-    #
-    # ⚠ timeout สั้นมากโดยตั้งใจ เพราะบรรทัดนี้อยู่ใน **เธรดที่กำลังวัดงาน**
-    #   ถ้า Backend ช้าหรือค้าง Pi จะหยุดรอตรงนี้ก่อนเข้าลูปรอสัญญาณ ทำให้เกิด
-    #   อาการ "กดปุ่มแล้วเครื่องไม่ขยับ" ซึ่งหาสาเหตุยากมาก
-    #   ส่งไม่ทันก็ไม่เป็นไร — heartbeat รอบปกติจะตามมาใน HB_INTERVAL วิอยู่แล้ว
-    try:
-        httpx.post(f"{BACKEND_URL}/api/heartbeat",
-            json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
-            timeout=0.5)
-    except Exception:
-        pass
-    try:
-        while is_running:
-            if _trigger.wait(0.1):
-                return True
-        return False
-    finally:
-        _waiting_for_trigger = False
-        # บอก Backend ทันทีว่าไม่รอแล้ว → ปุ่มดับเลย
-        try:
-            httpx.post(f"{BACKEND_URL}/api/heartbeat",
-                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
-                timeout=5)
-        except Exception:
-            pass
-
-def send_recv(sock, command, timeout=SOCKET_TIMEOUT):
-    """ส่ง 1 คำสั่ง แล้ว **วน recv จนเจอ CR** — คืน (response, ok)
+    **ไม่เช็คว่า session running ไหมที่นี่** — ปล่อยให้ Pi ตัดสิน เพราะมันเป็นคน
+    เดียวที่รู้ว่าตอนนี้ยืนรออยู่จริงหรือกำลังทำอย่างอื่น การเช็คสองที่จะทำให้
+    กฎเรื่องจังหวะไปอยู่ 2 แห่งแล้วเพี้ยนกันเมื่อฝั่งใดฝั่งหนึ่งถูกแก้
     """
-    sock.settimeout(timeout)
-    deadline = time.time() + timeout
-    sock.sendall((command + "\r").encode("ascii"))
-
-    buf = b""
-    while b"\r" not in buf:
-        remain = deadline - time.time()
-        if remain <= 0:
-            return "<timeout>", False
-        sock.settimeout(remain)
-        try:
-            chunk = sock.recv(BUFFER_SIZE)
-        except socket.timeout:
-            return "<timeout>", False
-        if not chunk:                       # อีกฝั่งปิด connection
-            return "<closed>", False
-        buf += chunk
-
-    resp = buf.decode("ascii", "replace").strip()
-    return resp, not resp.upper().startswith("ER")
-
-
-def parse_gm(resp):
-    """แยก `GM,t,m,i,j,…` เป็น [(m, i, j), ...] — คืน None ถ้ารูปแบบไม่ตรง
-
-        m = ค่าที่วัดได้
-        i = สถานะ  0:ไม่ทำงาน 1:ค่าปกติ 2:แก้ตำแหน่งล้มเหลว 3:ข้อมูลไม่ถูกต้อง 4:รอตัดสิน
-        j = ผลตัดสินของ TM-X เอง  0:OK  1:NG
-
-    ไม่ยึดว่าต้องมีกี่เครื่องมือ — `t=0` แปลว่า "ทุกเครื่องมือ" TM-X บอกจำนวนจริงกลับมา
-    """
-    parts = [p.strip() for p in resp.split(",")]
-    if len(parts) < 2 or parts[0].upper() != "GM":
-        return None
-    try:
-        count = int(parts[1])
-    except ValueError:
-        return None
-    body = parts[2:]
-    if count == 0:
-        count = len(body) // 3
-    if count == 0 or len(body) < count * 3:
-        return None
-
-    def _int(s):
-        try:    return int(s)
-        except (ValueError, TypeError): return None
-
-    tools = []
-    for k in range(count):
-        m_s, i_s, j_s = body[k * 3:k * 3 + 3]
-        try:    m = float(m_s)
-        except ValueError: m = None
-        tools.append((m, _int(i_s), _int(j_s)))
-    return tools
-
-
-def has_real_value(tools):
-    """ค่าที่ได้เป็นของจริงหรือยัง — 9999.999 = TM-X ยังวัดไม่เสร็จ/วัดไม่ติด"""
-    if not tools:
-        return False
-    return any(m is not None and abs(m) < NO_VALUE_ABS for m, _, _ in tools)
-
-
-def clear_measurement(sock):
-    """ล้างค่าเก่าใน TM-X ด้วย MRS — **ขั้นที่สำคัญที่สุดของทั้ง flow**
-
-    GM ดึง "ค่าของภาพล่าสุด" และ **ไม่มีเลขลำดับกำกับ** จึงมองไม่ออกว่าค่าที่ได้
-    เป็นของชิ้นที่เพิ่งวัดหรือของชิ้นก่อน ถ้า T1 รอบนี้วัดไม่ติด GM จะคืนค่าของ
-    ชิ้นก่อนมาให้เฉยๆ ไม่มี error ไม่มีอะไรเตือน แล้วเราจะตัดสินชิ้นใหม่ด้วย
-    ตัวเลขของชิ้นเก่า **แล้วสั่ง MCU ขยับของจริงตามนั้น**
-
-    ข้อมูลหน้างาน 31/07: TM-X วัดไม่ติด 7 ครั้งจาก 8 — ไม่ใช่กรณีหายาก
-
-    ⚠ คู่มือหน้า 5-9 พิมพ์ชื่อคำสั่งไม่ตรงกันเอง หัวข้อเขียน `MRS` แต่ช่องส่ง/รับ
-      เขียน `MSR` จึงลองทีละตัวแล้วจำตัวที่ใช้ได้ไว้ (ไม่ต้องลองซ้ำทุกชิ้น)
-    """
-    global _clear_cmd
-    if _clear_cmd is False:
-        return False
-    if _clear_cmd is not None:
-        _, ok = send_recv(sock, _clear_cmd)
-        return ok
-
-    for cand in CLEAR_CANDIDATES:
-        resp, ok = send_recv(sock, cand)
-        if ok:
-            _clear_cmd = cand
-            log.info(f"   ℹ️ ใช้คำสั่งล้างค่า `{cand}` ได้ (จะใช้ตัวนี้ตลอดทั้ง session)")
-            return True
-    _clear_cmd = False
-    log.info("   ⚠️ TM-X ไม่รู้จักทั้ง MRS และ MSR — GM อาจคืนค่าของชิ้นก่อนหน้า!")
-    return False
-
-
-def trigger_tmx(sock):
-    """ล้างค่าเก่า → ยิง T1 สั่ง TM-X วัด 1 ครั้ง — คืน (ok, resp)
-
-    **ส่งผ่าน sock หลัก ไม่เปิด connection ใหม่** — TM-X ให้มีอุปกรณ์ควบคุมได้
-    ทีละตัวเดียว พอเปิดสายที่สองมันตัดสายแรกทิ้ง แล้ว GM ที่ต้องถามตามมาทันที
-    จะยิงลงสายที่ตายไปแล้ว
-
-    `ER,...,03` = READY ยังไม่กลับมาหลัง RESET ที่พ่วงมากับ PW — **ยิงซ้ำได้
-    อย่างปลอดภัย** เพราะรหัส 03 แปลว่าทริกเกอร์ถูก *ละเว้น* ไม่ได้วัดเลย
-    จึงไม่มีทางได้ measurement ซ้ำสองอัน
-    """
-    clear_measurement(sock)          # MRS ก่อนเสมอ ห้ามลืม
-    for attempt in range(1, T1_RETRY + 1):
-        resp, ok = send_recv(sock, "T1")
-        log.info(resp)
-        if ok:
-            log.info(f"📡 TM-X ตอบ T1: {resp}")
-            log.info(f"ส่ง T1 สำเร็จหลังลอง {T1_RETRY} ครั้ง  {resp}")
-            return True, resp
-        if ",03" in resp:
-            log.info(f"   ⏳ T1 โดนละเว้น ({resp}) — READY ยังไม่กลับมา "
-                  f"ลองใหม่ครั้งที่ {attempt}/{T1_RETRY}")
-            time.sleep(T1_RETRY_WAIT)
-            continue
-        log.info(f"❌ ส่ง T1 ไม่สำเร็จ: {resp}")
-        return False, resp
-
-    log.info(f"❌ ส่ง T1 ไม่สำเร็จหลังลอง {T1_RETRY} ครั้ง")
-    return False, f"{resp} (ลองครบ {T1_RETRY} ครั้ง)"
-
-
-def judge(x, y, offset_x, offset_y, limits):
-    """ตัดสิน OK/NG จาก limits ที่ Backend คำนวณมาให้ — คืน ("OK"|"NG", เหตุผล[])
-
-    เทียบขอบตรงๆ ไม่ต้องคำนวณอะไรเอง เพราะ Backend ปัดทศนิยมมาให้เรียบร้อยแล้ว
-    (ดู `_limits_of` ใน `routers/session.py`)
-
-    ⚠ **ห้ามปัดค่า x/y ซ้ำที่นี่** — ค่าฝั่งนี้มาจากการ parse ข้อความ `GM` ตรง ๆ
-      ไม่เคยผ่านคอลัมน์ FLOAT จึงไม่มีหางให้ต้องปัด · `float("8.05")` กับขอบที่
-      backend ปัดมาแล้วเป็น double ตัวเดียวกันเป๊ะอยู่แล้ว ปัดซ้ำมีแต่จะทำให้
-      กฎการปัดไปอยู่ 2 ที่แล้วเพี้ยนกันวันหลัง
-
-    `offset_max = None` → โหมดนี้ไม่ตรวจ offset (IPM) ให้ถือว่าผ่าน
-    """
-
-    reasons = []
-    if x is None:
-        reasons.append("อ่านค่า Xไม่ได้ (ค่าเป็น None)")
-    elif not (limits.x_lo <= x <= limits.x_hi):
-        reasons.append(f"ค่า X ({x:.4f}) นอกช่วงเกณฑ์ ({limits.x_lo:.4f}–{limits.x_hi:.4f})")
-    if y is None:
-        reasons.append("อ่านค่า Y ไม่ได้ (ค่าเป็น None)")
-    elif not (limits.y_lo <= y <= limits.y_hi):
-        reasons.append(f"ค่า Y ({y:.4f}) นอกช่วงเกณฑ์ ({limits.y_lo:.4f}–{limits.y_hi:.4f})")
-    if limits.offset_max is not None:
-        if offset_x is None or abs(offset_x) > limits.offset_max:
-            reasons.append(f"offset_x {offset_x} เกิน {limits.offset_max}")
-        if offset_y is None or abs(offset_y) > limits.offset_max:
-            reasons.append(f"offset_y {offset_y} เกิน {limits.offset_max}")
-    return ("NG" if reasons else "OK"), reasons
-
-def clean_tools(tools):
-    if not tools:
-        return []
-    return [item for item in tools if item[0] is not None and item[0] >= 0]
-
-            # ── ดึงค่าออกมาตาม index ที่ตั้งไว้ ────────────────────────────
-def _val(idx,tools):
-    if idx is None or idx >= len(tools):
-        return None
-    return tools[idx][0]
-            
-
-def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
-    """วน GM จนได้ค่าใหม่ → ตัดสิน OK/NG → พิมพ์ผล
-
-    คืน `(result, x, y, offset)` โดย result เป็น "OK" / "NG" / "UNKNOWN"
-
-    **ทำไมต้องวน**: `T1` ตอบกลับตอน *รับทริกเกอร์* ไม่ใช่ตอนวัดเสร็จ (คู่มือหน้า
-    5-4: "เวลาในการประมวลผลการวัดจะไม่ได้รับผลกระทบ") ยิง GM ตามติดจึงยังไม่มีค่า
-    ให้ดึง ต้องถามซ้ำทุก ~20 ms จนกว่าจะได้ค่าที่ไม่ใช่ 9999.999
-
-    **"UNKNOWN" เป็นสถานะที่สามที่ต้องมี** ไม่ใช่แค่ OK กับ NG — ครบเวลาแล้วยังไม่
-    ได้ค่าแปลว่า TM-X วัดชิ้นนี้ไม่ติดจริง ต้องบอก MCU ว่า "ไม่รู้ผล" แล้วให้มัน
-    ตัดสินใจเอง **ห้ามเดาเป็น NG** เพราะของอาจดีอยู่ แค่กล้องไม่เห็น
-    """
-    deadline = time.time() + timeout
-    polls = 0
-    t0 = time.time()
-
-    while time.time() < deadline:
-        if not is_running:                       # กด Stop ระหว่างรอ
-            return "UNKNOWN", None, None, None, None, None, None, None, None
-
-        resp, ok = send_recv(sock, "GM,3,0", timeout=2.0)
-        polls += 1
-        tools = parse_gm(resp) if ok else None
-        if tools and has_real_value(tools):
-            tools_new = clean_tools(tools)
-            log.info(tools_new)
-        
-            x, y, horizon_left, horizon_right, vertical_top, vertical_bottom, offset_x, offset_y = (
-            _val(GM_IDX_X,tools_new),
-            _val(GM_IDX_Y,tools_new),
-            _val(GM_IDX_HORIZON_LEFT,tools_new),
-            _val(GM_IDX_HORIZON_RIGHT,tools_new),
-            _val(GM_IDX_VERTICAL_TOP,tools_new),
-            _val(GM_IDX_VERTICAL_BOTTOM,tools_new),
-            _val(GM_IDX_OFFSET_X,tools_new), 
-            _val(GM_IDX_OFFSET_Y,tools_new)
-             )
-            result, reasons = judge(x, y, offset_x, offset_y, limits)
-
-            log.info("   📥 ได้ค่าหลัง %.0f ms (ถาม GM %s ครั้ง · TM-X คืนมา %s เครื่องมือ)",
-                     (time.time() - t0) * 1000, polls, len(tools))
-            log.info("      X=%s · Y=%s · offset_x=%s · offset_y=%s", x, y, offset_x, offset_y)
-            log.info("   %s ผลตัดสิน: %s", "✅" if result == "OK" else "❌", result)
-            for r in reasons:
-                log.info("      • %s", r)
-
-            # เทียบกับผลที่ TM-X ตัดสินมาเอง (j) — ได้ตัวเฝ้าระวัง config drift ฟรีๆ
-            '''j_x = tools[GM_IDX_X][2] if GM_IDX_X is not None and GM_IDX_X < len(tools) else None
-            if j_x is not None and limits is not None:
-                tmx_says = "OK" if j_x == 0 else "NG"
-                if tmx_says != result:
-                    print(f"   ⚠️ TM-X ตัดสินว่า {tmx_says} แต่เราคำนวณได้ {result} — "
-                          f"tolerance ในโปรแกรมวัดกับใน DB อาจเพี้ยนกันแล้ว")'''
-            return result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom,offset_x, offset_y
-        time.sleep(GM_POLL_INTERVAL)
-
-    log.info("   ⚠️ รอ %.0f วิแล้ว GM ยังไม่คืนค่าใหม่ (ถาม %s ครั้ง) "
-             "— TM-X วัดชิ้นนี้ไม่ติด", timeout, polls)
-    return "UNKNOWN", None, None, None, None, None, None, None, None
-
-#วนไปถามว่าพร้อมรับ result ยัง ให้ MCU set Flag เอา idle(ยังไม่มีชิ้นงาน) -> obj_is_ready(เมื่อวางชิ้นงานแล้ว) -> waiting_for_result(พร้อมรับ result) -> idle(เสร็จการวัด 1 ชิ้น)
-def send_result_to_mcu(result, mcu_timeout=MCU_TIMEOUT):
-    """ส่งผลตัดสินให้ MCU — `result` เป็น "OK" / "NG" / "UNKNOWN"
-
-    ตอนนี้ยังไม่มีบอร์ด MCU จริง จึงแค่พิมพ์ให้เห็นว่าส่งอะไรออกไป
-    พอต่อ Serial จริงค่อยเปลี่ยนบรรทัดข้างในเป็นการเขียนลงพอร์ต — **ตัวเรียก
-    ไม่ต้องแก้เลย** นี่คือเหตุผลที่แยกออกมาเป็นฟังก์ชันตั้งแต่ตอนที่ยังไม่มีอะไร
-
-    ⚠ "UNKNOWN" ต้องส่งไปด้วยเสมอ ห้ามข้ามเงียบๆ — เป็นสถานะที่สามที่ต้องมี
-      ไม่ใช่แค่ OK กับ NG · ถ้าไม่ส่ง MCU จะมีชิ้นงานคาอยู่โดยไม่มีคำสั่ง แล้วมัน
-      จะไม่มีวันตอบว่า "พร้อม" สำหรับชิ้นถัดไปอีกเลย = ค้างกันทั้งคู่
-      **ห้ามเดา UNKNOWN เป็น NG** เพราะของอาจดีอยู่ แค่กล้องไม่เห็น
-
-    `mcu_timeout` ยังไม่ได้ใช้ — รับไว้ก่อนเพื่อให้ signature นิ่ง ไว้ใช้ตอนเพิ่ม
-    การรอ MCU ตอบรับ (`wait_mcu_ack` ผ่าน `_mcu_ack` ที่ประกาศไว้แล้วข้างบน)
-    """
-    icon = {"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
-    log.info("   🔀 → MCU: %s %s", icon, result)
-    return True
-
-
-def wait_for_measurement(session_id, count_before, timeout=MEASURE_TIMEOUT):
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if not is_running: #ถ้า Stop
-            return True
-        count_after = get_measured_count(session_id) 
-        if count_after is not None and count_before is not None and count_after > count_before:
-            return True
-        time.sleep(MEASURE_POLL_INTERVAL)
-    return False
-
-
-def report(event: str, detail: str, *, persist: bool = True):
-    log.info("   📣 %s: %s", event, detail)
-    try:
-        resp = httpx.post(
-            f"{BACKEND_URL}/api/session/event",
-            json={"event": event, "detail": detail, "persist": persist},
-            timeout=2,
+    if not ALLOW_MANUAL_TRIGGER:
+        raise HTTPException(
+            403,
+            "ปุ่มทริกเกอร์มือถูกปิดไว้ (ALLOW_MANUAL_TRIGGER=0) — "
+            "ระบบใช้สัญญาณจาก MCU แล้ว",
         )
-        if resp.status_code != 200:
-            log.info("   ⚠️ Backend ไม่รับรายงาน (HTTP %s)", resp.status_code)
-    except Exception as exc:
-        log.info("   ⚠️ แจ้ง Backend ไม่สำเร็จ: %s", exc)
 
-def ask_user(session_id, piece, target) -> str:
-    global _answer_action
-    with _answer_lock:
-        _answer_action = None
-        _answer_event.clear()
+    agent_err = await _notify_agent_action("trigger", body.session_id)
+    if agent_err:
+        # ดึงเฉพาะ `detail` ออกมาถ้า Pi ตอบเป็น JSON — ข้อความดิบจาก
+        # _notify_agent_action มี HTTP status กับ JSON ห่ออยู่ ซึ่งอ่านยากบน toast
+        m = re.search(r'"detail"\s*:\s*"([^"]+)"', agent_err)
+        raise HTTPException(502, m.group(1) if m else agent_err)
 
-    try:
-        resp = httpx.post(
-            f"{BACKEND_URL}/api/measure-timeout",
-            json={"session_id": session_id, "piece": piece, "target": target},
-            timeout=5,
-        )
-        if resp.status_code != 200:
-            log.info("   ⚠️ Backend ไม่รับคำถาม (HTTP %s) — ถือว่าหยุด", resp.status_code)
-            return "stop"
-    except Exception as exc:
-        log.info("   ⚠️ ถามผู้ใช้ไม่ได้: %s — ถือว่าหยุด", exc)
-        return "stop"
+    return {"ok": True}
 
-    log.info("   ⏳ รอผู้ใช้ตัดสินใจ (สูงสุด %.0f วิ) ...", ASK_USER_TIMEOUT)
-    if not _answer_event.wait(ASK_USER_TIMEOUT):
-        log.info("   ⏱ ไม่มีคำตอบใน %.0f วิ — ถือว่าหยุด", ASK_USER_TIMEOUT)
-        return "stop"
 
-    with _answer_lock:
-        return _answer_action or "stop"
+@router.post("/api/session/accept")
+async def accept_session(body: SessionContinueRequest):
+    """ผู้ใช้กด "รับค่าจาก Pi (ไม่มีรูป)" ใน modal
 
-def handle_error(kind, session_id, piece, target, detail, rounds) -> bool:
-    report(f"{kind}_FAILED",
-           f"ชิ้นที่ {piece}/{target} (ครั้งที่ {rounds}/{MAX_ASK_USER_ROUNDS-1}): {detail}")
-    if rounds >= MAX_ASK_USER_ROUNDS:
-        report(f"{kind}_GAVE_UP", f"ชิ้นที่ {piece}/{target}: ครบ {MAX_ASK_USER_ROUNDS-1} ครั้งแล้ว — หยุดการวัด")
-        return False
+    ใช้เฉพาะเคสที่ `wait_for_measurement` ฝั่ง Pi หมดเวลา = **TM-X วัดสำเร็จแล้ว
+    แต่ค่าไม่ถึง DB** (`Recieve_tm-x.py` ไม่ได้รัน · FTP ไม่ถึง · POST ล้มเหลว)
 
-    if not is_running:          # กด Stop จากเว็บระหว่างนี้
-        return False
+    ╔═══ ทำไมเคสนี้ไม่มี "ลองใหม่" ═══════════════════════════════════════════╗
+    ชิ้นงานถูกวัดไปแล้ว ตัดสิน OK/NG ไปแล้ว และ **MCU คัดแยกออกจากเครื่องไปแล้ว**
+    — ไม่มีอะไรเหลือให้วัดใหม่ สิ่งที่ขาดคือ *แถวใน DB* ไม่ใช่ *การวัด*
+    ถ้าสั่ง retry จะกลายเป็นวัดชิ้นถัดไปที่เพิ่งไหลเข้ามาแล้วบันทึกเป็นชิ้นนี้
 
-    return ask_user(session_id, piece, target) == "retry"
+    Pi ถือค่าจาก GM ครบอยู่ในมือ จึงให้มัน POST /api/measurements เองแทน
+    (ดู `post_measurement_from_pi` ใน Pi.py) แถวที่ได้จะไม่มีรูปถาวร — Pi ตาม
+    ด้วย PATCH `upload_failed=True` เพื่อแยกจาก "รูปยังไม่มา" ที่ปกติแปลว่า
+    กำลังจะมาในไม่กี่วินาที
+    ╚═════════════════════════════════════════════════════════════════════════╝
 
-def post_measurement_from_pi(session_id, piece, x, y, horizon_left, horizon_right, vertical_top, vertical_bottom,
-                             offset_x, offset_y) -> bool:
-    """POST ค่าที่ Pi อ่านจาก GM เข้า Backend แทน Recieve — คืน True ถ้าสำเร็จ
-
-    ใช้เฉพาะตอน `wait_for_measurement` หมดเวลา = **วัดสำเร็จแล้วแต่ค่าไม่ถึง DB**
-    (ชิ้นงานถูก MCU คัดแยกไปแล้ว ไม่มีอะไรให้วัดใหม่) สิ่งที่ขาดคือแถวใน DB
-    ไม่ใช่การวัด — จึงเป็น "บันทึกค่าที่มี" ไม่ใช่ "retry"
-
-    ⚠ ไม่มีการกันยิงซ้ำแล้ว — `client_uuid` ถูกถอดออกทั้งระบบ เพราะฟังก์ชันนี้
-      ยิงครั้งเดียวจบ (พลาดแล้วตั้ง stop_reason แล้ว break ไม่มี retry loop)
-      ถ้าวันหลังใส่ retry เข้ามา ต้องกลับมาคิดเรื่องกันซ้ำใหม่ด้วย
-
-    ⚠ ต้อง PATCH image ต่อด้วย `upload_failed=True` — ไม่งั้น `image_path = NULL`
-      จะแปลว่า "รูปยังไม่มา" ซึ่งปกติหมายถึงกำลังจะมาในไม่กี่วินาที แต่เคสนี้
-      **ไม่มีวันมา** คนเปิดรายงานจะนั่งรอรูปที่ไม่มีอยู่จริง
-
-    ไม่ส่ง `number_alpl` / `measure_type` / `operator_id` — backend เลือกเองจาก
-    ตำแหน่งในคิวกับ queue_state เหมือนตอนที่ Recieve ส่ง (แหล่งความจริงเดียว)
+    ⚠⚠ **ห้ามใส่ `position += 1` ที่นี่** เหมือน `/retry` — แต่คนละเหตุผล:
+       `create_measurement` เป็นคนขยับ `position` ให้เองตอน INSERT สำเร็จ
+       ถ้าขยับที่นี่ด้วยจะกลายเป็นขยับ 2 ครั้งต่อชิ้นเดียว → ข้ามคิวไป 1 ตัว
+       → ผลของชิ้นถัดไปแปะ ALPL ผิด และ ALPL ที่ถูกข้ามจะหายไปเงียบ ๆ
     """
-    body = {
-        "session_id":  session_id,
-        "value_x":     x,
-        "value_y":     y,
-        "horizon_left":       horizon_left,
-        "horizon_right":       horizon_right,
-        "vertical_top":       vertical_top,
-        "vertical_bottom":       vertical_bottom,
-        "offset_opx":  offset_x,
-        "offset_opy":  offset_y,
-        "note":        "ค่าจาก Pi (GM) — Recieve ส่งไม่ถึง ไม่มีรูป",
-    }
-    try:
-        resp = httpx.post(f"{BACKEND_URL}/api/measurements", json=body, timeout=10)
-    except Exception as exc:
-        report("PI_POST_FAILED", f"ชิ้นที่ {piece}: POST ค่าจาก Pi ไม่สำเร็จ — {exc}")
-        return False
+    session_id = body.session_id
 
-    if resp.status_code != 200:
-        detail = ""
-        try:
-            detail = resp.json().get("detail", "")
-        except Exception:
-            detail = resp.text[:200]
-        report("PI_POST_FAILED",
-               f"ชิ้นที่ {piece}: backend ปฏิเสธค่าจาก Pi (HTTP {resp.status_code}): {detail}")
-        return False
+    # คำถามค้างต้องมีอยู่จริง — กันกดปุ่มรัว ๆ (ยิงซ้ำจะ set _answer_event หลายครั้ง)
+    # และกันกดหลัง modal หมดอายุไปแล้ว (Pi เลิกรอ เดินหน้าไปแล้ว)
+    if measure_timeouts.get(session_id) is None:
+        raise HTTPException(404, "ไม่พบคำถามค้างของ session นี้ (อาจหมดอายุไปแล้ว)")
+    pending = measure_timeouts.pop(session_id)
 
-    mid = resp.json().get("measurement_id")
-    log.info("   ✅ บันทึกค่าจาก Pi แล้ว (measurement_id=%s)", mid)
+    # ⚠ สั่งไม่ถึง = Pi ยังบล็อกรอคำตอบอยู่เฉย ๆ ไม่มีอะไรเดินหน้า
+    #   ต้องบอกผู้ใช้ให้ชัดว่ากดแล้วไม่ผ่าน จะได้กดซ้ำหรือไปกด Stop
+    agent_err = await _notify_agent_action("accept", session_id)
+    if agent_err:
+        # คืนคำถามค้าง — ยังสั่งไม่สำเร็จ Pi ยังรออยู่จริง ถ้าไม่คืน ผู้ใช้จะกด
+        # ปุ่มไหนก็ได้ 404 หมดทั้งที่เครื่องยังค้างรอคำตอบ
+        measure_timeouts[session_id] = pending
+        raise HTTPException(502, f"สั่งให้ Pi บันทึกค่าไม่สำเร็จ — {agent_err}")
 
-    # ปักธงว่า "ไม่มีรูปถาวร" — ล้มก็ไม่ถือว่างานหลักพัง แถวลง DB ไปแล้ว
-    try:
-        httpx.patch(f"{BACKEND_URL}/api/measurements/{mid}/image",
-                    json={"image_path": None, "upload_failed": True}, timeout=5)
-    except Exception as exc:
-        report("PI_POST_FAILED", f"ชิ้นที่ {piece}: ปักธงไม่มีรูปไม่สำเร็จ — {exc}",
-               persist=False)   # ← ค่าลง DB แล้ว ห้ามทับสาเหตุที่ Pi กำลังรอ
-    return True
+    log.info(
+        "Session %s: ผู้ใช้เลือกรับค่าจาก Pi (ไม่มีรูป) — Pi จะ POST measurement เอง",
+        session_id,
+    )
+    return {"ok": True}
 
-def command_flow(session_id, groups, target_count):
+@router.post("/api/heartbeat")
+def heartbeat(req: HeartbeatRequest):
+    """รับ heartbeat จาก Agent (ดู agent.py heartbeat_loop — ยิงมาทุก
+    HEARTBEAT_INTERVAL วิ ไม่ว่าจะมี session running อยู่หรือไม่)
 
-    global current_session_id, is_running, _tmx_sock, _hb_last_ok
-    _hb_last_ok = time.time()
-    current_session_id = session_id  # heartbeat จะเริ่มแนบ session นี้ทันที
-    is_running = True
-    client_socket = None
-    stop_reason = None
+    อัปเดต 2 ที่ **คนละที่เก็บกันคนละแบบ** ตามอายุของข้อมูล:
 
-    try:
-        log.info(f"\n{'='*60}")
-        log.info(f"✅ ได้รับคำสั่ง Start จาก Backend")
-        log.info(f"   session_id    : {session_id}")
-        log.info(f"   target_count  : {target_count}  ← จำนวนชิ้นที่จะวัดรอบนี้")
-        for gi, g in enumerate(groups, 1):
-            log.info(f"   กลุ่มที่ {gi}      : template={g.template_name!r} "
-                  f"ALPL={g.alpl}")
-            if g.limits:
-                L = g.limits
-                log.info(f"                   X {L.x_lo:.4f}–{L.x_hi:.4f} · "
-                      f"Y {L.y_lo:.4f}–{L.y_hi:.4f} · offset_max={L.offset_max}")
-        log.info(f"{'='*60}")
+    ① `_pi_last_seen` ใน memory — **ทุกครั้ง ไม่ว่า session_id จะเป็น NULL หรือไม่**
+       ตอบคำถาม "ตอนนี้ Pi ยังมีชีวิตอยู่ไหม" ซึ่งสำคัญที่สุดตอน Pi ว่าง
+       (คนเปิดเว็บมาดูก่อนกด Start ว่าเครื่องพร้อมไหม) → ชิป PI ในแถบ Session Control
 
-        # ── ชิ้นที่ i อยู่กลุ่มไหน ──────────────────────────────────────────
-        # ทำได้ด้วยบรรทัดเดียวเพราะ **คิวไม่เคยสลับกลุ่ม** — `_flatten_groups`
-        # ฝั่ง backend (routers/session.py) ต่อ ALPL ของกลุ่ม 0 ให้หมดก่อน
-        # แล้วค่อยกลุ่ม 1 ดังนั้นแต่ละกลุ่มเป็นบล็อกติดกันเสมอ ลำดับที่ได้ตรงกับ
-        # `queue` ที่ backend ใช้เลือก ALPL ให้ measurement เป๊ะ
-        #
-        # ⚠ ถ้าวันหลัง backend เปลี่ยนไปเรียงคิวแบบสลับกลุ่ม บรรทัดนี้พังทันที
-        #   และจะพังแบบเงียบ ๆ (วัดด้วย template ผิดโดยไม่มี error) — ต้องให้
-        #   backend ส่ง `group_of` มาตรง ๆ แทนการเดาจากลำดับ
-        group_of = [gi for gi, g in enumerate(groups) for _ in g.alpl]
-        if len(group_of) != target_count:
-            log.info("⚠️ จำนวน ALPL รวม (%s) ไม่เท่า target_count (%s) — payload เพี้ยน",
-                     len(group_of), target_count)
+       เก็บใน memory ไม่ลง DB เพราะค่านี้ **หมดอายุใน PI_ONLINE_TIMEOUT วินาที**
+       โดยธรรมชาติ — last_seen ของเมื่อ 5 นาทีที่แล้วบอกอะไรไม่ได้เลย ต่างจาก
+       ผลการวัด/ทะเบียน ALPL ที่หายไม่ได้ (เคยมีตาราง `pi_status` เก็บสำเนาไว้
+       ถอดออกแล้ว ดูเหตุผลที่ mark_pi_seen ใน shared.py)
 
-        try:
-            client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            client_socket.settimeout(5.0)
-            client_socket.connect((TMX_IP, TMX_PORT))
-        except Exception as exc:
-            log.info("\n❌ ต่อ TM-X ที่ %s:%s ไม่ได้ — %s: %s", TMX_IP, TMX_PORT, type(exc).__name__, exc)
-            log.info("   ตรวจ: สาย LAN ต่ออยู่ไหม · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env ถูกไหม")
-            log.info("   → กด Stop ที่หน้าเว็บเพื่อล้าง session นี้ แล้วลองใหม่")
-            stop_reason = (f"ต่อ TM-X ที่ {TMX_IP}:{TMX_PORT} ไม่ได้ ({type(exc).__name__}) "f"— ตรวจสาย LAN · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env")
-            return
+       ⚠ ต้องทำ **ก่อน** แตะ DB เสมอ · ของเดิม return ทิ้งทันทีตอน Pi ว่าง
+         ทำให้ไม่มีที่ไหนบันทึกเลยว่า Pi ยังอยู่
 
-        _tmx_sock = client_socket  # ให้ stop handler ยิง S0 ผ่าน socket นี้ได้
+    ② `sessions.last_seen` ใน DB — เฉพาะตอนกำลังวัด ให้ heartbeat_checker() เอาไป
+       เทียบว่า session นี้ยังมี Agent ส่งสัญญาณชีพอยู่ไหม · เงื่อนไข `state='running'`
+       กันไม่ให้ heartbeat ที่มาช้า/ค้างจาก session เก่าไปอัปเดต session ผิดตัว
 
-        # Running (เข้าโหมดดำเนินงาน)
-        log.info("→ R0 : %s", send_command(client_socket, "R0"))
-        time.sleep(0.5)
+       อันนี้ต้องลง DB จริง เพราะ heartbeat_checker ตัดสินจากมันแล้วไปแก้สถานะ
+       session ที่เป็นข้อมูลถาวร
+    """
+    # ── ① memory: ทำก่อนเสมอ และไม่มีทางพลาด ──────────────────────────────
+    # เป็นแหล่งความจริงของชิป PI · เขียนฟรี ไม่แตะ DB จึงไม่มีทาง raise
+    # ต้องอยู่บรรทัดแรกสุด: ต่อให้ DB ล่มทั้งก้อน ชิปก็ยังบอกได้ถูกว่า Pi ยังอยู่
+    mark_pi_seen(req.waiting_for_trigger)
 
-        # `PW` ย้ายเข้าไปในลูปแล้ว (ดูข้างล่าง) เพราะแต่ละกลุ่มใช้ template คนละตัวได้
-        current_tmpl = None      # template ที่โหลดค้างอยู่ใน TM-X ตอนนี้
-
-        for piece in range(1, target_count + 1):
-            if not is_running:
-                log.info("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
-                break
-
-            # ── ⓪ โหลดโปรแกรมวัดของกลุ่มนี้ ถ้ายังไม่ตรงกับที่ค้างอยู่ ──────
-            #
-            # ยิงก่อน `wait_for_trigger_mcu()` โดยตั้งใจ — ช่วงรอสัญญาณจาก MCU
-            # ไม่มีกำหนดเวลาอยู่แล้ว ปล่อยให้ TM-X โหลดโปรแกรมไปพร้อมกันเลย
-            # ถ้าย้ายไปไว้หลัง trigger จะเพิ่มดีเลย์ ~1 วิให้ชิ้นแรกของทุกกลุ่ม
-            #
-            # ⚠ `PW` พ่วง RESET มาด้วย ทำให้ READY ดับชั่วคราว ยิง `T1` ตามติด
-            #   จะได้ `ER,T1,03` · ที่รอดอยู่ทุกวันนี้เพราะ sleep 1 วิ + `T1_RETRY`
-            #   ลองซ้ำให้อีก 3 ครั้ง (~0.9 วิ) รวมเผื่อไว้ ~1.9 วิ
-            #   **ถ้าหน้างานพบว่าชิ้นแรกของกลุ่มพังบ่อย ให้เพิ่ม PW_LOAD_WAIT**
-            #   ทางที่สะอาดกว่าคือใช้คำสั่ง `RM` อ่านโหมดยืนยันแทนการเดาเวลา
-            tmpl = groups[group_of[piece - 1]].template_name
-            if tmpl != current_tmpl:
-                pw = f"PW,1,{str(tmpl).zfill(3)}"
-                log.info("→ %s : %s  (กลุ่มที่ %s)", pw,
-                         send_command(client_socket, pw), group_of[piece - 1] + 1)
-                time.sleep(PW_LOAD_WAIT)
-                current_tmpl = tmpl
-
-            # ── ① รอ MCU บอกว่าชิ้นงานเข้าที่แล้ว (ตอนนี้ = curl /trigger) ──
-            log.info("\nชิ้นที่ %s/%s — รอสัญญาณ trigger ...", piece, target_count)
-            if not wait_for_trigger_mcu():
-                log.info("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
-                break
-
-            # อ่านให้ชิดกับ T1 ที่สุด — ช่วงรอสัญญาณข้างบนกินเวลาเป็นนาทีได้
-            # ถ้าอ่านก่อนรอ แล้วค่าของชิ้นก่อนที่มาช้าหลุดเข้ามาระหว่างนั้น
-            # measured_count จะขยับตั้งแต่ยังไม่ได้ยิง T1 ของชิ้นนี้
-            count_before = get_measured_count(session_id)
-
-            # ── ② MRS ล้างค่าเก่า แล้วยิง T1 ────────────────────────────────
-            rounds = 0
-            while True:
-                ok, t1_resp = trigger_tmx(client_socket)
-                if ok:
-                    break
-                rounds += 1
-                if not handle_error("T1", session_id, piece, target_count,
-                                    f"TM-X ปฏิเสธคำสั่ง T1 — {t1_resp}", rounds):
-                    stop_reason = f"ชิ้นที่ {piece}/{target_count}: ยิง T1 ไม่สำเร็จ ({t1_resp})"
-                    break
-            if not ok:
-                break                     # ← ออกจาก for → finally → ยิง stop
-                
-            # ── ③ วน GM จนได้ค่า ────────────────────────────────────────────
-            #
-            # ⚠⚠ **ต้องเป็น limits ของกลุ่มที่ชิ้นนี้อยู่ ห้ามใช้ groups[0]** —
-            #   ถ้าโหลด template ถูกแต่ตัดสินด้วยเกณฑ์ของกลุ่มแรก ค่าที่ได้จะ
-            #   ดูปกติทุกอย่างแต่คัดของผิดทั้งกลุ่มหลัง โดยไม่มี error ใด ๆ
-            #   (backend บันทึกด้วยเกณฑ์รายตัวที่ถูกต้อง → DB กับ MCU ขัดกันเงียบ ๆ)
-            rounds = 0
-            while True:
-                result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom, offset_x, offset_y = get_measurement_tmx(client_socket, groups[group_of[piece - 1]].limits)
-                if result != "UNKNOWN":
-                    break
-                rounds += 1
-                if not handle_error("GM", session_id, piece, target_count,
-                                    f"รอ {GM_MAX_WAIT:.0f} วิแล้ว GM ไม่คืนค่าใหม่", rounds):
-                    stop_reason = f"ชิ้นที่ {piece}/{target_count}: TM-X วัดไม่ติด"
-                    #send_result_to_mcu("UNKNOWN")   # ปล่อยของออกก่อนจบ
-                    break
-            if result == "UNKNOWN":
-                break
-
-            # ── ④ ส่งผลให้ MCU ไปคัดแยก — ส่งทุกชิ้นรวมถึง UNKNOWN ─────────
-            send_result_to_mcu(result)
-            # TODO: รอ MCU ตอบรับ (wait_mcu_ack) ก่อนไปชิ้นถัดไป — ยังไม่ทำ
-
-            if not is_running:
-                log.info("⏹ หยุดการวัด")
-                break
-
-            # ── รอยืนยันว่าค่าเข้า DB จริง ก่อนไปชิ้นถัดไป ────────────────── ถ้า wait_for_measurement return true 
-            if wait_for_measurement(session_id, count_before):
-                if is_running:
-                    log.info("   ✅ ชิ้นที่ %s/%s บันทึกแล้ว", piece, target_count)
-                continue
-
-            # ── ค่าไม่ถึง DB — วัดสำเร็จแล้ว แต่ Recieve ส่งไม่ถึง ────────────
-            # ⚠ ไม่มี retry ในเคสนี้ ชิ้นงานถูก MCU คัดแยกไปแล้ว ไม่มีอะไรให้วัดใหม่
-            #   Pi ถือค่าอยู่ในมือครบ → ถามผู้ใช้ว่าจะรับค่านั้นโดยไม่มีรูปไหม
-            report("NO_DB_ROW",
-                   f"ชิ้นที่ {piece}/{target_count}: วัดได้แล้วแต่ค่าไม่ถึงฐานข้อมูลใน "
-                   f"{MEASURE_TIMEOUT:.0f} วิ — ตรวจว่า Recieve_tm-x.py รันอยู่ไหม")
-
-            if ask_user(session_id, piece, target_count) != "accept":
-                stop_reason = (f"ชิ้นที่ {piece}/{target_count}: ค่าไม่ถึงฐานข้อมูล "
-                               f"— ผู้ใช้เลือกหยุด")
-                break
-
-            # ⚠ เช็คอีกครั้งก่อน POST — ระหว่างที่ modal เปิดรอคน (นานได้ถึง
-            #   ASK_USER_TIMEOUT) FTP อาจส่งมาช้าแต่มาถึงแล้ว ถ้าไม่เช็คจะได้
-            #   2 แถวสำหรับชิ้นเดียว → position ขยับ 2 → ALPL เลื่อนทั้งคิว
-            #   ⚠ การเช็คตรงนี้เป็น **ด่านเดียวที่กันแถวซ้ำ** — ระบบไม่มี client_uuid
-            #     หรือกลไกกันซ้ำฝั่ง backend อีกแล้ว ห้ามถอดออก
-            if get_measured_count(session_id) != count_before:
-                log.info("   ℹ️ ค่ามาถึงระหว่างรอคำตอบ — ไม่ต้องบันทึกซ้ำ")
-                continue
-
-            if not post_measurement_from_pi(session_id, piece, x, y,
-                                            horizon_left, horizon_right, vertical_top, vertical_bottom,
-                                            offset_x, offset_y):
-                stop_reason = f"ชิ้นที่ {piece}/{target_count}: บันทึกค่าจาก Pi ไม่สำเร็จ"
-                break
-    except Exception as exc:
-        log.info("\n❌ session พังกลางทาง — %s: %s", type(exc).__name__, exc)
-        stop_reason = f"session พังกลางทาง — {type(exc).__name__}: {exc}" 
-    finally:
-        if client_socket is not None:
-            try:
-                client_socket.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass  # อีกฝั่งตัดไปก่อนแล้ว หรือ socket ถูกปิดจาก stop handler
-            try:
-                client_socket.close()
-            except Exception:
-                pass
-        _tmx_sock = None
-        is_running = False
-        current_session_id = None  # heartbeat กลับไปยิงแบบ idle (ไม่แนบ session)
-        log.info("\n✅ จบ session — ปิดการเชื่อมต่อ TM-X แล้ว")
-        try:
-            st = httpx.get(f"{BACKEND_URL}/api/session/state", timeout=5).json()
-            if st.get("session_id") == session_id and st.get("state") == "running":
-                measured = st.get("measured_count")
-
-                # ⚠ ห้ามส่ง None — session.py:707 เช็ค `if req.reason:` ถ้าเป็น None
-                #   จะไม่เขียนอะไรลง DB เลย หน้าเว็บขึ้น STOPPED เปล่า ๆ เหมือนเดิม
-                #   ทางที่ยังไม่ได้ตั้ง reason ให้บอกตรง ๆ ว่าไม่ทราบ ดีกว่าเงียบ
-                reason = stop_reason or (
-                    f"session จบก่อนครบจำนวน (วัดได้ {measured}/{target_count}) "
-                    f"— ไม่ทราบสาเหตุแน่ชัด ดู log บนเครื่อง Pi"
-                )
-                httpx.post(
-                    f"{BACKEND_URL}/api/session/stop",
-                    json={"session_id": session_id, "reason": reason},
-                    timeout=10,
-                )
-                log.info("⏹ แจ้ง backend ปิด session แล้ว (วัดได้ %s/%s)", measured, target_count)
-                log.info("   เหตุผล: %s", reason)
-
-        except Exception as exc:
-            log.info("   ⚠️ แจ้งปิด session ไม่ได้: %s — "
-                     "backend จะปิดเองใน ~%g วิ (ขึ้นเป็น 'timeout')", exc, HB_TIMEOUT_HINT)
-            # reason กำลังจะหายไปทั้งก้อน — เทอร์มินัลคือหลักฐานเดียวที่เหลือ
-            if stop_reason:
-                log.info("   เหตุผลที่จะหายไป: %s", stop_reason)
-
-if __name__ == "__main__":
-    # heartbeat ต้องเริ่ม "ก่อน" เปิด server และรันตลอดอายุโปรแกรมใน daemon thread
-    threading.Thread(target=heartbeat_loop, daemon=True).start()
-
-    log.info("─" * 66)
-    log.info("Pi.py — รอคำสั่ง Start จาก Backend")
-    log.info(f"  ฟัง /command ที่    : 0.0.0.0:{AGENT_PORT}   (.env: AGENT_PORT)")
-    log.info(f"  TM-X ที่            : {TMX_IP}:{TMX_PORT}    (.env: TMX_HOST/TMX_PORT)")
-    log.info(f"  Backend ที่         : {BACKEND_URL}          (.env: BACKEND_URL)")
-    log.info(f"  heartbeat ทุก       : {HB_INTERVAL:g} วิ · หยุดเองถ้าขาดติดต่อเกิน {HB_TIMEOUT_HINT:g} วิ")
-    log.info(f"  รอค่าการวัดสูงสุด    : {MEASURE_TIMEOUT:g} วิ (poll ทุก {MEASURE_POLL_INTERVAL:g} วิ)")
-    # แยก 2 บรรทัดโดยตั้งใจ — เดิมพิมพ์ "curl -X POST http://..." ติดกันบรรทัดเดียว
-    # แล้วมีคนก๊อปทั้งบรรทัดไปวางในช่อง address ของเบราว์เซอร์ ได้ URL เพี้ยนเป็น
-    #   http://127.0.0.1:9998/curl%20-X%20POST%20http://...
-    # (%20 = ช่องว่าง) · บรรทัดล่างจึงเป็น URL ล้วนที่ก๊อปแล้ววางได้ทันที
-    log.info(f"  จำลองเซนเซอร์ (เบราว์เซอร์): http://127.0.0.1:{AGENT_PORT}/trigger")
-    log.info(f"  จำลองเซนเซอร์ (เทอร์มินัล) : curl -X POST http://127.0.0.1:{AGENT_PORT}/trigger")
-    log.info(f"     ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi")
-    log.info("─" * 66)
-
-    # ── เตือนถ้า heartbeat ตั้งค่าไม่สัมพันธ์กัน ────────────────────────────
-    # ต้อง INTERVAL × 2 ≤ TIMEOUT เป็นอย่างน้อย เพื่อให้ทนบีตหาย 1 ครั้งได้
+    # ── ② DB: เฉพาะตอนมี session ที่กำลังวัดอยู่ ───────────────────────────
+    # Pi ว่าง (session_id เป็น None) → ไม่ต้องแตะ DB เลยสักครั้ง ซึ่งเป็นสถานะ
+    # ปกติของเครื่องเกือบทั้งวัน — heartbeat ส่วนใหญ่จึงจบที่ memory ไม่เปิด
+    # connection ไป MySQL เลย (get_db ไม่มี pool เปิดใหม่ทุกครั้ง จึงคุ้มมาก)
     #
-    # ถ้าตั้งเท่ากันเป๊ะ (เช่น 5/5) จะไม่มีระยะเผื่อเลยแม้แต่มิลลิวินาทีเดียว —
-    # บีตต้องมาตรงเวลาพอดีทุกครั้งถึงจะรอด ซึ่งเป็นไปไม่ได้จริงเพราะมี network
-    # latency + เวลาที่ MySQL เขียน UPDATE + GC ของ Python · ผลคือ backend
-    # ฆ่า session ทิ้งเองกลางการวัด (ทิ้งคิวด้วย กู้ไม่ได้) โดยไม่มีสาเหตุจริง
-    # แล้วหน้าเว็บขึ้นว่า 'timeout' ซึ่งชี้ไปที่ "Pi ตาย" ทั้งที่ Pi ปกติดี
-    if HB_INTERVAL * 2 > HB_TIMEOUT_HINT:
-        log.info(f"⚠️  HEARTBEAT_INTERVAL ({HB_INTERVAL:g}s) ถี่ไม่พอเมื่อเทียบกับ "
-              f"HEARTBEAT_TIMEOUT ({HB_TIMEOUT_HINT:g}s)")
-        log.info(f"    แนะนำให้ HEARTBEAT_INTERVAL ไม่เกิน {HB_TIMEOUT_HINT/2:g}s "
-              f"— แก้ที่ .env\n")
+    # กลืน exception ทิ้ง: heartbeat ต้องไม่พังเพราะ DB มีปัญหา ไม่งั้น Pi จะนับว่า
+    # "ติดต่อ Backend ไม่ได้" แล้วหยุดวัดเอง ทั้งที่คุยกันได้ปกติ
+    if req.session_id is None:
+        return {"ok": True}
 
-    # port ต้องตรงกับ AGENT_PORT ที่ main.py ใช้ยิงมา
-    uvicorn.run(http_app, host="0.0.0.0", port=AGENT_PORT)
+    try:
+        db = get_db()
+        try:
+            with db.cursor() as cur:
+                cur.execute(
+                    "UPDATE sessions SET last_seen = NOW() "
+                    "WHERE session_id = %s AND state = 'running'",
+                    (req.session_id,),
+                )
+        finally:
+            db.close()
+    except Exception as exc:
+        log.warning("heartbeat: อัปเดต sessions.last_seen ไม่สำเร็จ: %s", exc)
+    return {"ok": True}
