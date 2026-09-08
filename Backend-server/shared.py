@@ -1341,7 +1341,7 @@ def _tolerance_spec(r) -> str:
     upper_tol/lower_tol) เหมือนเดิม ไม่ได้ถูกยุบตาม — ตั้งใจให้ CSV แยกช่อง
     เพื่อเอาไปคำนวณต่อได้ ส่วนรายงานเน้นอ่านง่ายบนกระดาษ
     """
-    d = 2
+    d = 3
     nx, ny = r["nominal_x"], r["nominal_y"]
     if nx is None and ny is None:
         nom = ""
