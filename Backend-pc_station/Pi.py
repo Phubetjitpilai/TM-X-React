@@ -17,7 +17,6 @@ from pydantic import BaseModel
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Pi] %(message)s")
-logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
@@ -52,6 +51,13 @@ T1_RETRY_WAIT = float(os.getenv("T1_RETRY_WAIT", 0.3))
 # ⚠ ตัวนี้ถูกใช้ **ทุกครั้งที่ข้ามรอยต่อกลุ่ม** ไม่ใช่แค่ตอนเริ่ม session แล้ว
 #   ตั้งสูงไปจะช้าทุกกลุ่ม ตั้งต่ำไปชิ้นแรกของกลุ่มจะพังแล้วเด้งถามผู้ใช้
 PW_LOAD_WAIT = float(os.getenv("PW_LOAD_WAIT", 1.0))
+
+# รอคำตอบของ `PW` ได้นานกว่าคำสั่งอื่น — TM-X ต้องโหลดโปรแกรมจากการ์ด SD ก่อน
+# ถึงจะตอบกลับ วัดจริงที่หน้างานได้ **2.7 วินาที** (log 8 ก.ย. 2569)
+#
+# ⚠ ห้ามใช้ `SOCKET_TIMEOUT` (5 วิ) เฉย ๆ — เฉียดเกินไป การ์ด SD ที่ช้ากว่านี้
+#   หรือโปรแกรมวัดที่ใหญ่กว่าจะทำให้ session พังทั้งรอบตรงชิ้นแรกของกลุ่ม
+PW_CMD_TIMEOUT = float(os.getenv("PW_CMD_TIMEOUT", 10))
 
 MAX_ASK_USER_ROUNDS = int(os.getenv("MAX_ASK_USER_ROUNDS", 4))
 
@@ -257,7 +263,25 @@ def heartbeat_loop():
         time.sleep(HB_INTERVAL)
 
 
-def send_command(sock, command):
+def send_command(sock, command, timeout=SOCKET_TIMEOUT):
+    """ส่ง 1 คำสั่งแล้ว `recv` ครั้งเดียว — ใช้กับ R0 / PW ที่คำตอบสั้นและมาทีเดียว
+
+    ⚠⚠ **ต้อง `settimeout` เองทุกครั้ง ห้ามพึ่งค่าที่ติดมากับ socket** —
+      `send_recv()` เปลี่ยนค่าบน socket ตัวเดียวกันแล้ว **ไม่คืนค่าเดิม** ถ้า
+      ฟังก์ชันนี้ไม่ตั้งเอง มันจะรับมรดกค่าล่าสุดที่ใครก็ไม่รู้ตั้งทิ้งไว้
+
+      เคยพังมาแล้วจริง (8 ก.ย. 2569): การวน `GM` ใช้ `timeout=2.0` พอจบลูป
+      ค่านั้นค้างบน socket · ชิ้นแรกของกลุ่มที่ 2 ยิง `PW` แล้ว TM-X ตอบใน
+      2.7 วิ (ต้องโหลดโปรแกรมจากการ์ด SD ก่อน) แต่ timeout เหลือ 2.0 →
+      `TimeoutError` → session พังทั้งรอบ · `PW` ตัวแรกรอดเพราะตอนนั้น
+      `send_recv` ยังไม่เคยรัน ค่ายังเป็น 5.0 ที่ตั้งไว้ตอน connect
+
+    ⚠ `recv` ครั้งเดียวไม่ได้วนหา CR แบบ `send_recv` — ถ้าคำตอบยาวจนมาไม่ครบ
+      ในทีเดียวจะได้มาครึ่งเดียวแล้วพาร์สเพี้ยนเงียบ ๆ · ใช้ได้เพราะ R0/PW
+      ตอบสั้นมาก (2 ตัวอักษร) ถ้าจะเอามาใช้กับคำสั่งที่คืนค่ายาวให้ย้ายไปใช้
+      `send_recv()` แทน
+    """
+    sock.settimeout(timeout)
     cmd_to_send = command + "\r"  # ต้องต่อท้ายด้วยตัวคั่น CR (\r) เสมอ
     sock.sendall(cmd_to_send.encode("ascii"))
     time.sleep(0.1)  # หน่วงเวลาให้กล้องประมวลผลเล็กน้อย
@@ -763,7 +787,8 @@ def command_flow(session_id, groups, target_count):
             if tmpl != current_tmpl:
                 pw = f"PW,1,{str(tmpl).zfill(3)}"
                 log.info("→ %s : %s  (กลุ่มที่ %s)", pw,
-                         send_command(client_socket, pw), group_of[piece - 1] + 1)
+                         send_command(client_socket, pw, timeout=PW_CMD_TIMEOUT),
+                         group_of[piece - 1] + 1)
                 time.sleep(PW_LOAD_WAIT)
                 current_tmpl = tmpl
 
