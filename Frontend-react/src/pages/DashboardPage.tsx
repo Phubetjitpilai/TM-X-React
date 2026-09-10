@@ -1697,11 +1697,20 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="report-body">
+                  {/* คลิกรูปเพื่อดูเต็มจอ — ใช้ overlay `.img-zoom` ตัวเดียวกับ Camera
+                      Preview ไม่ได้สร้างใหม่ จะได้ปิดด้วย Esc เหมือนกันโดยไม่ต้อง
+                      เขียน listener ซ้ำ · `.img-zoom` z-index สูงกว่า `.modal-overlay`
+                      จึงลอยทับโมดัลรายงานที่เปิดค้างอยู่ได้ */}
                   <div className="report-image-cell">
                     {reportModal.imageState === "loading" ? (
                       <span className="report-no-image">Loading…</span>
                     ) : reportModal.imageState === "ok" && reportModal.imageUrl ? (
-                      <img src={reportModal.imageUrl} alt={`Measurement #${m.measurement_id} image`} />
+                      <img
+                        src={reportModal.imageUrl}
+                        alt={`Measurement #${m.measurement_id} image`}
+                        title="คลิกเพื่อดูเต็มจอ"
+                        onClick={() => setZoomImgUrl(reportModal.imageUrl)}
+                      />
                     ) : (
                       <span className="report-no-image">No image</span>
                     )}
