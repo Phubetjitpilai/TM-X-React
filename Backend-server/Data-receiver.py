@@ -1,15 +1,28 @@
+import logging
 import os
 import shutil
 import threading
 import time
-import logging
+
 import httpx
 from dotenv import load_dotenv
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
 from pyftpdlib.servers import FTPServer
+import edit_image
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [Data Receiver] %(message)s")
+# ── ตั้ง logging ─────────────────────────────────────────────────────────
+# ทุกบรรทัดมี timestamp นำหน้า จำเป็นตอนรันเป็น service แบบไม่มีหน้าต่างแล้ว
+# มาเปิดไฟล์ log อ่านทีหลัง — ไม่มีเวลากำกับจะไล่ลำดับเหตุการณ์ไม่ได้เลย
+#
+# ⚠ ป้าย [Recv] ไว้แยกจาก [Pi] ของ Pi.py และ [Server] ของ Backend เวลาเอา log
+#   ของ 3 ตัวมาวางเทียบกันตอนไล่ว่าค่าหายไปช่วงไหน
+#
+# ⚠⚠ **ต้องปิดเสียง httpx ด้วยเสมอ** — `basicConfig(level=INFO)` เปิด logger
+#   ของทุกไลบรารีพร้อมกัน ไม่ใช่แค่ของไฟล์นี้ · `session_watcher()` ยิง
+#   `GET /api/session/state` ทุก SESSION_POLL_INTERVAL วิ ถ้าไม่ปิด httpx จะพ่น
+#   `HTTP Request: GET ... "200 OK"` ทุกครั้งจน log ของจริงจมหายหมด
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [Recv] %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
@@ -176,7 +189,7 @@ def get_current_session():
         if data.get("state") == "running":
             return data.get("session_id")
     except Exception as exc:
-        log.info(f"⚠️ query /api/session/state ไม่สำเร็จ: {exc}")
+        log.warning(f"⚠️ query /api/session/state ไม่สำเร็จ: {exc}")
     return None
 
 def post_to_backend(
@@ -211,6 +224,22 @@ def post_to_backend(
         timeout=5,
     )
 
+def _exc_line(exc: BaseException) -> str:
+    """ย่อ exception ให้เหลือบรรทัดเดียว สำหรับส่งเข้า `report()`
+
+    `last_event_detail` เป็นคอลัมน์ใน DB และถูก broadcast เป็น toast บนหน้าเว็บ
+    ด้วย จะยัด traceback ทั้งดุ้นลงไปไม่ได้ — ตัวเต็มให้ใช้ `log.exception()`
+    ซึ่งลงเฉพาะ log ของเครื่อง PC
+
+    ⚠ ต้องเอา `__module__` มาประกอบด้วย เพราะ `type(cv2.error).__name__` คืนแค่
+      `"error"` เฉย ๆ อ่านแล้วไม่รู้เลยว่ามาจาก OpenCV
+    """
+    cls = type(exc)
+    name = f"{cls.__module__}.{cls.__name__}" if cls.__module__ != "builtins" else cls.__name__
+    msg = (str(exc) or "ไม่มีรายละเอียด").splitlines()[-1].strip()
+    return f"{name}: {msg[:160]}"
+
+
 def report(event: str, detail: str, *, persist: bool = True):
     log.info(f"   📣 {event}: {detail}")
     try:
@@ -220,7 +249,7 @@ def report(event: str, detail: str, *, persist: bool = True):
             timeout=2,
         )
     except Exception as exc:
-        log.info(f"   ⚠️ แจ้ง Backend ไม่สำเร็จ: {exc}")
+        log.warning(f"   ⚠️ แจ้ง Backend ไม่สำเร็จ: {exc}")
 
 def upload_image_to_backend(measurement_id, image_path):
     try:
@@ -270,7 +299,7 @@ def clear_temp_dir(wait_timeout: float = 5.0):
         while _jobs_count() > 0 and time.time() < deadline:
             time.sleep(0.3)
         if _jobs_count() > 0:
-            log.info(f"⚠️ ยังมีงานค้าง {_jobs_count()} รายการหลังรอ {wait_timeout:.0f} วิ — ล้างต่อไป")
+            log.warning(f"⚠️ ยังมีงานค้าง {_jobs_count()} รายการหลังรอ {wait_timeout:.0f} วิ — ล้างต่อไป")
 
     # ── ลบไฟล์และโฟลเดอร์ข้างใน ────────────────────────────────────────
     removed_files = removed_dirs = 0
@@ -282,7 +311,7 @@ def clear_temp_dir(wait_timeout: float = 5.0):
             else:
                 os.remove(path);     removed_files += 1
         except OSError as exc:
-            log.info(f"⚠️ ลบ {name} ไม่สำเร็จ: {exc}")
+            log.warning(f"⚠️ ลบ {name} ไม่สำเร็จ: {exc}")
 
     with _txt_lock:
         _txt_paths.clear()   # path ที่จำไว้ชี้ไปยังไฟล์ที่ไม่มีแล้ว
@@ -295,7 +324,7 @@ def clear_temp_dir(wait_timeout: float = 5.0):
 
     if removed_files or removed_dirs:
         log.info(f"🧹 ล้าง {os.path.basename(TEMP_IMAGE_DIR)} แล้ว "
-              f"(ไฟล์ {removed_files} · โฟลเดอร์ {removed_dirs})")
+                 f"(ไฟล์ {removed_files} · โฟลเดอร์ {removed_dirs})")
         
 #Clear เมื่อ Session_id เปลี่ยน และ จบแล้ว
 def session_watcher():
@@ -312,11 +341,11 @@ def session_watcher():
 
         if is_running: #Session_id เปลี่ยน
             if last_running_sid is not None and session_id != last_running_sid:
-                log.info(f"\n🔄 session เปลี่ยนจาก {last_running_sid} → {session_id}")
+                log.info(f"🔄 session เปลี่ยนจาก {last_running_sid} → {session_id}")
                 clear_temp_dir()
             last_running_sid = session_id
         elif last_running_sid is not None: #Run จบแล้ว
-            log.info(f"\n🏁 session {last_running_sid} จบแล้ว (state={data.get('state')})")
+            log.info(f"🏁 session {last_running_sid} จบแล้ว (state={data.get('state')})")
             clear_temp_dir()
             last_running_sid = None
         
@@ -352,13 +381,36 @@ def _handle_capture_inner(image_path):
                f"ได้ค่า/รูป {name} มาแต่ไม่มี session ที่ running อยู่ — ทิ้งไป")
         clear_temp_dir(wait_timeout=0)
         return
+    
+    # ── ด่าน 3 วาดรูปใหม่ ──────────────────────────────────────────
+    # ⚠ การวาดเส้นเป็น "ของแถม" **ห้ามให้มันบล็อกการส่งค่าเด็ดขาด** — ค่าที่วัดได้
+    #   ผ่านด่าน 1 มาครบถูกต้องแล้ว วาดไม่ได้ก็ส่งรูปดิบไปแทน ดีกว่าทิ้งทั้งชิ้น
+    #
+    #   เคยพังมาแล้ว: `cv2.imread` คืน `None` เงียบ ๆ ตอนไฟล์ยังเขียนไม่เสร็จ
+    #   แล้วไประเบิดที่ `cvtColor` — ฟังก์ชันนี้ถูกเรียกจาก daemon thread
+    #   (ดู `on_file_received`) exception จึงหลุดออกไปตายเงียบ ๆ ผลคือไม่ POST
+    #   ไม่ report รูปค้างใน temp และ Pi ไปนับถอยหลังจน measure_timeout
+    #   โดยไม่มีใครรู้สาเหตุ
+    #
+    # ⚠ `persist=False` **ห้ามเปลี่ยนเป็น True** — `last_event` มีช่องเดียว
+    #   ค่าใหม่ทับค่าเก่า (ดู `session_event` ใน routers/session.py) ต้องสงวนไว้
+    #   ให้เรื่องที่ "ค่าไม่ลง DB แล้ว Pi กำลังรอคำตอบ" เท่านั้น · เคสนี้ค่ายังลง
+    #   DB ปกติ ถ้า persist ไปจะทับสาเหตุจริงที่ Backend ต้องหยิบไปตอบ Pi
+    #   ตอน measure-timeout — เหตุผลเดียวกับ IMAGE_UPLOAD_FAILED
+    try:
+        edit_image.process_and_save_image(image_path, pair)
+    except Exception as exc:
+        log.exception("วาดเส้นบนรูป %s ไม่สำเร็จ", name)   # traceback เต็มลง log เครื่อง PC
+        report("IMAGE_EDIT_FAILED",
+               f"วาดเส้นบนรูป {name} ไม่สำเร็จ ({_exc_line(exc)}) — ส่งรูปดิบไปแทน",
+               persist=False)
 
-    # ── ด่าน 3: ส่งเข้า Backend ─────────────────────────────────────────
+    # ── ด่าน 4: ส่งเข้า Backend ─────────────────────────────────────────
     log.info(
     f"✅ {name} ({size_mb:.1f} MB) → "
-    f"value_x={value_x} value_y={value_y} "
-    f"horizon_left={horizon_left} horizon_right={horizon_right} vertical_bottom={vertical_bottom} vertical_top={vertical_top} "
-    f"offset_opx={offset_opx} offset_opy={offset_opy}"
+    f"value_x={value_x:.3f} value_y={value_y:.3f} "
+    f"horizon_left={horizon_left:.3f} horizon_right={horizon_right:.3f} vertical_bottom={vertical_bottom:.3f} vertical_top={vertical_top:.3f} "
+    f"offset_opx={offset_opx:.3f} offset_opy={offset_opy:.3f}"
     )
     try:
         resp = post_to_backend(
@@ -420,11 +472,11 @@ def _log_received_file(path: str, note: str = ""):
     parsed = _parse_measurement_line(last)
     if parsed is None:
         n = len(last.split(","))
-        log.info(f"           ⚠️ แปลงค่าไม่ได้ — ได้ {n} ช่อง (ต้องการ = 8) ")
+        log.warning(f"           ⚠️ แปลงค่าไม่ได้ — ได้ {n} ช่อง (ต้องการ = 8) ")
         return
 
     log.info(f"           แปลงค่าได้: value_x={parsed[0]}  value_y={parsed[1]}  "
-          f"offset_opx={parsed[6]}  offset_opy={parsed[7]}")
+             f"offset_opx={parsed[6]}  offset_opy={parsed[7]}")
   
 class ReceiverFTPHandler(FTPHandler):
     """TM-X ส่งของมาเป็นชุด: ไฟล์ .txt ผลวัด (ต่อท้ายทีละบรรทัด) + รูป 2 ใบ
@@ -487,7 +539,7 @@ def start_ftp_server():
     try:
         server.serve_forever(timeout=1)
     except KeyboardInterrupt:
-        log.info("\nได้รับ Ctrl+C — กำลังปิด FTP server...")
+        log.info("ได้รับ Ctrl+C — กำลังปิด FTP server...")
     finally:
         server.close_all()
         log.info("ปิด FTP server เรียบร้อย")
