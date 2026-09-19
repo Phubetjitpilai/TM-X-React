@@ -111,5 +111,5 @@ if __name__ == "__main__":
         print("    ไม่งั้นเปิดหน้าเว็บจะได้ 404 ทุกหน้า (API ยังใช้ได้ปกติ)")
     print("=" * 62)
 
-    uvicorn.run(app, host=_host, port=_port)
+    uvicorn.run(app, host=_host, port=_port,access_log=False)
 

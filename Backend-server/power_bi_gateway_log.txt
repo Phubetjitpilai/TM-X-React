@@ -1,0 +1,106 @@
+2026-09-10 15:59:34,928 [PowerBI] INFO    ============================================================
+2026-09-10 15:59:34,930 [PowerBI] INFO    เริ่ม export (ย้อนหลัง 180 วัน)
+2026-09-10 15:59:34,939 [PowerBI] INFO      measurements           1 rows   13 cols
+2026-09-10 15:59:34,941 [PowerBI] INFO      parts                  1 rows   10 cols
+2026-09-10 15:59:35,224 [PowerBI] INFO    เขียนไฟล์สำเร็จ: /tmp/pbi/out/tmx_export.xlsx  (0.3 วินาที)
+2026-09-10 15:59:35,271 [PowerBI] INFO    ============================================================
+2026-09-10 15:59:35,275 [PowerBI] INFO    เริ่ม export (ย้อนหลัง 180 วัน)
+2026-09-10 15:59:35,277 [PowerBI] ERROR   ไม่พบโฟลเดอร์ปลายทาง: /tmp/pbi/nope
+2026-09-10 15:59:35,279 [PowerBI] ERROR   ตรวจว่า path ถูกต้อง และโฟลเดอร์ SharePoint sync อยู่
+2026-09-10 15:59:54,159 [PowerBI] WARNING เขียนทับไฟล์ไม่ได้ (ครั้งที่ 1/4) — น่าจะโดน OneDrive ล็อกอยู่ รอ 0 วิแล้วลองใหม่: [Errno 32] The process cannot access the file because it is being used by another process
+2026-09-10 15:59:54,461 [PowerBI] WARNING เขียนทับไฟล์ไม่ได้ (ครั้งที่ 2/4) — น่าจะโดน OneDrive ล็อกอยู่ รอ 0 วิแล้วลองใหม่: [Errno 32] The process cannot access the file because it is being used by another process
+2026-09-10 15:59:54,766 [PowerBI] WARNING เขียนทับไฟล์ไม่ได้ (ครั้งที่ 1/3) — น่าจะโดน OneDrive ล็อกอยู่ รอ 0 วิแล้วลองใหม่: [Errno 32] locked
+2026-09-10 15:59:54,881 [PowerBI] WARNING เขียนทับไฟล์ไม่ได้ (ครั้งที่ 2/3) — น่าจะโดน OneDrive ล็อกอยู่ รอ 0 วิแล้วลองใหม่: [Errno 32] locked
+2026-09-10 16:00:10,997 [PowerBI] INFO    ============================================================
+2026-09-10 16:00:10,997 [PowerBI] INFO    เริ่ม export (ย้อนหลัง 180 วัน)
+2026-09-10 16:00:10,997 [PowerBI] ERROR   ไม่พบโฟลเดอร์ปลายทาง: C:\Users\YOURNAME\Analog Devices\TM-X Dashboard - Documents\data
+2026-09-10 16:00:10,997 [PowerBI] ERROR   ตรวจว่า path ถูกต้อง และโฟลเดอร์ SharePoint sync อยู่
+2026-09-10 16:09:10,639 [PowerBI] INFO    ======================================================================
+2026-09-10 16:09:10,642 [PowerBI] INFO    เริ่ม export — ทุกตารางใน tmx_db (ตารางที่มีวันที่ ย้อนหลัง 180 วัน)
+2026-09-10 16:09:10,646 [PowerBI] INFO    เจอ 13 ตาราง: operator, owner, vendor, handler, template, package_size, part_number, package_size_handler, parts_specifications, sessions, measurements, export_template, edit_history
+2026-09-10 16:09:10,655 [PowerBI] INFO      operator               → แผ่น operator                     1 rows   2 cols  [operator_id, operator_name]
+2026-09-10 16:09:10,658 [PowerBI] INFO      owner                  → แผ่น owner                        1 rows   2 cols  [owner_id, owner_name]
+2026-09-10 16:09:10,661 [PowerBI] INFO      vendor                 → แผ่น vendor                       1 rows   2 cols  [vendor_id, vendor_name]
+2026-09-10 16:09:10,663 [PowerBI] INFO      handler                → แผ่น handler                      1 rows   2 cols  [handler_id, handler_name]
+2026-09-10 16:09:10,665 [PowerBI] INFO      template               → แผ่น template                     1 rows   2 cols  [template_id, template_name]
+2026-09-10 16:09:10,667 [PowerBI] INFO      package_size           → แผ่น package_size                 1 rows   8 cols  [package_size_id, package_size, nominal_x, nominal_y, upper_tol, lower_tol, offset_tol, template_id]
+2026-09-10 16:09:10,671 [PowerBI] INFO      part_number            → แผ่น part_number                  1 rows   4 cols  [part_number_id, part_number_name, package_size_id, handler_id]
+2026-09-10 16:09:10,674 [PowerBI] INFO      package_size_handler   → แผ่น package_size_handler         1 rows   2 cols  [package_size_id, handler_id]
+2026-09-10 16:09:10,678 [PowerBI] INFO      parts_specifications   → แผ่น parts                        1 rows  10 cols  [part_id, number_alpl, part_number_id, package_size_id, handler_id, vendor_id, owner_id, po_number, description, recieve_date]
+2026-09-10 16:09:10,686 [PowerBI] WARNING   sessions               คอลัมน์ `queue_state` มีค่ายาว/ไม่ใช่ข้อความ — แปลงเป็นข้อความแล้ว
+2026-09-10 16:09:10,689 [PowerBI] INFO      sessions               → แผ่น sessions                     1 rows  11 cols  [session_id, state, target_count, measured_count, queue_state, last_event, last_event_detail, last_event_at, last_seen, started_at, ended_at]
+2026-09-10 16:09:10,693 [PowerBI] INFO      measurements           → แผ่น measurements                 1 rows  15 cols  [measurement_id, session_id, number_alpl, value_x, value_y, offset_opx, offset_opy, offset_pos_op, result, note, operator_id, measure_type, image_path, image_upload_failed, timestamp]
+2026-09-10 16:09:10,696 [PowerBI] WARNING   edit_history           คอลัมน์ `changes_json` มีค่ายาว/ไม่ใช่ข้อความ — แปลงเป็นข้อความแล้ว
+2026-09-10 16:09:10,699 [PowerBI] INFO      edit_history           → แผ่น edit_history                 1 rows   7 cols  [history_id, edited_at, table_name, action, ref, changes_json, trash_id]
+2026-09-10 16:09:10,701 [PowerBI] INFO    ข้ามไป 1 ตาราง: export_template
+2026-09-10 16:09:46,096 [PowerBI] INFO    ======================================================================
+2026-09-10 16:09:46,098 [PowerBI] INFO    เริ่ม export — ทุกตารางใน tmx_db (ตารางที่มีวันที่ ย้อนหลัง 180 วัน)
+2026-09-10 16:09:46,100 [PowerBI] INFO    เจอ 13 ตาราง: operator, owner, vendor, handler, template, package_size, part_number, package_size_handler, parts_specifications, sessions, measurements, export_template, edit_history
+2026-09-10 16:09:46,103 [PowerBI] INFO      operator               → แผ่น operator                     1 rows   2 cols  [operator_id, operator_name]
+2026-09-10 16:09:46,106 [PowerBI] INFO      owner                  → แผ่น owner                        1 rows   2 cols  [owner_id, owner_name]
+2026-09-10 16:09:46,108 [PowerBI] INFO      vendor                 → แผ่น vendor                       1 rows   2 cols  [vendor_id, vendor_name]
+2026-09-10 16:09:46,110 [PowerBI] INFO      handler                → แผ่น handler                      1 rows   2 cols  [handler_id, handler_name]
+2026-09-10 16:09:46,112 [PowerBI] INFO      template               → แผ่น template                     1 rows   2 cols  [template_id, template_name]
+2026-09-10 16:09:46,115 [PowerBI] INFO      package_size           → แผ่น package_size                 1 rows   8 cols  [package_size_id, package_size, nominal_x, nominal_y, upper_tol, lower_tol, offset_tol, template_id]
+2026-09-10 16:09:46,116 [PowerBI] INFO      part_number            → แผ่น part_number                  1 rows   4 cols  [part_number_id, part_number_name, package_size_id, handler_id]
+2026-09-10 16:09:46,118 [PowerBI] INFO      package_size_handler   → แผ่น package_size_handler         1 rows   2 cols  [package_size_id, handler_id]
+2026-09-10 16:09:46,122 [PowerBI] INFO      parts_specifications   → แผ่น parts                        1 rows  10 cols  [part_id, number_alpl, part_number_id, package_size_id, handler_id, vendor_id, owner_id, po_number, description, recieve_date]
+2026-09-10 16:09:46,125 [PowerBI] WARNING   sessions               คอลัมน์ `queue_state` มีค่ายาว/ไม่ใช่ข้อความ — แปลงเป็นข้อความแล้ว
+2026-09-10 16:09:46,126 [PowerBI] WARNING   sessions               คอลัมน์ `last_event_detail` มีค่ายาว/ไม่ใช่ข้อความ — แปลงเป็นข้อความแล้ว
+2026-09-10 16:09:46,128 [PowerBI] INFO      sessions               → แผ่น sessions                     1 rows  11 cols  [session_id, state, target_count, measured_count, queue_state, last_event, last_event_detail, last_event_at, last_seen, started_at, ended_at]
+2026-09-10 16:09:46,130 [PowerBI] INFO      measurements           → แผ่น measurements                 1 rows  15 cols  [measurement_id, session_id, number_alpl, value_x, value_y, offset_opx, offset_opy, offset_pos_op, result, note, operator_id, measure_type, image_path, image_upload_failed, timestamp]
+2026-09-10 16:09:46,131 [PowerBI] WARNING   edit_history           คอลัมน์ `changes_json` มีค่ายาว/ไม่ใช่ข้อความ — แปลงเป็นข้อความแล้ว
+2026-09-10 16:09:46,133 [PowerBI] INFO      edit_history           → แผ่น edit_history                 1 rows   7 cols  [history_id, edited_at, table_name, action, ref, changes_json, trash_id]
+2026-09-10 16:09:46,135 [PowerBI] INFO    ข้ามไป 1 ตาราง: export_template
+2026-09-10 16:09:46,320 [PowerBI] INFO    เขียนไฟล์สำเร็จ: /tmp/pbi/out/tmx_export.xlsx
+2026-09-10 16:09:46,323 [PowerBI] INFO    รวม 13 แผ่น · 12 แถว · 0.2 วินาที
+2026-09-10 22:42:04,528 [PowerBI] INFO    ======================================================================
+2026-09-10 22:42:04,529 [PowerBI] INFO    เริ่ม export — ทุกตารางใน tmx_db (ตารางที่มีวันที่ ย้อนหลัง 180 วัน)
+2026-09-10 22:42:05,141 [PowerBI] INFO    เจอ 13 ตาราง: edit_history, export_template, handler, measurements, operator, owner, package_size, package_size_handler, part_number, parts_specifications, sessions, template, vendor
+2026-09-10 22:42:05,310 [PowerBI] INFO      edit_history           → แผ่น edit_history                37 rows   7 cols  [history_id, edited_at, table_name, action, ref, changes_json, trash_id]
+2026-09-10 22:42:05,323 [PowerBI] INFO      export_template        → แผ่น export_template              3 rows   7 cols  [export_template_id, name, kind, columns_json, layout_json, is_default, created_at]
+2026-09-10 22:42:05,330 [PowerBI] INFO      handler                → แผ่น handler                      2 rows   2 cols  [handler_id, handler_name]
+2026-09-10 22:42:05,347 [PowerBI] INFO      measurements           → แผ่น measurements               157 rows  16 cols  [measurement_id, session_id, number_alpl, value_x, value_y, offset_opx, offset_opy, offset_pos_op, result, note, operator_id, client_uuid, measure_type, image_path, image_upload_failed, timestamp]
+2026-09-10 22:42:05,353 [PowerBI] INFO      operator               → แผ่น operator                     2 rows   2 cols  [operator_id, operator_name]
+2026-09-10 22:42:05,358 [PowerBI] INFO      owner                  → แผ่น owner                        2 rows   2 cols  [owner_id, owner_name]
+2026-09-10 22:42:05,365 [PowerBI] INFO      package_size           → แผ่น package_size                22 rows   8 cols  [package_size_id, package_size, nominal_x, nominal_y, upper_tol, lower_tol, offset_tol, template_id]
+2026-09-10 22:42:05,371 [PowerBI] INFO      package_size_handler   → แผ่น package_size_handler        16 rows   2 cols  [package_size_id, handler_id]
+2026-09-10 22:42:05,378 [PowerBI] INFO      part_number            → แผ่น part_number                 27 rows   4 cols  [part_number_id, part_number_name, package_size_id, handler_id]
+2026-09-10 22:42:05,383 [PowerBI] INFO      parts_specifications   → แผ่น parts                       20 rows  10 cols  [part_id, number_alpl, part_number_id, package_size_id, handler_id, vendor_id, owner_id, po_number, description, recieve_date]
+2026-09-10 22:42:05,394 [PowerBI] INFO      sessions               → แผ่น sessions                   110 rows  11 cols  [session_id, state, target_count, measured_count, queue_state, last_event, last_event_detail, last_event_at, last_seen, started_at, ended_at]
+2026-09-10 22:42:05,398 [PowerBI] INFO      template               → แผ่น template                     2 rows   2 cols  [template_id, template_name]
+2026-09-10 22:42:05,401 [PowerBI] INFO      vendor                 → แผ่น vendor                       3 rows   2 cols  [vendor_id, vendor_name]
+2026-09-10 22:42:06,316 [PowerBI] INFO    เขียนไฟล์สำเร็จ: C:\Users\User\OneDrive\TM-X Data\tmx_export.xlsx
+2026-09-10 22:42:06,316 [PowerBI] INFO    รวม 14 แผ่น · 403 แถว · 1.8 วินาที
+2026-09-10 22:49:25,054 [PowerBI] INFO    ======================================================================
+2026-09-10 22:49:25,055 [PowerBI] INFO    เริ่ม export — ทุกตารางใน tmx_db (ตารางที่มีวันที่ ย้อนหลัง 180 วัน)
+2026-09-10 22:49:25,290 [PowerBI] INFO    เจอ 13 ตาราง: edit_history, export_template, handler, measurements, operator, owner, package_size, package_size_handler, part_number, parts_specifications, sessions, template, vendor
+2026-09-10 22:49:25,314 [PowerBI] INFO      edit_history           → แผ่น edit_history                37 rows   7 cols  [history_id, edited_at, table_name, action, ref, changes_json, trash_id]
+2026-09-10 22:49:25,323 [PowerBI] INFO      export_template        → แผ่น export_template              3 rows   7 cols  [export_template_id, name, kind, columns_json, layout_json, is_default, created_at]
+2026-09-10 22:49:25,327 [PowerBI] INFO      handler                → แผ่น handler                      2 rows   2 cols  [handler_id, handler_name]
+2026-09-10 22:49:25,337 [PowerBI] INFO      measurements           → แผ่น measurements               157 rows  16 cols  [measurement_id, session_id, number_alpl, value_x, value_y, offset_opx, offset_opy, offset_pos_op, result, note, operator_id, client_uuid, measure_type, image_path, image_upload_failed, timestamp]
+2026-09-10 22:49:25,341 [PowerBI] INFO      operator               → แผ่น operator                     2 rows   2 cols  [operator_id, operator_name]
+2026-09-10 22:49:25,345 [PowerBI] INFO      owner                  → แผ่น owner                        2 rows   2 cols  [owner_id, owner_name]
+2026-09-10 22:49:25,349 [PowerBI] INFO      package_size           → แผ่น package_size                22 rows   8 cols  [package_size_id, package_size, nominal_x, nominal_y, upper_tol, lower_tol, offset_tol, template_id]
+2026-09-10 22:49:25,353 [PowerBI] INFO      package_size_handler   → แผ่น package_size_handler        16 rows   2 cols  [package_size_id, handler_id]
+2026-09-10 22:49:25,358 [PowerBI] INFO      part_number            → แผ่น part_number                 27 rows   4 cols  [part_number_id, part_number_name, package_size_id, handler_id]
+2026-09-10 22:49:25,363 [PowerBI] INFO      parts_specifications   → แผ่น parts                       20 rows  10 cols  [part_id, number_alpl, part_number_id, package_size_id, handler_id, vendor_id, owner_id, po_number, description, recieve_date]
+2026-09-10 22:49:25,370 [PowerBI] INFO      sessions               → แผ่น sessions                   110 rows  11 cols  [session_id, state, target_count, measured_count, queue_state, last_event, last_event_detail, last_event_at, last_seen, started_at, ended_at]
+2026-09-10 22:49:25,374 [PowerBI] INFO      template               → แผ่น template                     2 rows   2 cols  [template_id, template_name]
+2026-09-10 22:49:25,379 [PowerBI] INFO      vendor                 → แผ่น vendor                       3 rows   2 cols  [vendor_id, vendor_name]
+2026-09-10 22:49:26,144 [PowerBI] INFO    เขียนไฟล์สำเร็จ: C:\Users\User\OneDrive\TM-X Data\tmx_export.xlsx
+2026-09-10 22:49:26,145 [PowerBI] INFO    รวม 14 แผ่น · 403 แถว · 1.1 วินาที
+2026-09-11 08:32:13,189 [PowerBI] INFO    ======================================================================
+2026-09-11 08:32:13,191 [PowerBI] INFO    เริ่ม export — ทุกตารางใน tmx_db (ตารางที่มีวันที่ ย้อนหลัง 180 วัน)
+2026-09-11 08:32:13,194 [PowerBI] INFO    เจอ 2 ตาราง: operator, measurements
+2026-09-11 08:32:13,202 [PowerBI] INFO      operator               → แผ่น operator                     1 rows   2 cols  [operator_id, operator_name]
+2026-09-11 08:32:13,206 [PowerBI] INFO      measurements           → แผ่น measurements                 2 rows   3 cols  [measurement_id, value_x, timestamp]
+2026-09-11 08:32:13,231 [PowerBI] INFO    เขียนไฟล์สำเร็จ: /tmp/pbi/out/tmx_export.xlsx
+2026-09-11 08:32:13,234 [PowerBI] INFO    รวม 3 แผ่น · 3 แถว · 0.0 วินาที
+2026-09-11 08:32:13,316 [PowerBI] INFO    ======================================================================
+2026-09-11 08:32:13,320 [PowerBI] INFO    เริ่ม export — ทุกตารางใน tmx_db (ตารางที่มีวันที่ ย้อนหลัง 180 วัน)
+2026-09-11 08:32:13,323 [PowerBI] INFO    เจอ 2 ตาราง: operator, measurements
+2026-09-11 08:32:13,326 [PowerBI] INFO      operator               → แผ่น operator                     1 rows   2 cols  [operator_id, operator_name]
+2026-09-11 08:32:13,329 [PowerBI] INFO      measurements           → แผ่น measurements                 1 rows   3 cols  [measurement_id, value_x, timestamp]
+2026-09-11 08:32:13,343 [PowerBI] INFO    เขียนไฟล์สำเร็จ: /tmp/pbi/out/tmx_export.xlsx
+2026-09-11 08:32:13,346 [PowerBI] INFO    รวม 3 แผ่น · 2 แถว · 0.0 วินาที

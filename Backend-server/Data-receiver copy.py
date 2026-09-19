@@ -51,6 +51,35 @@ _IMAGE_DIR_NAME = "head-a"
 TXT_WAIT_TIMEOUT = 5.0
 SESSION_POLL_INTERVAL = 3.0
 
+# ── รวมหลายทริกเกอร์ให้เป็นค่าเดียว (trimmed mean) ─────────────────────────
+# Pi ยิง T1 ซ้ำ `SAMPLES_PER_PIECE` ครั้งต่อชิ้นงาน 1 ชิ้น → TM-X เขียน .txt
+# เท่ากับจำนวนครั้งและส่งรูปตามมาทุกครั้ง · ไฟล์นี้สะสมไว้เป็น "กอง" แล้วค่อย
+# ตัดหัวท้ายทิ้งอย่างละ `TRIM_EACH_SIDE` ก่อนเฉลี่ย แล้วส่งเข้า Backend
+# **ครั้งเดียวต่อชิ้น** — Backend จึงไม่ต้องแก้อะไรเลย ยังเห็น 1 POST = 1 ชิ้น
+SAMPLES_PER_PIECE = int(os.getenv("SAMPLES_PER_PIECE", 16))
+TRIM_EACH_SIDE    = int(os.getenv("TRIM_EACH_SIDE", 1))
+# เหลือค่าที่ใช้ได้น้อยกว่านี้ = ไม่เชื่อถือ ทิ้งทั้งกอง
+MIN_SAMPLES       = int(os.getenv("MIN_SAMPLES", 10))
+# กองที่ค้างเกินกี่วินาทีถือว่าจบชิ้นแล้ว (ปิดแบบไม่ครบ)
+BATCH_IDLE_GAP    = float(os.getenv("BATCH_IDLE_GAP", 2.0))
+# รอบการตรวจกองค้าง — ต้องถี่กว่า BATCH_IDLE_GAP พอสมควร
+BATCH_WATCH_TICK  = float(os.getenv("BATCH_WATCH_TICK", 0.3))
+
+# ⚠⚠ **ปิดกอง 2 ทาง ต้องมีทั้งคู่ ห้ามเอาอันใดอันหนึ่งออก**
+#   1. ครบ `SAMPLES_PER_PIECE` → ปิดทันที (ทางปกติ เร็วสุด ไม่ต้องรอ)
+#   2. เงียบเกิน `BATCH_IDLE_GAP` → ปิดเท่าที่มี (ทางกันเหนียว)
+#
+#   ถ้ามีแค่ข้อ 1 แล้วแถวหายกลางทาง (FTP หลุด / รูปส่งไม่ถึง) กองนั้นจะค้าง
+#   รออีกไม่กี่แถวตลอดไป แล้ว **ชิ้นถัดไปจะมาเติมให้ครบพอดี** → ค่าของ 2 ชิ้น
+#   ปนกันโดยไม่มี error ใด ๆ ให้เห็น และเพี้ยนลามไปทุกชิ้นที่เหลือ
+#
+#   ถ้ามีแค่ข้อ 2 ก็ต้องรอ `BATCH_IDLE_GAP` ทุกชิ้น ซึ่งกินงบเวลาของ
+#   `MEASURE_TIMEOUT` ฝั่ง Pi ไปเปล่า ๆ
+_batch_lock    = threading.Lock()
+_batch_rows    = []      # ค่าที่ parse ได้ (tuple ละ 8 ตัว)
+_batch_images  = []      # path ของรูปตามลำดับที่มาถึง
+_batch_last_at = 0.0     # เวลาที่มีของเข้ากองล่าสุด
+
 # ── ตำแหน่งของแต่ละค่าในบรรทัดของไฟล์ .txt ────────────────────────────────
 # ⚠⚠ **ใช้คีย์ชุดเดียวกับ `Pi.py` (`GM_IDX_*`) โดยตั้งใจ ห้ามแยกเป็นคีย์ของตัวเอง**
 #   TM-X เรียงค่าตามลำดับเครื่องมือชุดเดียวกันทั้งตอนตอบ `GM` ทาง TCP (Pi อ่าน)
@@ -150,7 +179,134 @@ def _read_lines(path: str):
     except OSError:
         return []
 
+def trimmed_mean(values, trim: int = TRIM_EACH_SIDE):
+    """ตัดหัวท้ายอย่างละ `trim` ตัว แล้วเฉลี่ยที่เหลือ — คืน `None` ถ้าทำไม่ได้
+
+    ⚠ **ผู้เรียกต้องกรอง sentinel ออกมาก่อน** ฟังก์ชันนี้ไม่รู้จัก 9999.999
+      การหวังให้ "ตัดตัวมากสุดทิ้ง" จัดการ sentinel ให้เอง ใช้ได้เฉพาะตอนมัน
+      โผล่มาตัวเดียว · ถ้าโผล่ 2 ตัวจะเหลือรอด 1 ตัวเข้าไปในค่าเฉลี่ย แล้วผลลัพธ์
+      กระโดดไปหลักร้อยโดยไม่มี error ให้เห็น (ทดสอบแล้วได้ 721 จากค่าจริง 8.05)
+    """
+    vals = sorted(values)
+    if len(vals) <= trim * 2:
+        return None
+    kept = vals[trim:len(vals) - trim] if trim > 0 else vals
+    return sum(kept) / len(kept)
+
+
+def _aggregate(rows):
+    """ยุบหลายทริกเกอร์ให้เหลือชุดเดียว — คืน `(ค่า 8 ตัว, ข้อความสรุป)` หรือ `(None, เหตุผล)`
+
+    ตัดหัวท้าย **แยกทีละฟิลด์** ไม่ใช่ตัดทั้งแถว — ค่าแต่ละตัวที่ TM-X วัดมา
+    เป็นอิสระต่อกัน ตัวที่เพี้ยนของ X ไม่จำเป็นต้องอยู่แถวเดียวกับตัวที่เพี้ยน
+    ของ Y การตัดทั้งแถวจะทิ้งค่าดีของฟิลด์อื่นไปด้วยโดยไม่จำเป็น
+    """
+    n_fields = len(rows[0])
+    out, kept_counts = [], []
+
+    for i in range(n_fields):
+        # กรอง sentinel ทิ้งก่อนเสมอ — ตรงกับ NO_VALUE_ABS = 9999.0 ฝั่ง Pi
+        usable = [r[i] for r in rows if abs(r[i]) < 9999.0]
+        if len(usable) < MIN_SAMPLES:
+            return None, (f"ฟิลด์ที่ {i} เหลือค่าที่ใช้ได้ {len(usable)}/{len(rows)} "
+                          f"ตัว (ต้องการอย่างน้อย {MIN_SAMPLES})")
+        m = trimmed_mean(usable)
+        if m is None:
+            return None, f"ฟิลด์ที่ {i} มีค่าน้อยเกินกว่าจะตัดหัวท้ายได้"
+        out.append(m)
+        kept_counts.append(len(usable) - TRIM_EACH_SIDE * 2)
+
+    lo, hi = min(kept_counts), max(kept_counts)
+    span = f"{lo}" if lo == hi else f"{lo}-{hi}"
+    return tuple(out), f"เฉลี่ยจาก {span} ค่า (เก็บมา {len(rows)} · ตัดหัวท้ายข้างละ {TRIM_EACH_SIDE})"
+
+
+def _batch_add(rows=None, image=None):
+    """ใส่ของเข้ากอง แล้วบอกว่าถึงเวลาปิดกองหรือยัง (ครบจำนวน)"""
+    global _batch_last_at
+    with _batch_lock:
+        if rows:
+            _batch_rows.extend(rows)
+        if image:
+            _batch_images.append(image)
+        _batch_last_at = time.time()
+        return len(_batch_rows) >= SAMPLES_PER_PIECE
+
+
+def _batch_take():
+    """ดึงของออกจากกองแล้วเคลียร์ — คืน `(rows, images)`
+
+    ⚠ ต้องดึงออกมาทั้งก้อนใต้ล็อกเดียว เพราะมีคนเรียกปิดกองได้ 2 ทางพร้อมกัน
+      (เธรดที่รับรูป กับเธรดจับเวลา) ถ้าไม่กันไว้จะ POST ซ้ำสองครั้ง
+    """
+    global _batch_last_at
+    with _batch_lock:
+        rows, images = list(_batch_rows), list(_batch_images)
+        _batch_rows.clear()
+        _batch_images.clear()
+        _batch_last_at = 0.0
+        return rows, images
+
+
+def batch_watcher():
+    """ปิดกองที่ค้างเกิน BATCH_IDLE_GAP — ทางกันเหนียวของการปิดกอง"""
+    while True:
+        time.sleep(BATCH_WATCH_TICK)
+        with _batch_lock:
+            idle = _batch_last_at and (time.time() - _batch_last_at) >= BATCH_IDLE_GAP
+            pending = len(_batch_rows)
+        if idle and pending:
+            log.info("⏱ กองค้าง %s แถวมา %.1f วิแล้ว — ปิดกองเท่าที่มี",
+                     pending, BATCH_IDLE_GAP)
+            flush_batch("เงียบเกินกำหนด")
+
+
+def _collect_new_rows(timeout: float = TXT_WAIT_TIMEOUT):
+    """รอจนมีบรรทัดใหม่ใน .txt แล้วคืน **ทุกบรรทัดที่เพิ่มมา** (ไม่ใช่แค่บรรทัดล่าสุด)
+
+    ต่างจาก `_find_measurement_for_image()` เดิมที่คืนบรรทัดเดียว เพราะโหมดนี้
+    ต้องเก็บให้ครบทุกทริกเกอร์ · ถ้า FTP ส่งรวดเดียวมา 2 บรรทัดแล้วเราหยิบแค่
+    บรรทัดล่าสุด ค่าที่หายไปจะทำให้กองไม่มีวันครบ `SAMPLES_PER_PIECE`
+
+    บรรทัดที่ parse ไม่ผ่านถูกข้ามแต่ยังนับ cursor ไปแล้ว — ไม่ย้อนกลับมาอ่านซ้ำ
+    """
+    global _txt_cursor_path, _txt_cursor_rows
+    deadline = time.time() + timeout
+
+    while True:
+        with _txt_lock:
+            path = _txt_paths[-1] if _txt_paths else None
+
+        if path:
+            with count_lock:
+                if path != _txt_cursor_path:
+                    log.info(f"📄 .txt ไฟล์ใหม่ → {os.path.basename(path)} (เริ่มนับบรรทัดใหม่)")
+                    _txt_cursor_path = path
+                    _txt_cursor_rows = 0
+
+                lines  = _read_lines(path)
+                before = _txt_cursor_rows
+                after  = len(lines)
+
+                if after > before:
+                    _txt_cursor_rows = after
+                    fresh = lines[before:after]
+                    parsed = [p for p in (_parse_measurement_line(ln) for ln in fresh)
+                              if p is not None]
+                    if len(parsed) != len(fresh):
+                        log.warning("   ⚠️ .txt %s → %s บรรทัด · parse ผ่าน %s/%s",
+                                    before, after, len(parsed), len(fresh))
+                    else:
+                        log.info(f"   📈 .txt {before} → {after} บรรทัด")
+                    return parsed
+
+        if time.time() >= deadline:
+            return []
+        time.sleep(0.1)
+
+
 def _find_measurement_for_image(timeout: float = TXT_WAIT_TIMEOUT):
+    """⚠ ของเดิม เก็บไว้อ้างอิงเฉย ๆ — โหมดรวมกองใช้ `_collect_new_rows()` แทน"""
     global _txt_cursor_path, _txt_cursor_rows
     deadline = time.time() + timeout
 
@@ -320,6 +476,14 @@ def clear_temp_dir(wait_timeout: float = 5.0):
         # ไฟล์ที่หมุดชี้อยู่ถูกลบไปกับโฟลเดอร์ temp แล้ว ต้องล้างด้วย
         _txt_cursor_path = None
         _txt_cursor_rows = 0
+
+    # ⚠ ต้องทิ้งกองที่ค้างด้วย — รูปในกองชี้ไปยังไฟล์ที่เพิ่งถูกลบไปเมื่อกี้
+    #   ถ้าปล่อยไว้ พอ session ใหม่เริ่ม กองเก่าจะเอาค่าของ session ก่อนหน้า
+    #   ไปปนกับชิ้นแรกของรอบใหม่
+    dropped, _ = _batch_take()
+    if dropped:
+        log.info("🗑 ทิ้งกองที่ค้างอยู่ %s แถว (ล้างโฟลเดอร์พัก)", len(dropped))
+
     log.info("🔄 รีเซ็ตตำแหน่งอ่าน .txt เรียบร้อย")
 
     if removed_files or removed_dirs:
@@ -356,33 +520,86 @@ def _handle_capture(image_path):
         _job_end()   # ต้องลดตัวนับเสมอ ไม่ว่าจะจบทางไหน ไม่งั้น clear_temp_dir รอค้างตลอด
 
 def _handle_capture_inner(image_path):
-    name = os.path.basename(image_path)
-    try:
-        size_mb = os.path.getsize(image_path) / 1_048_576
-    except OSError:
-        size_mb = 0.0
+    """รูป 1 ใบมาถึง = 1 ทริกเกอร์ — **แค่เก็บเข้ากอง ยังไม่ส่งอะไรทั้งนั้น**
 
-    # ── ด่าน 1: จับคู่ค่ากับรูป ──────────────────────────────────────────
-    pair = _find_measurement_for_image()
-    if pair is None:
-        report("TXT_NOT_FOUND",f"ไม่พบค่าการวัด "f"(รอ {TXT_WAIT_TIMEOUT:.0f} วิแล้ว)")
+    ⚠ ของเดิมที่นี่คือ "ได้รูป 1 ใบ = POST 1 ครั้ง" ซึ่งใช้ไม่ได้แล้วในโหมดรวมกอง
+      เพราะ Pi ยิง `SAMPLES_PER_PIECE` ครั้งต่อชิ้น ถ้า POST ทุกใบจะได้ 16 แถว
+      ต่อชิ้นใน DB · คิว ALPL ฝั่ง Backend เดินไป 16 ตัว · `measured_count`
+      ถึง `target_count` ตั้งแต่ชิ้นแรก
+    """
+    name = os.path.basename(image_path)
+
+    # ── ด่าน 1: ดึงบรรทัดใหม่ทั้งหมดใน .txt เข้ากอง ────────────────────
+    rows = _collect_new_rows()
+    if not rows:
+        report("TXT_NOT_FOUND", f"ไม่พบค่าการวัดของ {name} "
+                                f"(รอ {TXT_WAIT_TIMEOUT:.0f} วิแล้ว)")
+        # ยังเก็บรูปเข้ากองอยู่ดี — ถ้า .txt ตามมาทีหลัง กองจะยังมีรูปให้ใช้
+        _batch_add(image=image_path)
         return
-    
+
+    full = _batch_add(rows=rows, image=image_path)
+    with _batch_lock:
+        have = len(_batch_rows)
+    log.info("   📦 เข้ากองแล้ว %s/%s แถว (+%s จาก %s)",
+             have, SAMPLES_PER_PIECE, len(rows), name)
+
+    if full:
+        flush_batch("ครบจำนวน")
+
+
+def flush_batch(reason: str):
+    """ปิดกอง → กรอง sentinel → trim → mean → POST ครั้งเดียว → อัปโหลดรูปใบสุดท้าย
+
+    ⚠ ต้องทนต่อการถูกเรียกซ้อนจาก 2 เธรด (ตัวรับรูป กับ `batch_watcher`)
+      — `_batch_take()` ดึงของออกใต้ล็อกเดียว คนที่มาทีหลังจะได้กองว่างแล้วเลิก
+    """
+    rows, images = _batch_take()
+    if not rows and not images:
+        return
+
+    for extra in images[:-1]:      # เก็บเฉพาะใบสุดท้าย ที่เหลือลบทิ้งกันดิสก์เต็ม
+        _remove_quietly(extra)
+    image_path = images[-1] if images else None
+    name = os.path.basename(image_path) if image_path else "(ไม่มีรูป)"
+
+    log.info("📦 ปิดกอง (%s): %s แถว · %s รูป", reason, len(rows), len(images))
+
+    if not rows:
+        report("BATCH_NO_ROWS", f"ปิดกองแล้วแต่ไม่มีค่าเลย (มีแต่รูป {len(images)} ใบ) — ทิ้ง",
+               persist=False)
+        if image_path:
+            _remove_quietly(image_path)
+        return
+
+    # ── ด่าน 2: ยุบหลายทริกเกอร์ให้เหลือชุดเดียว ────────────────────────
+    pair, note = _aggregate(rows)
+    if pair is None:
+        report("BATCH_TOO_FEW", f"ค่าที่ใช้ได้ไม่พอ — {note}")
+        if image_path:
+            _remove_quietly(image_path)
+        return
+    log.info("   🧮 %s", note)
+
     (
     value_x, value_y,
     horizon_left, horizon_right, vertical_bottom, vertical_top,
     offset_opx, offset_opy
     ) = pair
 
-    # ── ด่าน 2: ต้องมี session ที่ running อยู่ ─────────────────────────
+    # ── ด่าน 3: ต้องมี session ที่ running อยู่ ─────────────────────────
     session_id = get_current_session()
     if session_id is None:
         report("NO_SESSION",
                f"ได้ค่า/รูป {name} มาแต่ไม่มี session ที่ running อยู่ — ทิ้งไป")
         clear_temp_dir(wait_timeout=0)
         return
-    
-    # ── ด่าน 3 วาดรูปใหม่ ──────────────────────────────────────────
+
+    if image_path is None:
+        report("IMAGE_MISSING",
+               f"กองนี้ไม่มีรูปเลย ({len(rows)} แถว) — ส่งเฉพาะค่า", persist=False)
+
+    # ── ด่าน 4 วาดรูปใหม่ ──────────────────────────────────────────
     # ⚠ การวาดเส้นเป็น "ของแถม" **ห้ามให้มันบล็อกการส่งค่าเด็ดขาด** — ค่าที่วัดได้
     #   ผ่านด่าน 1 มาครบถูกต้องแล้ว วาดไม่ได้ก็ส่งรูปดิบไปแทน ดีกว่าทิ้งทั้งชิ้น
     #
@@ -397,17 +614,18 @@ def _handle_capture_inner(image_path):
     #   ให้เรื่องที่ "ค่าไม่ลง DB แล้ว Pi กำลังรอคำตอบ" เท่านั้น · เคสนี้ค่ายังลง
     #   DB ปกติ ถ้า persist ไปจะทับสาเหตุจริงที่ Backend ต้องหยิบไปตอบ Pi
     #   ตอน measure-timeout — เหตุผลเดียวกับ IMAGE_UPLOAD_FAILED
-    try:
-        edit_image.process_and_save_image(image_path, pair)
-    except Exception as exc:
-        log.exception("วาดเส้นบนรูป %s ไม่สำเร็จ", name)   # traceback เต็มลง log เครื่อง PC
-        report("IMAGE_EDIT_FAILED",
-               f"วาดเส้นบนรูป {name} ไม่สำเร็จ ({_exc_line(exc)}) — ส่งรูปดิบไปแทน",
-               persist=False)
+    if image_path is not None:
+        try:
+            edit_image.process_and_save_image(image_path, pair)
+        except Exception as exc:
+            log.exception("วาดเส้นบนรูป %s ไม่สำเร็จ", name)   # traceback เต็มลง log เครื่อง PC
+            report("IMAGE_EDIT_FAILED",
+                   f"วาดเส้นบนรูป {name} ไม่สำเร็จ ({_exc_line(exc)}) — ส่งรูปดิบไปแทน",
+                   persist=False)
 
-    # ── ด่าน 4: ส่งเข้า Backend ─────────────────────────────────────────
+    # ── ด่าน 5: ส่งเข้า Backend ─────────────────────────────────────────
     log.info(
-    f"✅ {name} ({size_mb:.1f} MB) → "
+    f"✅ {name} → "
     f"value_x={value_x:.3f} value_y={value_y:.3f} "
     f"horizon_left={horizon_left:.3f} horizon_right={horizon_right:.3f} vertical_bottom={vertical_bottom:.3f} vertical_top={vertical_top:.3f} "
     f"offset_opx={offset_opx:.3f} offset_opy={offset_opy:.3f}"
@@ -432,12 +650,14 @@ def _handle_capture_inner(image_path):
             detail = resp.text[:200]
         report("BACKEND_REJECT",
                f"Backend ปฏิเสธค่านี้ (HTTP {resp.status_code}): {detail}")
-        _remove_quietly(image_path)
+        if image_path:
+            _remove_quietly(image_path)
         return
 
     data = resp.json()
     log.info(f"   → บันทึกแล้ว: result={data.get('result')}  ({data.get('measured')}/{data.get('target')})")
-    upload_image_to_backend(data["measurement_id"], image_path)
+    if image_path:
+        upload_image_to_backend(data["measurement_id"], image_path)
 
 # ทำงานเมื่อ FORWARD_TO_BACKEND = 0 ใช้สำหรับการ Debug
 
@@ -558,6 +778,9 @@ if __name__ == "__main__":
     if FORWARD_TO_BACKEND:
         log.info(f"  Backend ที่    : {BACKEND_URL}   (.env: BACKEND_URL)")
         log.info("  กติกา         : ใช้รูปนอกโฟลเดอร์ HEAD-A · ข้ามค่า -9999.999")
+        log.info(f"  รวมกอง        : {SAMPLES_PER_PIECE} ทริกเกอร์/ชิ้น · ตัดหัวท้ายข้างละ "
+                 f"{TRIM_EACH_SIDE} · อย่างน้อย {MIN_SAMPLES} ค่า · ปิดกองเมื่อเงียบ "
+                 f"{BATCH_IDLE_GAP:.1f} วิ")
     else:
         log.info("  ** ไฟล์จะกองอยู่ในโฟลเดอร์ข้างบน ไม่ถูกลบ — ตรวจแล้วลบเองด้วย **")
     log.info("=" * 70)
@@ -566,5 +789,6 @@ if __name__ == "__main__":
     # โหมด "รับอย่างเดียว" ตั้งใจให้ไฟล์กองไว้ให้ตรวจ จึงต้องไม่ไปล้างทิ้ง
     if FORWARD_TO_BACKEND:
         threading.Thread(target=session_watcher, daemon=True).start()
+        threading.Thread(target=batch_watcher, daemon=True).start()
     clear_temp_dir(wait_timeout=0)
     start_ftp_server()

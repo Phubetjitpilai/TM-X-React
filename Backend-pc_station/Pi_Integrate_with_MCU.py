@@ -16,6 +16,16 @@ from pydantic import BaseModel
 # ⚠ ป้าย [Pi] ไว้แยกจาก [Server] ของ Backend เวลาเอา log 2 เครื่องมาวางเทียบกัน
 import logging
 
+# new
+########################
+import glob
+import serial
+
+# ── Serial Config สำหรับเชื่อมต่อ Arduino Mega ──────────────────────────────
+BAUD_RATE   = 115200
+TIMEOUT_SEC = 1
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Pi] %(message)s")
 log = logging.getLogger(__name__)
 
@@ -23,6 +33,23 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 TMX_IP = os.getenv("TMX_HOST", "192.168.10.11")
 TMX_PORT = int(os.getenv("TMX_PORT", 8600))
 BUFFER_SIZE = 1024
+
+def find_mega_port() -> str | None:
+    """ค้นหาพอร์ต USB ที่เชื่อมต่อกับ Mega 2560 อัตโนมัติ"""
+    ports = glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")
+    return ports[0] if ports else None
+
+# ทำการเชื่อมต่อ Serial ทันทีที่รันสคริปต์
+port = find_mega_port()
+if not port:
+    log.error("[ERROR] No Arduino/Mega found on USB. Check connection.")
+    sys.exit(1)
+
+log.info(f"[INFO] Connecting to Mega on {port} @ {BAUD_RATE} baud ...")
+mega_ser = serial.Serial(port, BAUD_RATE, timeout=TIMEOUT_SEC)
+time.sleep(2)  # รอ Mega รีเซ็ตตัวเองหลังเชื่อมต่อ
+log.info("[INFO] Mega Serial Connected Successfully.")
+#########################
 
 TRIGGER_COMMAND = "T1\r"
 
@@ -73,7 +100,7 @@ ASK_USER_TIMEOUT = float(os.getenv("ASK_USER_TIMEOUT", 70))
 # คำสั่งล้างค่าเก่า — คู่มือหน้า 5-9 พิมพ์ 2 แบบไม่ตรงกันเอง ต้องลองเอง
 CLEAR_CANDIDATES = ["MRS", "MSR"]
 _clear_cmd = None    # None=ยังไม่ได้ลอง · "MRS"/"MSR"=ตัวที่ใช้ได้ · False=ไม่ผ่านทั้งคู่
-MCU_TIMEOUT = float(os.getenv("MCU_TIMEOUT", 10))
+MCU_TIMEOUT = float(os.getenv("MCU_TIMEOUT", 5))
 def _idx(name, default):
     v = os.getenv(name, default)
     return None if v in ("", "none", "None", None) else int(v)
@@ -109,7 +136,6 @@ _trigger = threading.Event()
 
 # ตอนนี้อยู่ในช่วง "รอสัญญาณ" จริงหรือยัง — endpoint ใช้ตอบให้ตรงความจริงว่า
 # สัญญาณที่ยิงมาจะถูกใช้หรือถูกทิ้ง ไม่งั้น curl แล้วเครื่องไม่ขยับจะนึกว่าพัง
-_waiting_for_trigger = False
 
 http_app = FastAPI()
 
@@ -121,6 +147,7 @@ class Group(BaseModel):
     template_name: str
     alpl: list[int]
     limits: Limits | None = None
+    package_size: str | None = None      # เผื่อ backend รุ่นเก่าไม่ส่งมา
 
 class CommandRequest(BaseModel):
     action: str
@@ -134,7 +161,7 @@ async def command(req: CommandRequest):
     if req.action == "start":
         try:
             httpx.post(f"{BACKEND_URL}/api/heartbeat",
-                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
+                json={"session_id": current_session_id},
                 timeout=5)
         except Exception:
             pass
@@ -183,24 +210,6 @@ async def command(req: CommandRequest):
             _answer_action = "accept"
         _answer_event.set()    
 
-    elif req.action == "trigger":
-        # ปุ่มจำลองทริกเกอร์บนหน้าเว็บ (ใช้ชั่วคราวระหว่างที่ยังไม่มี MCU)
-        #
-        # เส้นทางคือ เบราว์เซอร์ → Backend → ที่นี่ **ไม่ให้เบราว์เซอร์ยิงตรงมา**
-        # เพราะหน้าเว็บจะต้องรู้ IP ของ Pi เอง และต้องเปิด CORS ที่นี่เพิ่ม
-        #
-        # guard ชุดเดียวกับ /trigger เป๊ะ แต่ตอบเป็น HTTP error แทน {"ok": False}
-        # เพื่อให้ Backend แยกออกว่าถูกปฏิเสธ ไม่ใช่สำเร็จ แล้วส่งเหตุผลถึงหน้าเว็บได้
-        if not is_running:
-            raise HTTPException(400, "ไม่มี session กำลังวัดอยู่ — กด Start ที่หน้าเว็บก่อน")
-        if not _waiting_for_trigger:
-            raise HTTPException(
-                409,
-                "ยังไม่ถึงช่วงรอสัญญาณ — ระบบกำลังโหลดโปรแกรมวัด "
-                "หรือกำลังรอผลของชิ้นก่อนหน้าอยู่",
-            )
-        _trigger.set()
-        log.info("⚡ ได้รับสัญญาณ trigger (จากปุ่มบนหน้าเว็บ)")
 
     elif req.action == "stop":
         is_running = False
@@ -217,27 +226,6 @@ async def command(req: CommandRequest):
         )
     return {"status": "ok", "action": req.action}
 
-@http_app.api_route("/trigger", methods=["GET", "POST"])
-async def trigger():
-    """จำลองเซนเซอร์ — ยิงอะไรมาก็ได้ที่ URL นี้ = "ชิ้นงานเข้าที่แล้ว วัดได้เลย"
-
-        curl -X POST http://<ip-ของ-pi>:9998/trigger
-
-    guard 2 ชั้น ตอบให้ตรงความจริงว่าสัญญาณจะถูกใช้หรือถูกทิ้ง — ไม่งั้นยิงมาแล้ว
-    เครื่องไม่ขยับจะนึกว่าระบบพัง แล้วหาสาเหตุไม่เจอ
-    """
-    if not is_running:
-        return {"ok": False, "reason": "ไม่มี session กำลังวัดอยู่ — กด Start ที่หน้าเว็บก่อน"}
-    if not _waiting_for_trigger:
-        # ยิงมาถูกจังหวะแต่ยังไม่ถึงช่วงรอ (กำลังส่ง R0/PW อยู่ หรือกำลังรอผลวัด
-        # ของชิ้นก่อนหน้า) — สัญญาณนี้จะโดน _trigger.clear() ล้างทิ้งอยู่ดี
-        return {"ok": False,
-                "reason": "ยังไม่ถึงช่วงรอสัญญาณ — รอข้อความ 'รอสัญญาณ trigger ...' ก่อนแล้วยิงใหม่"}
-    _trigger.set()
-    log.info("⚡ ได้รับสัญญาณ trigger")
-    return {"ok": True}
-
-
 def heartbeat_loop():
     global is_running, _hb_last_ok
     while True:
@@ -246,7 +234,6 @@ def heartbeat_loop():
                 f"{BACKEND_URL}/api/heartbeat",
                 json={
                     "session_id": current_session_id,
-                    "waiting_for_trigger": _waiting_for_trigger,
                 },
                 timeout=5,
             )
@@ -301,37 +288,21 @@ def get_measured_count(session_id):
 # curl -X POST http://<ip-ของ-pi>:9998/trigger
 # วนถามจนกว่ามันจะตอบ is_ready 
 # รอ Trigger จาก MCU
+# รอ Trigger จาก MCU
 def wait_for_trigger_mcu():
-    log.info("arrive")
-    global _waiting_for_trigger
-    _trigger.clear()
-    _waiting_for_trigger = True
-    # บอก Backend ทันทีว่าพร้อมรับ trigger — ไม่ต้องรอ heartbeat รอบถัดไป
-    #
-    # ⚠ timeout สั้นมากโดยตั้งใจ เพราะบรรทัดนี้อยู่ใน **เธรดที่กำลังวัดงาน**
-    #   ถ้า Backend ช้าหรือค้าง Pi จะหยุดรอตรงนี้ก่อนเข้าลูปรอสัญญาณ ทำให้เกิด
-    #   อาการ "กดปุ่มแล้วเครื่องไม่ขยับ" ซึ่งหาสาเหตุยากมาก
-    #   ส่งไม่ทันก็ไม่เป็นไร — heartbeat รอบปกติจะตามมาใน HB_INTERVAL วิอยู่แล้ว
-    try:
-        httpx.post(f"{BACKEND_URL}/api/heartbeat",
-            json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
-            timeout=0.5)
-    except Exception:
-        pass
-    try:
-        while is_running:
-            if _trigger.wait(0.1):
-                return True
-        return False
-    finally:
-        _waiting_for_trigger = False
-        # บอก Backend ทันทีว่าไม่รอแล้ว → ปุ่มดับเลย
-        try:
-            httpx.post(f"{BACKEND_URL}/api/heartbeat",
-                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
-                timeout=5)
-        except Exception:
-            pass
+    """รอสัญญาณ <TRIGGER_TMX> จาก MCU ผ่าน Serial"""
+    log.info("   ⏳ รอสัญญาณจาก MCU ... (กด Stop เพื่อยกเลิก)")
+    while is_running:
+        if mega_ser.in_waiting > 0:
+            try:
+                line = mega_ser.readline().decode("utf-8").strip()
+                if line == "<TRIGGER_TMX>":
+                    log.info("   📥 [RX ← Mega] ได้รับคำสั่ง <TRIGGER_TMX> แล้ว")
+                    return True
+            except UnicodeDecodeError:
+                pass
+        time.sleep(0.05)
+    return False           # ออกจาก loop เพราะโดน Stop จาก Backend และ return False
 
 def send_recv(sock, command, timeout=SOCKET_TIMEOUT):
     """ส่ง 1 คำสั่ง แล้ว **วน recv จนเจอ CR** — คืน (response, ok)
@@ -578,24 +549,32 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
 
 #วนไปถามว่าพร้อมรับ result ยัง ให้ MCU set Flag เอา idle(ยังไม่มีชิ้นงาน) -> obj_is_ready(เมื่อวางชิ้นงานแล้ว) -> waiting_for_result(พร้อมรับ result) -> idle(เสร็จการวัด 1 ชิ้น)
 def send_result_to_mcu(result, mcu_timeout=MCU_TIMEOUT):
-    """ส่งผลตัดสินให้ MCU — `result` เป็น "OK" / "NG" / "UNKNOWN"
-
-    ตอนนี้ยังไม่มีบอร์ด MCU จริง จึงแค่พิมพ์ให้เห็นว่าส่งอะไรออกไป
-    พอต่อ Serial จริงค่อยเปลี่ยนบรรทัดข้างในเป็นการเขียนลงพอร์ต — **ตัวเรียก
-    ไม่ต้องแก้เลย** นี่คือเหตุผลที่แยกออกมาเป็นฟังก์ชันตั้งแต่ตอนที่ยังไม่มีอะไร
-
-    ⚠ "UNKNOWN" ต้องส่งไปด้วยเสมอ ห้ามข้ามเงียบๆ — เป็นสถานะที่สามที่ต้องมี
-      ไม่ใช่แค่ OK กับ NG · ถ้าไม่ส่ง MCU จะมีชิ้นงานคาอยู่โดยไม่มีคำสั่ง แล้วมัน
-      จะไม่มีวันตอบว่า "พร้อม" สำหรับชิ้นถัดไปอีกเลย = ค้างกันทั้งคู่
-      **ห้ามเดา UNKNOWN เป็น NG** เพราะของอาจดีอยู่ แค่กล้องไม่เห็น
-
-    `mcu_timeout` ยังไม่ได้ใช้ — รับไว้ก่อนเพื่อให้ signature นิ่ง ไว้ใช้ตอนเพิ่ม
-    การรอ MCU ตอบรับ (`wait_mcu_ack` ผ่าน `_mcu_ack` ที่ประกาศไว้แล้วข้างบน)
-    """
+    """ส่งผลการวัด (OK/NG) กลับไปหา MCU ผ่าน Serial"""
+    deadline = time.time() + mcu_timeout
     icon = {"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
-    log.info("   🔀 → MCU: %s %s", icon, result)
-    return True
+    while time.time() < deadline:
+        # กำหนด Token ที่จะส่งกลับหา Mega ตามผลลัพธ์
+        if result == "OK":
+            ack_msg = "<MEASURE_OK>\n"
+            log.info("   🔀 → MCU: %s %s", icon, result)
+        else:
+            ack_msg = "<MEASURE_NG>\n"
+            log.info("   🔀 → MCU: %s %s", icon, result)
+        
+        mega_ser.write(ack_msg.encode("utf-8"))
+        log.info(f"   [TX → Mega] {ack_msg.strip()}")
+        return True
+    return False
 
+def send_package_size_to_mcu(package_size,mcu_timeout=MCU_TIMEOUT):
+    # เราจะได้รับมาเป็น  String เช่น 8x8
+    deadline = time.time() + mcu_timeout
+    while time.time() < deadline:
+        ack_msg  = f"<PKG:{package_size}>\n"
+        mega_ser.write(ack_msg.encode("utf-8"))
+        log.info(f"   [TX → Mega] {ack_msg.strip()}")
+        return True
+    return False
 
 def wait_for_measurement(session_id, count_before, timeout=MEASURE_TIMEOUT):
 
@@ -777,6 +756,7 @@ def command_flow(session_id, groups, target_count):
 
         # `PW` ย้ายเข้าไปในลูปแล้ว (ดูข้างล่าง) เพราะแต่ละกลุ่มใช้ template คนละตัวได้
         current_tmpl = None      # template ที่โหลดค้างอยู่ใน TM-X ตอนนี้
+        current_pkg  = None      # package size ที่บอก MCU ไปแล้ว
 
         for piece in range(1, target_count + 1):
             if not is_running:
@@ -802,6 +782,16 @@ def command_flow(session_id, groups, target_count):
                          group_of[piece - 1] + 1)
                 time.sleep(PW_LOAD_WAIT)
                 current_tmpl = tmpl
+
+            # ── ⓪.5 บอก MCU ว่ากลุ่มนี้ชิ้นงานขนาดไหน ─────────────────────    
+            pkg = groups[group_of[piece - 1]].package_size
+            if pkg and pkg != current_pkg:
+                if not send_package_size_to_mcu(pkg):
+                    stop_reason = (f"ชิ้นที่ {piece}/{target_count}: "
+                                   f"บอกขนาดชิ้นงาน ({pkg}) ให้ MCU ไม่สำเร็จ")
+                    break
+                current_pkg = pkg
+            # ── ⓪.5 บอก MCU ว่ากลุ่มนี้ชิ้นงานขนาดไหน ─────────────────────  
 
             # ── ① รอ MCU บอกว่าชิ้นงานเข้าที่แล้ว (ตอนนี้ = curl /trigger) ──
             log.info("\nชิ้นที่ %s/%s — รอสัญญาณ trigger ...", piece, target_count)
@@ -838,20 +828,21 @@ def command_flow(session_id, groups, target_count):
             while True:
                 result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom, offset_x, offset_y = get_measurement_tmx(client_socket, groups[group_of[piece - 1]].limits)
                 if result != "UNKNOWN":
+                    #send_result_to_mcu("UNKNOWN")   # ปล่อยของออกก่อนจบ
                     break
                 rounds += 1
                 if not handle_error("GM", session_id, piece, target_count,
                                     f"รอ {GM_MAX_WAIT:.0f} วิแล้ว GM ไม่คืนค่าใหม่", rounds):
                     stop_reason = f"ชิ้นที่ {piece}/{target_count}: TM-X วัดไม่ติด"
-                    #send_result_to_mcu("UNKNOWN")   # ปล่อยของออกก่อนจบ
                     break
             if result == "UNKNOWN":
                 break
 
             # ── ④ ส่งผลให้ MCU ไปคัดแยก — ส่งทุกชิ้นรวมถึง UNKNOWN ─────────
-            send_result_to_mcu(result)
+            if not send_result_to_mcu(result):
+                stop_reason = f"ชิ้นที่ {piece}/{target_count}: ส่งผลให้ MCU ไม่สำเร็จ"
+                break
             # TODO: รอ MCU ตอบรับ (wait_mcu_ack) ก่อนไปชิ้นถัดไป — ยังไม่ทำ
-
             if not is_running:
                 log.info("⏹ หยุดการวัด")
                 break
@@ -891,7 +882,7 @@ def command_flow(session_id, groups, target_count):
     except Exception as exc:
         log.info("\n❌ session พังกลางทาง — %s: %s", type(exc).__name__, exc)
         stop_reason = f"session พังกลางทาง — {type(exc).__name__}: {exc}" 
-    finally:
+    finally:  
         if client_socket is not None:
             try:
                 client_socket.shutdown(socket.SHUT_RDWR)

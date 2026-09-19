@@ -1211,8 +1211,13 @@ button.topbar-link {
 /* ── ดูรูปเต็มจอ — คลิกที่รูปใน Camera Preview ─────────────────────────────
    จอ 4:3 ในการ์ดยังเล็กเกินกว่าจะดูขอบชิ้นงานได้ ตัวนี้เปิดรูปเต็มหน้าจอ
    โดยไม่ต้องไปเปิดที่หน้า Measurements ให้เสียจังหวะตอนกำลังวัด */
+/* ⚠ z-index 500 ต้องสูงกว่าทุก layer — `.modal-overlay` (200) และ
+     `.ui-dialog-overlay` (400) — เพราะรูปเต็มจอถูกเปิดจาก **ในโมดัล
+     Measurement report** ได้ด้วย ไม่ใช่แค่จาก Camera Preview บนหน้าหลัก
+     เดิมเป็น 200 เท่ากับ `.modal-overlay` แล้วบังเอิญทับได้เพราะอยู่ท้าย DOM
+     ซึ่งพังทันทีถ้ามีคนย้ายบล็อกนี้ขึ้นไปข้างบน */
 .img-zoom {
-  position: fixed; inset: 0; z-index: 200;
+  position: fixed; inset: 0; z-index: 500;
   background: rgba(0, 0, 0, 0.88);
   display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 1rem;
@@ -1799,18 +1804,28 @@ tr[data-clickable] { cursor: pointer; }
 .report-verdict.ng { background: var(--ng-bg); color: var(--ng); }
 .report-body {
   display: grid;
-  grid-template-columns: minmax(0, 389px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 620px) minmax(0, 1fr);
   gap: 1.25rem; padding: 1.25rem 1.5rem;
   align-items: start;   /* กันไม่ให้กล่องรูปถูกยืดสูงตามคอลัมน์ขวา */
 }
 @media (max-width: 900px) { .report-body { grid-template-columns: 1fr; } }
+/* ⚠ **ห้ามใส่ `aspect-ratio` กลับมา** — เดิมตรึงไว้ `1 / 1` เพราะรูปดิบของ
+   TM-X เป็นจัตุรัส 2048×2048 แต่ตั้งแต่ `edit_image.py` เข้ามาครอปชิ้นงาน
+   แล้วต่อตารางค่าไว้ด้านขวา รูปกลายเป็นแนวนอน (วัดจากไฟล์จริง 1310×600 =
+   2.18:1) พอเอาไปใส่กล่องจัตุรัส + `object-fit: contain` รูปเลยสูงได้แค่
+   46% ของกล่อง เหลือพื้นเทาบนล่างครึ่งกล่อง
+
+   และ **ห้ามเปลี่ยนไปตรึงเป็น 2.18 / 1 แทน** ด้วย — สัดส่วนไม่คงที่
+   `TOTAL_WIDTH = w_new + TABLE_WIDTH` โดย `w_new` ยืดหดตามขนาดชิ้นงานที่
+   ครอปได้ ชิ้นงานทรงอื่นจะเพี้ยนอีกรอบ ปล่อยให้กล่องสูงตามรูปคือทางเดียว
+   ที่รองรับได้ทั้งรูปเก่าและรูปใหม่ */
 .report-image-cell {
   background: var(--surface2); border: 1px solid var(--border);
   border-radius: var(--radius);
-  aspect-ratio: 1 / 1;   /* ⚠ ต้องตรงกับรูป HEAD-A ของ TM-X (2048×2048 จัตุรัส) */
+  min-height: 180px;   /* กันกล่องยุบแบนตอนขึ้น "Loading…" / "No image" */
   overflow: hidden; display: flex; align-items: center; justify-content: center;
 }
-.report-image-cell img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.report-image-cell img { width: 100%; height: auto; display: block; cursor: zoom-in; }
 .report-image-cell .report-no-image { color: var(--muted); font-size: 0.85rem; }
 .report-axes { display: flex; flex-direction: column; gap: 0.85rem; }
 

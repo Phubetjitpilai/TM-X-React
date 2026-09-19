@@ -95,10 +95,17 @@ def get_session_state():
     # ⚠ ต้องแนบไปทั้ง 3 ทางออกเหมือน pi_status ไม่งั้นทางที่ตกหล่นจะได้ undefined
     #   แล้วปุ่มทริกเกอร์บนหน้าเว็บจะดับค้างแบบไม่มี error ให้เห็น
     trigger_ready = read_trigger_ready()
-    # ค่าคงที่จาก .env — ส่งมากับเส้นนี้เพราะหน้าเว็บต้องรู้ว่าจะ "แสดงปุ่มไหม"
-    # ต่างจาก trigger_ready ที่บอกว่า "กดได้ไหม" · ปิดสวิตช์แล้วปุ่มต้องหายไปเลย
-    # ไม่ใช่โผล่มาแล้วกดไม่ได้ ซึ่งจะทำให้ operator สงสัยว่าระบบพัง
-    manual_trigger_on = ALLOW_MANUAL_TRIGGER
+    # หน้าเว็บต้องรู้ว่าจะ "แสดงปุ่ม ⚡ ไหม" — ต่างจาก trigger_ready ที่บอกว่า
+    # "กดได้ไหม" · ไม่แสดงเลยดีกว่าโผล่มาแล้วกดไม่ได้ ซึ่งทำให้ operator
+    # สงสัยว่าระบบพัง
+    #
+    # ⚠ **ไม่ได้ผูกกับ .env อย่างเดียวแล้ว** — ตั้งแต่มีโหมด trigger รายรอบ
+    #   ปุ่มต้องตามโหมดของ session ที่กำลังวัดอยู่ ไม่ใช่โผล่ทุกรอบตามค่าคงที่
+    #     ALLOW_MANUAL_TRIGGER  = สวิตช์ปิดทั้งระบบ (ระดับ .env)
+    #     read_trigger_mode()   = ผู้ใช้เลือกอะไรไว้ในรอบนี้ (มาจาก heartbeat ของ Pi)
+    #   ต้องเป็นจริงทั้งคู่ปุ่มถึงจะโผล่ · read_trigger_mode() คืน None ตอน Pi
+    #   เงียบหรือยังไม่มี session ซึ่งแปลว่าไม่แสดง — ตรงตามที่ต้องการ
+    manual_trigger_on = ALLOW_MANUAL_TRIGGER and read_trigger_mode() == "manual"
 
     # ── ต่อ MySQL ไม่ติด ──────────────────────────────────────────────────────
     # pi_status อยู่ใน memory ล้วน (_pi_last_seen) ไม่พึ่ง DB เลย — ตอน MySQL ดับ
@@ -131,7 +138,10 @@ def get_session_state():
                 # Pi เงียบเกินเกณฑ์ไปเรียบร้อย · การอ่านฟรีอยู่แล้ว (ลบเวลา 2 ตัว)
                 "pi_status": read_pi_status(),
                 "trigger_ready": read_trigger_ready(),
-                "manual_trigger": ALLOW_MANUAL_TRIGGER,
+                # ⚠ ใช้ตัวแปรที่คำนวณไว้ข้างบน ห้ามอ่าน ALLOW_MANUAL_TRIGGER ตรงๆ
+                #   อีก ไม่งั้นทางออกนี้ (DB ล่ม) จะโชว์ปุ่มตามกฎเก่าคนละแบบกับ
+                #   อีก 2 ทางออก แล้วปุ่มจะกะพริบเข้า-ออกตอน MySQL ไม่นิ่ง
+                "manual_trigger": manual_trigger_on,
             },
         )
 
@@ -255,7 +265,7 @@ def _build_groups(cur, groups, group_of, queue, templates, entry_mode: str):
                 cur.execute("SELECT 1 FROM parts_specifications WHERE number_alpl = %s", (a,))
                 if not cur.fetchone():
                     continue                      # ยังไม่ลงทะเบียน — จะถูกสร้างด้วย config นี้อยู่แล้ว
-                got = _limits_of(_load_criteria(cur, a, entry_mode), entry_mode)
+                got = _limits_of(_load_criteria(cur, a), entry_mode)
                 if got != want:
                     raise HTTPException(
                         400,
@@ -269,6 +279,7 @@ def _build_groups(cur, groups, group_of, queue, templates, entry_mode: str):
             "template_name": templates[gi],
             "alpl": alpl,
             "limits": _limits_of(crit, entry_mode),
+            "package_size": g.get("package_size"),
         })
     return out
 
@@ -276,11 +287,13 @@ async def _notify_agent_start(
     session_id: int,
     target_count: int,
     groups: List[Dict[str, Any]],
+    trigger_mode: str = "auto",
 ) -> None:
     """ยิง POST ไปที่ Agent (`send_command.py` บน Pi / `mockup.py`) ให้เริ่มวัด
 
     ```json
     {"action": "start", "session_id": 42, "target_count": 6,
+     "trigger_mode": "auto",
      "groups": [
        {"template_name": "021", "alpl": [400, 401, 402],
         "limits": {"x_lo": 5.009999, "x_hi": 5.030001,
@@ -320,6 +333,17 @@ async def _notify_agent_start(
         "action": "start",
         "session_id": session_id,
         "target_count": target_count,
+        # สัญญาณ "ชิ้นงานเข้าที่แล้ว" ของรอบนี้มาจากไหน
+        #   "auto"   — MCU ส่ง <TRIGGER_TMX> ทาง Serial (ต้องเสียบ Mega ที่ Pi)
+        #   "manual" — คนกดปุ่ม ⚡ Trigger บนหน้าเว็บ
+        #
+        # ⚠ เป็นของ **รายรอบ** ไม่ใช่ค่าคงที่ของระบบ — ต่างจาก ALLOW_MANUAL_TRIGGER
+        #   ที่เป็นสวิตช์ระดับ .env · Pi ล็อกค่านี้ไว้ทั้ง session สลับกลางคันไม่ได้
+        #   (ถ้าสลับ MCU จะพลาด <PKG:...> ของกลุ่มที่ข้ามไปตอนอยู่โหมด manual)
+        #
+        # ⚠ Pi รุ่นเก่าที่ไม่รู้จักคีย์นี้จะเมินมันไป (pydantic ignore extra) —
+        #   ปลอดภัยที่จะส่งไปเสมอ ไม่ต้องเช็คเวอร์ชันฝั่ง Pi
+        "trigger_mode": trigger_mode,
         "groups": groups,
     }
     # log ก่อนยิงเสมอ — เป็นจุดเดียวที่เห็น "สิ่งที่ backend ส่งให้ Agent" ได้จริง
@@ -603,6 +627,29 @@ async def start_session(request: Request):
     if measure_type not in ("New", "IPM", "Rework"):
         raise HTTPException(400, "Measure_Type ต้องเป็น 'New', 'IPM' หรือ 'Rework'")
 
+    # โหมดสัญญาณเริ่มวัดของรอบนี้ — ส่งต่อให้ Pi เฉย ๆ backend ไม่เอาไปตัดสินอะไร
+    #
+    # ⚠ default เป็น "auto" ให้ตรงกับฝั่ง Pi — หน้าเว็บรุ่นเก่าที่ยังไม่มีช่องเลือก
+    #   จะไม่ส่งคีย์นี้มา แล้วได้พฤติกรรมเดิมทุกประการ ไม่ใช่เปลี่ยนไปเงียบ ๆ
+    #
+    # ⚠ ตรวจที่นี่ด้วยแม้ Pi จะตรวจซ้ำอยู่แล้ว — ผู้ใช้ต้องเห็น error ตั้งแต่กด
+    #   Start ไม่ใช่ไปรู้ตอน backend สั่ง Pi ไม่ผ่านแล้วได้ 502 ที่ชี้ผิดสาเหตุ
+    trigger_mode = data.get("Trigger_Mode", "auto")
+    if trigger_mode not in ("manual", "auto"):
+        raise HTTPException(
+            400,
+            f"Trigger_Mode '{trigger_mode}' ไม่ถูกต้อง — ต้องเป็น 'manual' หรือ 'auto'",
+        )
+    # ALLOW_MANUAL_TRIGGER เปลี่ยนความหมายแล้ว — จากเดิม "โชว์ปุ่มไหม" เป็น
+    # "อนุญาตให้ใช้โหมด manual ไหม" · ปิดสวิตช์แล้วต้องกันตั้งแต่กด Start
+    # ไม่ใช่ปล่อยให้เริ่มวัดแล้วไปตายตอนกดปุ่มที่ไม่มีให้กด
+    if trigger_mode == "manual" and not ALLOW_MANUAL_TRIGGER:
+        raise HTTPException(
+            403,
+            "โหมด manual ถูกปิดไว้ (ALLOW_MANUAL_TRIGGER=0) — "
+            "ระบบตั้งให้ใช้สัญญาณจาก MCU เท่านั้น",
+        )
+
     groups = _parse_entry_groups(data)
     alpl_queue, group_of = _flatten_groups(groups)
     first_alpl = alpl_queue[0]
@@ -720,7 +767,7 @@ async def start_session(request: Request):
         # 4) Notify Agent ให้เริ่มวัด — ส่ง groups (template + ขอบเขต OK/NG
         #    รายกลุ่ม) ไปทั้งก้อน เพื่อให้ Pi สลับ PW ได้เองและตัดสิน OK/NG เอง
         #    แล้วสั่ง MCU ได้โดยไม่ต้องถาม backend กลับ (ดู _build_groups / PLAN ข้อ F)
-        await _notify_agent_start(session_id, target_count, agent_groups)
+        await _notify_agent_start(session_id, target_count, agent_groups, trigger_mode)
 
         await push_event(
             "session_started",
@@ -1090,7 +1137,7 @@ def heartbeat(req: HeartbeatRequest):
     # ── ① memory: ทำก่อนเสมอ และไม่มีทางพลาด ──────────────────────────────
     # เป็นแหล่งความจริงของชิป PI · เขียนฟรี ไม่แตะ DB จึงไม่มีทาง raise
     # ต้องอยู่บรรทัดแรกสุด: ต่อให้ DB ล่มทั้งก้อน ชิปก็ยังบอกได้ถูกว่า Pi ยังอยู่
-    mark_pi_seen(req.waiting_for_trigger)
+    mark_pi_seen(req.waiting_for_trigger, req.trigger_mode)
 
     # ── ② DB: เฉพาะตอนมี session ที่กำลังวัดอยู่ ───────────────────────────
     # Pi ว่าง (session_id เป็น None) → ไม่ต้องแตะ DB เลยสักครั้ง ซึ่งเป็นสถานะ

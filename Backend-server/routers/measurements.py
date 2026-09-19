@@ -293,7 +293,7 @@ async def create_measurement(req: MeasurementCreate):
                 except pymysql.MySQLError as exc:
                     raise HTTPException(409, f"บันทึก Part ALPL {number_alpl} ไม่สำเร็จ: {exc}")
 
-            part = _load_criteria(cur, number_alpl, measure_type)
+            part = _load_criteria(cur, number_alpl)
 
             # ── คำนวณหาตำแหน่ง Offset ที่น้อยที่สุด (OP) ─────────────────
             offset_pos_op = _get_position_label(
@@ -463,7 +463,7 @@ def update_measurement(measurement_id: int, data: Dict[str, Any] = Body(...)):
             if not row:
                 raise HTTPException(404, "Measurement not found")
             
-            crit = _load_criteria(cur, row["number_alpl"], row["measure_type"])
+            crit = _load_criteria(cur, row["number_alpl"])
             
             # ── [FIX 3] คำนวณ result ใหม่โดยส่ง offset ทั้ง 4 แกนเข้า _judge ────────
             new_result = _judge(

@@ -10,9 +10,23 @@ import EntryGroups, {
  *  (ต่างจาก GroupValues ที่เป็นค่าดิบจากช่องกรอก) */
 export type PayloadGroup = { number_alpl: number[]; [k: string]: string | number[] };
 
+/** สัญญาณ "ชิ้นงานเข้าที่แล้ว" มาจากไหน
+ *
+ *    auto   — MCU ส่ง <TRIGGER_TMX> มาทาง Serial (ใช้งานจริงหน้างาน)
+ *    manual — คนกดปุ่ม ⚡ Trigger บนหน้าเว็บ (ตอนยังไม่ต่อ MCU / ตอนไล่บั๊ก)
+ *
+ * ⚠ เป็นของทั้ง session ไม่ใช่รายกลุ่ม และ **ล็อกตั้งแต่กด Start สลับกลางคัน
+ *   ไม่ได้** — ฝั่ง Pi จำว่าบอกขนาดชิ้นงานให้ MCU ไปแล้ว ถ้าสลับกลางรอบ MCU
+ *   จะพลาด <PKG:...> ของกลุ่มที่ข้ามไปตอนอยู่โหมด manual
+ */
+export type TriggerMode = "manual" | "auto";
+
 export interface EntryQueue {
   mode: EntryMode;
   operator: string;
+  /** `undefined` ได้ — คิวที่ถูกเซฟลง localStorage ไว้ก่อนมีฟีเจอร์นี้จะไม่มี
+   *  ผู้อ่านต้อง `?? "auto"` เสมอ (ดู DashboardPage ตอนประกอบ body) */
+  triggerMode?: TriggerMode;
   groups: PayloadGroup[];
   /** ALPL ทั้งหมดคลี่เรียงตามลำดับที่จะวัด — ใช้โชว์จำนวนและวาดแถบคิว */
   list: number[];
@@ -42,6 +56,12 @@ export function parseAlplList(raw: string): { list: number[]; error: string | nu
 }
 
 interface Props {
+  /** ตัวเลือกบางชุดยังโหลดไม่สำเร็จ — ขึ้นแถบเตือนใต้คำอธิบายด้านบนของฟอร์ม
+   *
+   *  ระบบยังลองใหม่อยู่เบื้องหลังไม่จำกัดจำนวนครั้ง (ดู `apiGetRetry`) พอโหลด
+   *  ครบเมื่อไหร่ค่านี้จะกลับเป็น false เองแล้วแถบหายไป ผู้ใช้ไม่ต้องกดรีเฟรช
+   */
+  lookupFailed?: boolean;
   operators: string[];
   vendors: string[];
   owners: string[];
@@ -96,6 +116,7 @@ function toFormGroups(q: EntryQueue): GroupValues[] {
 }
 
 export default function PartEntryModal({
+  lookupFailed,
   operators, vendors, owners, packageSizes, partNumbersFor, handlersFor, handlerOfPartNumber,
   onSave, onClose, confirmRegister, confirmSwitch, onNotify, initial,
 }: Props) {
@@ -108,6 +129,9 @@ export default function PartEntryModal({
        ของที่พิมพ์ค้างไว้จะโดนเขียนทับกลางคัน */
   const [mode, setMode] = useState<EntryMode>(initial?.mode ?? "IPM");
   const [operator, setOperator] = useState(initial?.operator ?? "");
+  /* default เป็น "auto" ให้ตรงกับฝั่ง Pi — ถ้าเผลอไม่เลือก จะได้พฤติกรรม
+     เดียวกับตอนที่ยังไม่มีฟีเจอร์นี้ ไม่ใช่เปลี่ยนไปเป็นอย่างอื่นเงียบ ๆ */
+  const [triggerMode, setTriggerMode] = useState<TriggerMode>(initial?.triggerMode ?? "auto");
   const [groups, setGroups] = useState<GroupValues[]>(() =>
     initial ? toFormGroups(initial) : [emptyGroup("IPM")],
   );
@@ -222,6 +246,7 @@ export default function PartEntryModal({
     onSave({
       mode,
       operator: operator.trim(),
+      triggerMode,
       // ส่ง number_alpl เป็น "ลิสต์ตัวเลข" ให้ backend ตรง ๆ ไม่ใช่ string ดิบ
       groups: groups.map((g, gi) => ({ ...g, number_alpl: perGroupLists[gi] })),
       list: all,
@@ -257,6 +282,20 @@ export default function PartEntryModal({
           1 กลุ่มคือ ALPL ที่ใช้ข้อมูลชุดเดียวกัน
         </div>
 
+        {/* ⚠ แถบนี้คือสิ่งที่ทำให้อาการ "ช่องเลือกว่าง" ไม่เงียบอีกต่อไป
+            เดิมโหลด lookup ไม่สำเร็จแล้วได้ [] ซึ่งหน้าตาเหมือน "ไม่มีข้อมูลในระบบ"
+            เป๊ะ ผู้ใช้จะไปไล่หาที่ DB แทนที่จะรู้ว่าแค่ถามไม่ติด
+
+            ไม่มีปุ่ม "ลองใหม่" โดยตั้งใจ — ระบบลองให้เองอยู่แล้วไม่จำกัดครั้ง
+            ปุ่มจะทำให้เข้าใจผิดว่าต้องกดถึงจะทำงาน */}
+        {lookupFailed && (
+          <div className="entry-session-hint warn">
+            ⚠️ โหลดตัวเลือกบางชุดไม่สำเร็จ (Operator / Package Size / Handler / Part Number)
+            — <strong>ระบบกำลังลองใหม่ให้อัตโนมัติ</strong> ข้อความนี้จะหายไปเองเมื่อโหลดครบ
+            {" "}· ถ้าค้างนาน ให้ดูว่าชิป <strong>Database</strong> บนแถบบนเป็นสีเขียวหรือยัง
+          </div>
+        )}
+
         {/* Operator อยู่นอกกลุ่ม ใช้ร่วมกันทั้ง session (คนวัดคนเดียวกัน) */}
         <div className="form-group" style={{ marginBottom: "1rem" }}>
           <label>Operator<span className="req">*</span></label>
@@ -270,6 +309,39 @@ export default function PartEntryModal({
             {operators.map((o) => <option key={o} value={o}>{o}</option>)}
           </select>
           <div className="field-error">{operatorError}</div>
+        </div>
+
+        {/* สัญญาณเริ่มวัดแต่ละชิ้นมาจากไหน — ของทั้ง session เหมือน Operator
+            ใช้คลาสเดียวกับแถบเลือกโหมด IPM/New/Rework ข้างบนเพื่อให้หน้าตาเข้าชุดกัน
+
+            ⚠ ไม่มีสถานะ "ยังไม่เลือก" โดยตั้งใจ — ค่าเริ่มต้นเป็น auto เสมอ
+              ถ้าปล่อยให้ว่างได้ คนจะกด Start โดยไม่ได้เลือก แล้ว Pi ได้ default
+              ของฝั่งมันเองซึ่งอาจไม่ตรงกับที่คนคิด */}
+        <div className="form-group" style={{ marginBottom: "1rem" }}>
+          <label>Trigger</label>
+          <div className="entry-toggle">
+            <button
+              type="button"
+              className={`entry-toggle-btn${triggerMode === "auto" ? " active" : ""}`}
+              onClick={() => setTriggerMode("auto")}
+              title="สัญญาณมาจาก MCU ผ่านสาย Serial — ต้องเสียบ Arduino Mega ที่ Raspberry Pi"
+            >
+              Auto (MCU)
+            </button>
+            <button
+              type="button"
+              className={`entry-toggle-btn${triggerMode === "manual" ? " active" : ""}`}
+              onClick={() => setTriggerMode("manual")}
+              title="กดปุ่ม ⚡ Trigger บนหน้าเว็บเองทีละชิ้น — ใช้ตอนยังไม่ต่อ MCU หรือตอนไล่บั๊ก"
+            >
+              Manual (ปุ่มบนเว็บ)
+            </button>
+          </div>
+          <div className="entry-session-hint" style={{ marginTop: ".4rem" }}>
+            {triggerMode === "auto"
+              ? "เครื่องจะเริ่มวัดเองเมื่อ MCU แจ้งว่าชิ้นงานเข้าที่ — ต้องเสียบ Mega ไว้ที่ Pi ไม่งั้นกด Start ไม่ผ่าน"
+              : "ต้องกดปุ่ม ⚡ Trigger เองทุกชิ้น — เลือกได้ตอนยังไม่ได้ต่อ MCU · เปลี่ยนโหมดกลางรอบไม่ได้"}
+          </div>
         </div>
 
         <EntryGroups

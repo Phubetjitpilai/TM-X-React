@@ -533,6 +533,15 @@ _pi_last_seen = None
 # "ณ วินาทีนี้" ที่หมดอายุเองตามธรรมชาติ ไม่ใช่ของที่หายไม่ได้
 _pi_waiting_trigger = False
 
+# โหมด trigger ของ session ที่ Pi กำลังวัดอยู่ ณ heartbeat ล่าสุด
+#   "manual" — ผู้ใช้เลือกกดปุ่ม ⚡ เอง  → หน้าเว็บต้อง **แสดง** ปุ่ม
+#   "auto"   — สัญญาณมาจาก MCU          → หน้าเว็บต้อง **ซ่อน** ปุ่ม
+#   None     — Pi รุ่นเก่าที่ไม่ส่งฟิลด์นี้ หรือยังไม่เคยมี session
+#
+# ⚠ ต่างจาก ALLOW_MANUAL_TRIGGER ที่เป็นสวิตช์ระดับ .env ทั้งระบบ — ตัวนี้เป็น
+#   ของ **รายรอบ** ผู้ใช้เลือกในฟอร์ม Part Entry แล้วส่งมากับ payload ตอน Start
+_pi_trigger_mode = None
+
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", 5))
 
 HEARTBEAT_TIMEOUT  = int(os.getenv("HEARTBEAT_TIMEOUT", 15))
@@ -731,7 +740,7 @@ async def lifespan(app: FastAPI):
 
 
 
-def mark_pi_seen(waiting_for_trigger: bool = False):
+def mark_pi_seen(waiting_for_trigger: bool = False, trigger_mode: Optional[str] = None):
     """บันทึกว่า "เพิ่งเห็น Pi เดี๋ยวนี้" — เรียกจาก POST /api/heartbeat ทุกครั้ง
 
     `waiting_for_trigger` มาจาก heartbeat โดยตรง บอกว่า Pi กำลังยืนรอสัญญาณอยู่
@@ -757,9 +766,10 @@ def mark_pi_seen(waiting_for_trigger: bool = False):
     ผลพลอยได้: หมดปัญหานาฬิกา MySQL vs Python เพราะทั้งเขียนและอ่านอยู่ฝั่ง
     Python ทั้งคู่ (เดิมต้องระวังว่า MySQL ใน Docker คนละโซนกับ host)
     """
-    global _pi_last_seen, _pi_waiting_trigger
+    global _pi_last_seen, _pi_waiting_trigger, _pi_trigger_mode
     _pi_last_seen = datetime.now()
     _pi_waiting_trigger = bool(waiting_for_trigger)
+    _pi_trigger_mode = trigger_mode
 
 
 def read_pi_status():
@@ -800,6 +810,20 @@ def read_trigger_ready() -> bool:
         return False
     return _pi_waiting_trigger
 
+
+def read_trigger_mode() -> Optional[str]:
+    """โหมด trigger ของ session ที่ Pi กำลังวัดอยู่ — "manual" / "auto" / None
+
+    ใช้ตัดสินว่าหน้าเว็บจะ **แสดง** ปุ่ม ⚡ ไหม (คนละเรื่องกับ read_trigger_ready()
+    ที่บอกว่า **กดได้** ไหม)
+
+    ⚠ ต้องผ่าน read_pi_status() ก่อนเหมือน read_trigger_ready() — ค่าใน memory
+      ค้างอยู่ต่อแม้ Pi ดับไปแล้ว ถ้าอ่านตรง ๆ ปุ่มจะโผล่ค้างจาก session ที่จบ
+      ไปแล้ว · คืน None = "ไม่รู้" ซึ่งฝั่งเรียกต้องแปลว่าไม่แสดงปุ่ม
+    """
+    if read_pi_status() is not True:
+        return None
+    return _pi_trigger_mode
 
 
 async def _deleted_purge_loop():
@@ -918,6 +942,15 @@ class HeartbeatRequest(BaseModel):
     # Pi รุ่นก่อนหน้านี้ไม่ส่งฟิลด์นี้มา — default False ทำให้ deploy ทีละฝั่งได้
     # โดยไม่พัง (ผลคือปุ่มทริกเกอร์ไม่สว่าง จนกว่าจะอัปเดต Pi ตาม)
     waiting_for_trigger: bool = False
+    # โหมด trigger ของ session ที่กำลังวัด — "manual" | "auto"
+    #
+    # ⚠⚠ **ต้องเป็น Optional ห้ามประกาศเป็น `str = "auto"` เด็ดขาด** — Pi ส่ง
+    #   `null` มาได้ตอนยังไม่มี session (และ Pi รุ่นเก่าไม่ส่งคีย์นี้เลย) ถ้า
+    #   ประกาศเป็น str เฉย ๆ pydantic จะปฏิเสธ → FastAPI ตอบ 422 → แต่
+    #   `heartbeat_loop` ฝั่ง Pi มี `except: pass` จึงเงียบสนิท → heartbeat
+    #   ไม่เคยสำเร็จสักครั้ง → ชิป PI ค้าง "Connecting" ตลอดกาลโดยไม่มี error
+    #   ให้เห็นทั้งสองฝั่ง
+    trigger_mode: Optional[str] = None
 
 _TABLE_DISPLAY_NAME = {
     "parts_specifications": "Part",
@@ -1700,6 +1733,7 @@ __all__ = [
     "push_event",
     "read_pi_status",
     "read_trigger_ready",
+    "read_trigger_mode",
     "mark_pi_seen",
     "PI_ONLINE_TIMEOUT",
     "pymysql",

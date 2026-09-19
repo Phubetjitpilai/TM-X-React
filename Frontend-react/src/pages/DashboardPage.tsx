@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { apiGet, apiPost, ApiError } from "../api/client";
+import { apiGet, apiGetRetry, apiPost, ApiError } from "../api/client";
 import { useSSE } from "../hooks/useSSE";
 import { useSessionState, sessionStateLabel } from "../hooks/useSessionState";
 import { useToast } from "../components/Toast";
@@ -327,6 +327,9 @@ export default function DashboardPage() {
 
   // ── Part Entry modal / toggle ────────────────────────────────────────
   const [peModalOpen, setPeModalOpen] = useState(false);
+  /** มีเส้นไหนของ loadDropdownData() โหลดไม่สำเร็จไหม — ใช้ขึ้นแถบเตือน
+   *  ไม่ให้อาการ "ช่องเลือกว่าง" เงียบอีกต่อไป (ดู loadDropdownData) */
+  const [dropdownFailed, setDropdownFailed] = useState(false);
   const [peSummaryOpen, setPeSummaryOpen] = useState(false);
 
 
@@ -505,22 +508,55 @@ export default function DashboardPage() {
     }
   }
 
-  async function loadDropdownData() {
+  /** โหลดข้อมูลตั้งต้นของ dropdown ทั้งหมด — เรียกครั้งเดียวตอน mount
+   *
+   *  ⚠ เดิมทุกเส้นเป็น `apiGet(...).catch(() => [])` ซึ่งมีปัญหา 2 ข้อ
+   *
+   *    1. **ไม่ลองใหม่เลย** ยิงครั้งเดียวจบ · ถ้ารีสตาร์ททั้งระบบแล้วเปิดเว็บ
+   *       ก่อน MySQL บูตเสร็จ จะได้ 503 แล้วจบเลย dropdown ว่างค้างจนกว่า
+   *       ผู้ใช้จะกด F5 เอง (และไม่มีอะไรบอกว่าต้องกด)
+   *
+   *    2. **`[]` ทำให้ "โหลดไม่ได้" หน้าตาเหมือน "ตารางว่างจริง" เป๊ะ**
+   *       ผู้ใช้เห็น Operator ว่างแล้วเข้าใจว่ายังไม่มีใครลงทะเบียน ทั้งที่มี
+   *       อยู่ใน DB ครบ · และ autofill ALPL จะบอกว่า Handler "ไม่มีในระบบ"
+   *       ซึ่งชี้ไปผิดที่ทั้งหมด
+   *
+   *  `apiGetRetry` แก้ทั้งสองข้อ — **ลองใหม่ไปเรื่อย ๆ จนกว่าจะได้** (หน่วง
+   *  1→2→4→8→8... วิ) และรายงานผ่าน `setDropdownFailed` ทันทีที่พลาดครั้งแรก
+   *  เพื่อให้ผู้ใช้รู้ตัวระหว่างที่ระบบยังพยายามอยู่เบื้องหลัง
+   *
+   *  ⚠ ไม่จำกัดจำนวนครั้ง จึง **ต้องส่ง `signal` เสมอ** — effect ที่เรียก
+   *    ฟังก์ชันนี้ abort ให้ตอน unmount (ดู useEffect ท้ายไฟล์) ไม่งั้นลูปจะ
+   *    เดินต่อหลังสลับไปหน้า Edit แล้วค้างอยู่ตลอดอายุแท็บ
+   */
+  async function loadDropdownData(signal?: AbortSignal) {
+    // พลาดครั้งไหนก็ขึ้นเตือนทันที ไม่ต้องรอให้ครบทุกเส้น — ระหว่างนั้นระบบ
+    // ยังลองต่ออยู่เบื้องหลัง พอได้ครบธงจะถูกล้างเองด้านล่าง
+    const onFail = () => setDropdownFailed(true);
     const [operators, owners, vendors, packageSizes, partNumbers] = await Promise.all([
-      apiGet<{ operator_name: string }[]>("/api/operators").catch(() => []),
-      apiGet<{ owner_name: string }[]>("/api/owners").catch(() => []),
-      apiGet<{ vendor_name: string }[]>("/api/vendors").catch(() => []),
-      apiGet<{ package_size: string; handlers: string[] }[]>("/api/package-sizes").catch(() => []),
+      apiGetRetry<{ operator_name: string }>("/api/operators", { signal, onFail }),
+      apiGetRetry<{ owner_name: string }>("/api/owners", { signal, onFail }),
+      apiGetRetry<{ vendor_name: string }>("/api/vendors", { signal, onFail }),
+      apiGetRetry<{ package_size: string; handlers: string[] }>("/api/package-sizes", { signal, onFail }),
       // catalog part number พร้อม package size — ใช้กรอง Part Number ตามขนาด
       // ที่เลือกในกลุ่มนั้น (cascade) ดู partNumbersFor ที่ส่งให้ PartEntryModal
-      apiGet<{ part_number_name: string; package_size: string; handler: string }[]>("/api/part-numbers/all").catch(() => []),
+      apiGetRetry<{ part_number_name: string; package_size: string; handler: string }>(
+        "/api/part-numbers/all", { signal, onFail }),
     ]);
-    setOperatorOptions(operators.map((o) => o.operator_name));
-    setOwnerOptions(owners.map((o) => o.owner_name));
-    setVendorOptions(vendors.map((v) => v.vendor_name));
-    setPackageSizeOptions(packageSizes.map((p) => p.package_size));
-    setPackageSizeCatalog(packageSizes);
-    setPartNumberCatalog(partNumbers);
+
+    // ถูก abort (ผู้ใช้สลับหน้าไปแล้ว) — อย่าแตะ state ของ component ที่ตายแล้ว
+    if (signal?.aborted) return;
+
+    // มาถึงบรรทัดนี้โดยไม่ถูก abort = ทุกเส้นสำเร็จ (ไม่งั้นมันยังวนอยู่)
+    // → ล้างธงให้กล่องเตือนหายไปเอง ผู้ใช้ไม่ต้องกดรีเฟรช
+    setDropdownFailed(false);
+
+    setOperatorOptions((operators ?? []).map((o) => o.operator_name));
+    setOwnerOptions((owners ?? []).map((o) => o.owner_name));
+    setVendorOptions((vendors ?? []).map((v) => v.vendor_name));
+    setPackageSizeOptions((packageSizes ?? []).map((p) => p.package_size));
+    setPackageSizeCatalog(packageSizes ?? []);
+    setPartNumberCatalog(partNumbers ?? []);
   }
 
   /* ── ผล poll เปลี่ยน → อัปเดตหน้าจอ ──────────────────────────────────────
@@ -891,9 +927,19 @@ export default function DashboardPage() {
 
     // สถานะ session ไม่ต้องโหลดตรงนี้แล้ว — useSessionState() ยิงให้ตั้งแต่ render
     // แรก แล้ว effect ที่ผูกกับ sessionSig จะรับช่วงต่อเองตอน response มาถึง
+    //
+    // ⚠ `dropdownAbort` จำเป็นเพราะ loadDropdownData() ลองใหม่ไม่จำกัดจำนวนครั้ง
+    //   ถ้าไม่ยกเลิกตอน unmount ลูปจะเดินต่อหลังผู้ใช้สลับไปหน้า Edit แล้ว
+    //   ค้างยิงทุก 8 วิไปจนกว่าจะปิดแท็บ
+    const dropdownAbort = new AbortController();
     (async () => {
-      await Promise.all([loadMeasurementsPage(1, "", ""), refreshParts(), loadDropdownData()]);
+      await Promise.all([
+        loadMeasurementsPage(1, "", ""),
+        refreshParts(),
+        loadDropdownData(dropdownAbort.signal),
+      ]);
     })();
+    return () => dropdownAbort.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1030,7 +1076,16 @@ export default function DashboardPage() {
     // payload แบบกลุ่ม — backend คลี่เป็นคิวเส้นเดียวเองพร้อมจำว่าชิ้นไหนอยู่
     // กลุ่มไหน (ดู _flatten_groups / _group_config_for) · Operator อยู่นอกกลุ่ม
     // เพราะใช้ร่วมกันทั้ง session
-    const body = { Measure_Type: q.mode, Operator: q.operator, groups: q.groups };
+    // ⚠ `?? "auto"` จำเป็น — คิวที่ค้างอยู่ใน localStorage จากก่อนมีฟีเจอร์นี้
+    //   จะไม่มี triggerMode ถ้าส่ง undefined ไป backend จะเห็นเป็นคีย์ที่หายไป
+    //   แล้วฝั่ง Pi ตกไปใช้ default ของตัวเอง (auto) ซึ่งบังเอิญตรงกัน — แต่
+    //   ตรงกันโดยบังเอิญไม่ใช่สิ่งที่ควรพึ่ง เขียนให้ชัดตรงนี้เลยดีกว่า
+    const body = {
+      Measure_Type: q.mode,
+      Operator: q.operator,
+      Trigger_Mode: q.triggerMode ?? "auto",
+      groups: q.groups,
+    };
 
     try {
       const data = await apiPost<{ session_id: number; target_count: number }>("/api/session/start", body);
@@ -1697,11 +1752,20 @@ export default function DashboardPage() {
                 </div>
 
                 <div className="report-body">
+                  {/* คลิกรูปเพื่อดูเต็มจอ — ใช้ overlay `.img-zoom` ตัวเดียวกับ Camera
+                      Preview ไม่ได้สร้างใหม่ จะได้ปิดด้วย Esc เหมือนกันโดยไม่ต้อง
+                      เขียน listener ซ้ำ · `.img-zoom` z-index สูงกว่า `.modal-overlay`
+                      จึงลอยทับโมดัลรายงานที่เปิดค้างอยู่ได้ */}
                   <div className="report-image-cell">
                     {reportModal.imageState === "loading" ? (
                       <span className="report-no-image">Loading…</span>
                     ) : reportModal.imageState === "ok" && reportModal.imageUrl ? (
-                      <img src={reportModal.imageUrl} alt={`Measurement #${m.measurement_id} image`} />
+                      <img
+                        src={reportModal.imageUrl}
+                        alt={`Measurement #${m.measurement_id} image`}
+                        title="คลิกเพื่อดูเต็มจอ"
+                        onClick={() => setZoomImgUrl(reportModal.imageUrl)}
+                      />
                     ) : (
                       <span className="report-no-image">No image</span>
                     )}
@@ -1766,6 +1830,10 @@ export default function DashboardPage() {
              (ตอนไม่มีคิว ปุ่มที่โผล่คือ "+ New Entry" และ entryQueue เป็น null
               อยู่แล้ว จึงได้ฟอร์มเปล่าตามที่ควรเป็นโดยไม่ต้องแยกเงื่อนไข) */
           initial={entryQueue ?? undefined}
+          /* โหลดตัวเลือกไม่สำเร็จไหม — โชว์เป็นแถบเตือนในฟอร์ม ไม่ใช่บนการ์ด
+             เพราะจุดที่ผู้ใช้เจอปัญหาคือตอนกดเปิด dropdown แล้วไม่มีอะไรให้เลือก
+             ระบบยังลองใหม่อยู่เบื้องหลัง พอได้ครบแถบจะหายเอง */
+          lookupFailed={dropdownFailed}
           operators={operatorOptions}
           vendors={vendorOptions}
           owners={ownerOptions}

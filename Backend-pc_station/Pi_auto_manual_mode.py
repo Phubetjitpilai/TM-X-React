@@ -16,6 +16,16 @@ from pydantic import BaseModel
 # ⚠ ป้าย [Pi] ไว้แยกจาก [Server] ของ Backend เวลาเอา log 2 เครื่องมาวางเทียบกัน
 import logging
 
+# new
+########################
+import glob
+import serial
+
+# ── Serial Config สำหรับเชื่อมต่อ Arduino Mega ──────────────────────────────
+BAUD_RATE   = 115200
+TIMEOUT_SEC = 1
+
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Pi] %(message)s")
 log = logging.getLogger(__name__)
 
@@ -23,6 +33,47 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 TMX_IP = os.getenv("TMX_HOST", "192.168.10.11")
 TMX_PORT = int(os.getenv("TMX_PORT", 8600))
 BUFFER_SIZE = 1024
+
+def find_mega_port() -> str | None:
+    """ค้นหาพอร์ต USB ที่เชื่อมต่อกับ Mega 2560 อัตโนมัติ"""
+    ports = glob.glob("/dev/ttyACM*") + glob.glob("/dev/ttyUSB*")
+    return ports[0] if ports else None
+
+# ── เชื่อมต่อ Serial แบบ "เปิดเมื่อต้องใช้" (lazy) ─────────────────────────
+# ⚠ ของเดิมเปิดพอร์ตที่ระดับโมดูลแล้ว `sys.exit(1)` ถ้าไม่เจอ Mega — ทำงานทันที
+#   ตอน import ผลคือ **ไม่เสียบ Mega = สคริปต์ไม่สตาร์ทเลย** ซึ่งใช้ไม่ได้กับ
+#   ไฟล์นี้ เพราะโหมด manual ต้องรันได้โดยไม่มีบอร์ด (นั่นคือเหตุผลที่มีโหมดนี้)
+#
+#   ตอนนี้จึงเลื่อนไปเปิดตอน `command_flow` เริ่ม และเฉพาะรอบที่ขอโหมด auto
+#   เท่านั้น · เปิดครั้งเดียวแล้วใช้ซ้ำทุก session (ไม่ปิด-เปิดใหม่ทุกรอบ
+#   เพราะ Mega รีเซ็ตตัวเองทุกครั้งที่เปิดพอร์ต = เสียเวลา 2 วิต่อรอบ)
+mega_ser = None
+
+def open_mega() -> bool:
+    """เปิดพอร์ต Serial ถ้ายังไม่เปิด — คืน True เมื่อพร้อมใช้งาน
+
+    ห้าม raise — ผู้เรียก (`command_flow`) ต้องเอาผลไปบอกผู้ใช้ผ่านหน้าเว็บ
+    ไม่ใช่ปล่อยให้ตายกลางเธรดที่กำลังวัด
+    """
+    global mega_ser
+    if mega_ser is not None:
+        return True
+    port = find_mega_port()
+    if not port:
+        log.error("❌ หา Arduino/Mega บน USB ไม่เจอ — โหมด auto ใช้ไม่ได้ "
+                  "(ตรวจสาย USB หรือสั่ง Start ใหม่เป็นโหมด manual)")
+        return False
+    log.info("[INFO] Connecting to Mega on %s @ %s baud ...", port, BAUD_RATE)
+    try:
+        mega_ser = serial.Serial(port, BAUD_RATE, timeout=TIMEOUT_SEC)
+    except Exception as exc:
+        log.error("❌ เปิดพอร์ต %s ไม่สำเร็จ: %s", port, exc)
+        mega_ser = None
+        return False
+    time.sleep(2)  # รอ Mega รีเซ็ตตัวเองหลังเชื่อมต่อ
+    log.info("[INFO] Mega Serial Connected Successfully.")
+    return True
+#########################
 
 TRIGGER_COMMAND = "T1\r"
 
@@ -73,7 +124,7 @@ ASK_USER_TIMEOUT = float(os.getenv("ASK_USER_TIMEOUT", 70))
 # คำสั่งล้างค่าเก่า — คู่มือหน้า 5-9 พิมพ์ 2 แบบไม่ตรงกันเอง ต้องลองเอง
 CLEAR_CANDIDATES = ["MRS", "MSR"]
 _clear_cmd = None    # None=ยังไม่ได้ลอง · "MRS"/"MSR"=ตัวที่ใช้ได้ · False=ไม่ผ่านทั้งคู่
-MCU_TIMEOUT = float(os.getenv("MCU_TIMEOUT", 10))
+MCU_TIMEOUT = float(os.getenv("MCU_TIMEOUT", 5))
 def _idx(name, default):
     v = os.getenv(name, default)
     return None if v in ("", "none", "None", None) else int(v)
@@ -102,14 +153,25 @@ current_session_id = None   # session ที่กำลังวัด (None = 
 _tmx_sock = None            # socket ที่ค้างไว้คุย TM-X ให้ stop handler ยิง S0 ได้
 _hb_last_ok = time.time()   # เวลาที่ heartbeat ยิงออกสำเร็จครั้งล่าสุด
 
-# "กระดิ่ง" ที่บอกว่าชิ้นงานเข้าที่พร้อมวัดแล้ว — ตอนนี้มาจาก curl /trigger
-# พอต่อ MCU จริงค่อยเพิ่ม thread อ่าน Serial แล้วเรียก _trigger.set() บรรทัดเดียว
-# ตัวรอไม่ต้องแก้เลย เพราะ Event รับสัญญาณจากหลายแหล่งได้
+# "กระดิ่ง" ที่บอกว่าชิ้นงานเข้าที่พร้อมวัดแล้ว — ใช้เฉพาะโหมด manual
+# (โหมด auto ไม่ผ่าน Event ตัวนี้ แต่อ่านจาก Serial ตรง ๆ ใน wait_for_trigger_serial)
 _trigger = threading.Event()
 
 # ตอนนี้อยู่ในช่วง "รอสัญญาณ" จริงหรือยัง — endpoint ใช้ตอบให้ตรงความจริงว่า
 # สัญญาณที่ยิงมาจะถูกใช้หรือถูกทิ้ง ไม่งั้น curl แล้วเครื่องไม่ขยับจะนึกว่าพัง
+# heartbeat แนบค่านี้ไปให้ backend เพื่อเปิด/ปิดปุ่ม ⚡ บนหน้าเว็บ
 _waiting_for_trigger = False
+
+# โหมด trigger ของ session ที่กำลังวัด — "manual" (ปุ่มบนเว็บ) | "auto" (MCU)
+#
+# ⚠ **ล็อกทั้ง session ห้ามสลับกลางคัน** — `current_pkg` ใน command_flow จำว่า
+#   บอก <PKG:...> ให้ MCU ไปแล้ว ถ้าสลับโหมดกลางรอบ MCU จะพลาด <PKG> ของกลุ่ม
+#   ที่ข้ามไปตอนอยู่โหมด manual แล้วตั้งฟิกซ์เจอร์ผิดขนาดโดยไม่มีใครรู้
+#
+# ค่าตั้งต้นเป็น "auto" เพราะเป็นโหมดใช้งานจริง · payload รุ่นเก่าที่ไม่ส่ง
+# trigger_mode มาจะได้ auto แล้วยืนรอ Serial เงียบ ๆ จึงต้อง log ทุกรอบ
+# ตอนเริ่ม session (ดู command_flow) ไม่งั้นจะหาสาเหตุไม่เจอ
+_trigger_mode = "์None"
 
 http_app = FastAPI()
 
@@ -121,11 +183,15 @@ class Group(BaseModel):
     template_name: str
     alpl: list[int]
     limits: Limits | None = None
+    package_size: str | None = None      # เผื่อ backend รุ่นเก่าไม่ส่งมา
 
 class CommandRequest(BaseModel):
     action: str
     session_id: int | None = None
     target_count: int | None = None
+    # "manual" = รอปุ่ม ⚡ บนหน้าเว็บ · "auto" = รอ <TRIGGER_TMX> จาก MCU
+    # default เป็น auto เพื่อให้ backend รุ่นที่ยังไม่ส่งฟิลด์นี้ทำงานเหมือนเดิม
+    trigger_mode: str = "auto"
     groups: list[Group] | None = None
 
 @http_app.post("/command")
@@ -134,7 +200,7 @@ async def command(req: CommandRequest):
     if req.action == "start":
         try:
             httpx.post(f"{BACKEND_URL}/api/heartbeat",
-                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
+                json={"session_id": current_session_id},
                 timeout=5)
         except Exception:
             pass
@@ -155,13 +221,29 @@ async def command(req: CommandRequest):
         if any(not g.template_name for g in groups):
             raise HTTPException(400, "มีกลุ่มที่ไม่ได้ระบุ `template_name`")
 
+        # ตรวจโหมดที่นี่ ไม่ใช่ปล่อยไปตกใน command_flow — ถ้าสะกดผิดต้องรู้
+        # ตั้งแต่ตอนกด Start ไม่ใช่ไปเงียบ ๆ แล้วยืนรอ Serial ที่ไม่มีวันมา
+        if req.trigger_mode not in ("manual", "auto"):
+            raise HTTPException(
+                400,
+                f"trigger_mode '{req.trigger_mode}' ไม่ถูกต้อง — ต้องเป็น 'manual' หรือ 'auto'",
+            )
+        # โหมด auto ต้องมี Mega จริง ๆ · เช็คตรงนี้เพื่อให้ผู้ใช้เห็น error บน
+        # หน้าเว็บทันทีที่กด Start แทนที่จะให้ session เริ่มแล้วค้างรอสัญญาณ
+        if req.trigger_mode == "auto" and not open_mega():
+            raise HTTPException(
+                503,
+                "โหมด auto ต้องต่อ Arduino/Mega ผ่าน USB — หาพอร์ตไม่เจอ "
+                "(ตรวจสาย USB หรือเลือกโหมด manual แทน)",
+            )
+
         with _answer_lock:
             _answer_action = None
             _answer_event.clear()
-        
+
         threading.Thread(
             target=command_flow,
-            args=(req.session_id, groups, req.target_count),
+            args=(req.session_id, groups, req.target_count, req.trigger_mode),
             daemon=True,
         ).start()
 
@@ -183,14 +265,11 @@ async def command(req: CommandRequest):
             _answer_action = "accept"
         _answer_event.set()    
 
+
     elif req.action == "trigger":
-        # ปุ่มจำลองทริกเกอร์บนหน้าเว็บ (ใช้ชั่วคราวระหว่างที่ยังไม่มี MCU)
-        #
-        # เส้นทางคือ เบราว์เซอร์ → Backend → ที่นี่ **ไม่ให้เบราว์เซอร์ยิงตรงมา**
-        # เพราะหน้าเว็บจะต้องรู้ IP ของ Pi เอง และต้องเปิด CORS ที่นี่เพิ่ม
-        #
+        # ปุ่ม ⚡ บนหน้าเว็บ — ใช้ได้เฉพาะโหมด manual
         # guard ชุดเดียวกับ /trigger เป๊ะ แต่ตอบเป็น HTTP error แทน {"ok": False}
-        # เพื่อให้ Backend แยกออกว่าถูกปฏิเสธ ไม่ใช่สำเร็จ แล้วส่งเหตุผลถึงหน้าเว็บได้
+        # เพราะเส้นนี้ backend เป็นคนเรียก ไม่ใช่คนยิง curl เอง
         if not is_running:
             raise HTTPException(400, "ไม่มี session กำลังวัดอยู่ — กด Start ที่หน้าเว็บก่อน")
         if not _waiting_for_trigger:
@@ -219,24 +298,14 @@ async def command(req: CommandRequest):
 
 @http_app.api_route("/trigger", methods=["GET", "POST"])
 async def trigger():
-    """จำลองเซนเซอร์ — ยิงอะไรมาก็ได้ที่ URL นี้ = "ชิ้นงานเข้าที่แล้ว วัดได้เลย"
-
-        curl -X POST http://<ip-ของ-pi>:9998/trigger
-
-    guard 2 ชั้น ตอบให้ตรงความจริงว่าสัญญาณจะถูกใช้หรือถูกทิ้ง — ไม่งั้นยิงมาแล้ว
-    เครื่องไม่ขยับจะนึกว่าระบบพัง แล้วหาสาเหตุไม่เจอ
-    """
     if not is_running:
         return {"ok": False, "reason": "ไม่มี session กำลังวัดอยู่ — กด Start ที่หน้าเว็บก่อน"}
     if not _waiting_for_trigger:
-        # ยิงมาถูกจังหวะแต่ยังไม่ถึงช่วงรอ (กำลังส่ง R0/PW อยู่ หรือกำลังรอผลวัด
-        # ของชิ้นก่อนหน้า) — สัญญาณนี้จะโดน _trigger.clear() ล้างทิ้งอยู่ดี
         return {"ok": False,
                 "reason": "ยังไม่ถึงช่วงรอสัญญาณ — รอข้อความ 'รอสัญญาณ trigger ...' ก่อนแล้วยิงใหม่"}
     _trigger.set()
     log.info("⚡ ได้รับสัญญาณ trigger")
     return {"ok": True}
-
 
 def heartbeat_loop():
     global is_running, _hb_last_ok
@@ -246,7 +315,12 @@ def heartbeat_loop():
                 f"{BACKEND_URL}/api/heartbeat",
                 json={
                     "session_id": current_session_id,
+                    # 2 ตัวนี้เป็นตัวคุมปุ่ม ⚡ บนหน้าเว็บ
+                    #   trigger_mode        → จะ "แสดงปุ่มไหม"
+                    #   waiting_for_trigger → จะ "กดได้ไหม"
+                    # backend เก็บไว้ใน memory แล้วแนบไปกับ /api/session/state
                     "waiting_for_trigger": _waiting_for_trigger,
+                    "trigger_mode": _trigger_mode,
                 },
                 timeout=5,
             )
@@ -298,12 +372,32 @@ def get_measured_count(session_id):
         return None
     return data.get("measured_count")
 
-# curl -X POST http://<ip-ของ-pi>:9998/trigger
-# วนถามจนกว่ามันจะตอบ is_ready 
-# รอ Trigger จาก MCU
-def wait_for_trigger_mcu():
-    log.info("arrive")
+# ══════════════════════════════════════════════════════════════════════════
+# รอสัญญาณ "ชิ้นงานเข้าที่แล้ว" — 2 ทาง เลือกด้วย _trigger_mode
+# ══════════════════════════════════════════════════════════════════════════
+# ทั้งคู่มีสัญญาเดียวกัน: คืน True = มีสัญญาณ · False = โดน Stop ระหว่างรอ
+# ผู้เรียก (`command_flow`) จึงไม่ต้องรู้ว่ามาจากทางไหน
+
+def wait_for_trigger_serial():
+    """โหมด auto — รอ `<TRIGGER_TMX>` จาก MCU ผ่าน Serial"""
+    log.info("   ⏳ รอสัญญาณจาก MCU ... (กด Stop เพื่อยกเลิก)")
+    while is_running:
+        if mega_ser.in_waiting > 0:
+            try:
+                line = mega_ser.readline().decode("utf-8").strip()
+                if line == "<TRIGGER_TMX>":
+                    log.info("   📥 [RX ← Mega] ได้รับคำสั่ง <TRIGGER_TMX> แล้ว")
+                    return True
+            except UnicodeDecodeError:
+                pass
+        time.sleep(0.05)
+    return False           # ออกจาก loop เพราะโดน Stop จาก Backend และ return False
+
+
+def wait_for_trigger_web():
+    """โหมด manual — รอปุ่ม ⚡ บนหน้าเว็บ (หรือ curl /trigger)"""
     global _waiting_for_trigger
+    log.info("   ⏳ รอปุ่ม ⚡ Trigger บนหน้าเว็บ ... (กด Stop เพื่อยกเลิก)")
     _trigger.clear()
     _waiting_for_trigger = True
     # บอก Backend ทันทีว่าพร้อมรับ trigger — ไม่ต้องรอ heartbeat รอบถัดไป
@@ -314,7 +408,9 @@ def wait_for_trigger_mcu():
     #   ส่งไม่ทันก็ไม่เป็นไร — heartbeat รอบปกติจะตามมาใน HB_INTERVAL วิอยู่แล้ว
     try:
         httpx.post(f"{BACKEND_URL}/api/heartbeat",
-            json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
+            json={"session_id": current_session_id,
+                  "waiting_for_trigger": _waiting_for_trigger,
+                  "trigger_mode": _trigger_mode},
             timeout=0.5)
     except Exception:
         pass
@@ -328,10 +424,19 @@ def wait_for_trigger_mcu():
         # บอก Backend ทันทีว่าไม่รอแล้ว → ปุ่มดับเลย
         try:
             httpx.post(f"{BACKEND_URL}/api/heartbeat",
-                json={"session_id": current_session_id, "waiting_for_trigger": _waiting_for_trigger},
+                json={"session_id": current_session_id,
+                      "waiting_for_trigger": _waiting_for_trigger,
+                      "trigger_mode": _trigger_mode},
                 timeout=5)
         except Exception:
             pass
+
+
+def wait_for_trigger():
+    """แยกทางตามโหมดของ session นี้ — ตัวเรียกไม่ต้องรู้ว่ามาจากไหน"""
+    if _trigger_mode == "auto":
+        return wait_for_trigger_serial()
+    return wait_for_trigger_web()
 
 def send_recv(sock, command, timeout=SOCKET_TIMEOUT):
     """ส่ง 1 คำสั่ง แล้ว **วน recv จนเจอ CR** — คืน (response, ok)
@@ -578,24 +683,43 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
 
 #วนไปถามว่าพร้อมรับ result ยัง ให้ MCU set Flag เอา idle(ยังไม่มีชิ้นงาน) -> obj_is_ready(เมื่อวางชิ้นงานแล้ว) -> waiting_for_result(พร้อมรับ result) -> idle(เสร็จการวัด 1 ชิ้น)
 def send_result_to_mcu(result, mcu_timeout=MCU_TIMEOUT):
-    """ส่งผลตัดสินให้ MCU — `result` เป็น "OK" / "NG" / "UNKNOWN"
 
-    ตอนนี้ยังไม่มีบอร์ด MCU จริง จึงแค่พิมพ์ให้เห็นว่าส่งอะไรออกไป
-    พอต่อ Serial จริงค่อยเปลี่ยนบรรทัดข้างในเป็นการเขียนลงพอร์ต — **ตัวเรียก
-    ไม่ต้องแก้เลย** นี่คือเหตุผลที่แยกออกมาเป็นฟังก์ชันตั้งแต่ตอนที่ยังไม่มีอะไร
-
-    ⚠ "UNKNOWN" ต้องส่งไปด้วยเสมอ ห้ามข้ามเงียบๆ — เป็นสถานะที่สามที่ต้องมี
-      ไม่ใช่แค่ OK กับ NG · ถ้าไม่ส่ง MCU จะมีชิ้นงานคาอยู่โดยไม่มีคำสั่ง แล้วมัน
-      จะไม่มีวันตอบว่า "พร้อม" สำหรับชิ้นถัดไปอีกเลย = ค้างกันทั้งคู่
-      **ห้ามเดา UNKNOWN เป็น NG** เพราะของอาจดีอยู่ แค่กล้องไม่เห็น
-
-    `mcu_timeout` ยังไม่ได้ใช้ — รับไว้ก่อนเพื่อให้ signature นิ่ง ไว้ใช้ตอนเพิ่ม
-    การรอ MCU ตอบรับ (`wait_mcu_ack` ผ่าน `_mcu_ack` ที่ประกาศไว้แล้วข้างบน)
-    """
     icon = {"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
-    log.info("   🔀 → MCU: %s %s", icon, result)
-    return True
+    if _trigger_mode != "auto":
+        log.info("   🔀 (manual) ไม่ได้ส่งผลให้ MCU: %s %s", icon, result)
+        return True
 
+    deadline = time.time() + mcu_timeout
+    while time.time() < deadline:
+        # กำหนด Token ที่จะส่งกลับหา Mega ตามผลลัพธ์
+        if result == "OK":
+            ack_msg = "<MEASURE_OK>\n"
+        elif result == "NG":
+            ack_msg = "<MEASURE_NG>\n"
+        else:
+            break
+        log.info("   🔀 → MCU: %s %s", icon, result)
+        mega_ser.write(ack_msg.encode("utf-8"))
+        log.info(f"   [TX → Mega] {ack_msg.strip()}")
+        return True
+    return False
+
+def send_package_size_to_mcu(package_size,mcu_timeout=MCU_TIMEOUT):
+    # เราจะได้รับมาเป็น  String เช่น 8x8
+    #
+    # โหมด manual ไม่มี MCU ให้ตั้งฟิกซ์เจอร์ — คืน True ทันที
+    # (`current_pkg` ฝั่งผู้เรียกยังเดินตามปกติ ไม่ต้องแก้ตรรกะข้ามกลุ่ม)
+    if _trigger_mode != "auto":
+        log.info("   🔀 (manual) ไม่ได้บอกขนาดชิ้นงานให้ MCU: %s", package_size)
+        return True
+
+    deadline = time.time() + mcu_timeout
+    while time.time() < deadline:
+        ack_msg  = f"<PKG:{package_size}>\n"
+        mega_ser.write(ack_msg.encode("utf-8"))
+        log.info(f"   [TX → Mega] {ack_msg.strip()}")
+        return True
+    return False
 
 def wait_for_measurement(session_id, count_before, timeout=MEASURE_TIMEOUT):
 
@@ -721,11 +845,15 @@ def post_measurement_from_pi(session_id, piece, x, y, horizon_left, horizon_righ
                persist=False)   # ← ค่าลง DB แล้ว ห้ามทับสาเหตุที่ Pi กำลังรอ
     return True
 
-def command_flow(session_id, groups, target_count):
+def command_flow(session_id, groups, target_count, trigger_mode="auto"):
 
-    global current_session_id, is_running, _tmx_sock, _hb_last_ok
+    global current_session_id, is_running, _tmx_sock, _hb_last_ok, _trigger_mode
     _hb_last_ok = time.time()
     current_session_id = session_id  # heartbeat จะเริ่มแนบ session นี้ทันที
+    # ⚠ ตั้ง **ก่อน** is_running = True — heartbeat_loop อ่านตัวนี้จากอีกเธรด
+    #   ถ้าตั้งทีหลัง heartbeat รอบแรกของ session จะส่งโหมดของรอบก่อนไป
+    #   แล้วปุ่มบนหน้าเว็บจะโผล่/ไม่โผล่ผิดอยู่ 1 จังหวะ
+    _trigger_mode = trigger_mode
     is_running = True
     client_socket = None
     stop_reason = None
@@ -734,6 +862,11 @@ def command_flow(session_id, groups, target_count):
         log.info(f"\n{'='*60}")
         log.info(f"✅ ได้รับคำสั่ง Start จาก Backend")
         log.info(f"   session_id    : {session_id}")
+        # ⚠ ต้อง log ทุกรอบ — payload รุ่นเก่าที่ไม่ส่ง trigger_mode จะได้ "auto"
+        #   แล้วยืนรอ Serial เงียบ ๆ ทั้งที่ผู้ใช้กำลังหาปุ่มอยู่ บรรทัดนี้คือ
+        #   สิ่งเดียวที่บอกได้ว่าทำไมเครื่องไม่ขยับ
+        log.info(f"   โหมด trigger  : {trigger_mode}  "
+                 f"({'รอ <TRIGGER_TMX> จาก MCU' if trigger_mode == 'auto' else 'รอปุ่ม ⚡ บนหน้าเว็บ'})")
         log.info(f"   target_count  : {target_count}  ← จำนวนชิ้นที่จะวัดรอบนี้")
         for gi, g in enumerate(groups, 1):
             log.info(f"   กลุ่มที่ {gi}      : template={g.template_name!r} "
@@ -777,6 +910,7 @@ def command_flow(session_id, groups, target_count):
 
         # `PW` ย้ายเข้าไปในลูปแล้ว (ดูข้างล่าง) เพราะแต่ละกลุ่มใช้ template คนละตัวได้
         current_tmpl = None      # template ที่โหลดค้างอยู่ใน TM-X ตอนนี้
+        current_pkg  = None      # package size ที่บอก MCU ไปแล้ว
 
         for piece in range(1, target_count + 1):
             if not is_running:
@@ -785,7 +919,7 @@ def command_flow(session_id, groups, target_count):
 
             # ── ⓪ โหลดโปรแกรมวัดของกลุ่มนี้ ถ้ายังไม่ตรงกับที่ค้างอยู่ ──────
             #
-            # ยิงก่อน `wait_for_trigger_mcu()` โดยตั้งใจ — ช่วงรอสัญญาณจาก MCU
+            # ยิงก่อน `wait_for_trigger()` โดยตั้งใจ — ช่วงรอสัญญาณ
             # ไม่มีกำหนดเวลาอยู่แล้ว ปล่อยให้ TM-X โหลดโปรแกรมไปพร้อมกันเลย
             # ถ้าย้ายไปไว้หลัง trigger จะเพิ่มดีเลย์ ~1 วิให้ชิ้นแรกของทุกกลุ่ม
             #
@@ -803,9 +937,21 @@ def command_flow(session_id, groups, target_count):
                 time.sleep(PW_LOAD_WAIT)
                 current_tmpl = tmpl
 
-            # ── ① รอ MCU บอกว่าชิ้นงานเข้าที่แล้ว (ตอนนี้ = curl /trigger) ──
+            # ── ⓪.5 บอก MCU ว่ากลุ่มนี้ชิ้นงานขนาดไหน ─────────────────────    
+            pkg = groups[group_of[piece - 1]].package_size
+            if pkg and pkg != current_pkg:
+                if not send_package_size_to_mcu(pkg):
+                    stop_reason = (f"ชิ้นที่ {piece}/{target_count}: "
+                                   f"บอกขนาดชิ้นงาน ({pkg}) ให้ MCU ไม่สำเร็จ")
+                    break
+                current_pkg = pkg
+            # ── ⓪.5 บอก MCU ว่ากลุ่มนี้ชิ้นงานขนาดไหน ─────────────────────  
+
+            # ── ① รอสัญญาณว่าชิ้นงานเข้าที่แล้ว ──────────────────────────
+            #    auto   → <TRIGGER_TMX> จาก MCU ผ่าน Serial
+            #    manual → ปุ่ม ⚡ บนหน้าเว็บ (หรือ curl /trigger)
             log.info("\nชิ้นที่ %s/%s — รอสัญญาณ trigger ...", piece, target_count)
-            if not wait_for_trigger_mcu():
+            if not wait_for_trigger():
                 log.info("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
                 break
 
@@ -843,15 +989,15 @@ def command_flow(session_id, groups, target_count):
                 if not handle_error("GM", session_id, piece, target_count,
                                     f"รอ {GM_MAX_WAIT:.0f} วิแล้ว GM ไม่คืนค่าใหม่", rounds):
                     stop_reason = f"ชิ้นที่ {piece}/{target_count}: TM-X วัดไม่ติด"
-                    #send_result_to_mcu("UNKNOWN")   # ปล่อยของออกก่อนจบ
                     break
             if result == "UNKNOWN":
                 break
 
             # ── ④ ส่งผลให้ MCU ไปคัดแยก — ส่งทุกชิ้นรวมถึง UNKNOWN ─────────
-            send_result_to_mcu(result)
+            if not send_result_to_mcu(result):
+                stop_reason = f"ชิ้นที่ {piece}/{target_count}: ส่งผลให้ MCU ไม่สำเร็จ"
+                break
             # TODO: รอ MCU ตอบรับ (wait_mcu_ack) ก่อนไปชิ้นถัดไป — ยังไม่ทำ
-
             if not is_running:
                 log.info("⏹ หยุดการวัด")
                 break
@@ -891,7 +1037,7 @@ def command_flow(session_id, groups, target_count):
     except Exception as exc:
         log.info("\n❌ session พังกลางทาง — %s: %s", type(exc).__name__, exc)
         stop_reason = f"session พังกลางทาง — {type(exc).__name__}: {exc}" 
-    finally:
+    finally:  
         if client_socket is not None:
             try:
                 client_socket.shutdown(socket.SHUT_RDWR)
@@ -937,19 +1083,24 @@ if __name__ == "__main__":
     threading.Thread(target=heartbeat_loop, daemon=True).start()
 
     log.info("─" * 66)
-    log.info("Pi.py — รอคำสั่ง Start จาก Backend")
+    log.info("Pi_auto_manual_mode.py — รอคำสั่ง Start จาก Backend")
     log.info(f"  ฟัง /command ที่    : 0.0.0.0:{AGENT_PORT}   (.env: AGENT_PORT)")
     log.info(f"  TM-X ที่            : {TMX_IP}:{TMX_PORT}    (.env: TMX_HOST/TMX_PORT)")
     log.info(f"  Backend ที่         : {BACKEND_URL}          (.env: BACKEND_URL)")
     log.info(f"  heartbeat ทุก       : {HB_INTERVAL:g} วิ · หยุดเองถ้าขาดติดต่อเกิน {HB_TIMEOUT_HINT:g} วิ")
     log.info(f"  รอค่าการวัดสูงสุด    : {MEASURE_TIMEOUT:g} วิ (poll ทุก {MEASURE_POLL_INTERVAL:g} วิ)")
+    log.info( "  โหมด trigger        : เลือกรายรอบจาก payload ตอน Start")
+    log.info( "                        auto   = รอ <TRIGGER_TMX> จาก MCU (ต้องเสียบ Mega)")
+    log.info( "                        manual = รอปุ่ม ⚡ บนหน้าเว็บ (ไม่ต้องมี Mega)")
+    log.info(f"  พอร์ต Serial        : เปิดตอนเริ่ม session โหมด auto เท่านั้น "
+             f"({BAUD_RATE} baud)")
     # แยก 2 บรรทัดโดยตั้งใจ — เดิมพิมพ์ "curl -X POST http://..." ติดกันบรรทัดเดียว
     # แล้วมีคนก๊อปทั้งบรรทัดไปวางในช่อง address ของเบราว์เซอร์ ได้ URL เพี้ยนเป็น
     #   http://127.0.0.1:9998/curl%20-X%20POST%20http://...
     # (%20 = ช่องว่าง) · บรรทัดล่างจึงเป็น URL ล้วนที่ก๊อปแล้ววางได้ทันที
     log.info(f"  จำลองเซนเซอร์ (เบราว์เซอร์): http://127.0.0.1:{AGENT_PORT}/trigger")
     log.info(f"  จำลองเซนเซอร์ (เทอร์มินัล) : curl -X POST http://127.0.0.1:{AGENT_PORT}/trigger")
-    log.info(f"     ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi")
+    log.info(f"     ⚠ ใช้ได้เฉพาะรอบที่เป็นโหมด manual · ยิงจากเครื่องอื่นให้เปลี่ยน 127.0.0.1 เป็น IP ของ Pi")
     log.info("─" * 66)
 
     # ── เตือนถ้า heartbeat ตั้งค่าไม่สัมพันธ์กัน ────────────────────────────

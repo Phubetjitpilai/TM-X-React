@@ -1,0 +1,56 @@
+
+{
+  "_comment": [
+    "payload จำลองของ POST /command ที่ Backend ยิงมาให้ Pi ตอนกด Start",
+    "โครงสร้างตรงกับ _build_groups() + _notify_agent_start() ใน routers/session.py",
+    "",
+    "แก้ไฟล์นี้แล้วรีเฟรช http://127.0.0.1:9998/ ได้เลย ไม่ต้องรีสตาร์ทสคริปต์",
+    "",
+    "กฎที่ต้องรักษา",
+    "  - ALPL รวมทุกกลุ่ม ต้องเท่ากับ target_count เป๊ะ ไม่งั้นคิวจะเหลื่อม",
+    "  - limits เป็นขอบสำเร็จรูป (nominal - lower_tol .. nominal + upper_tol)",
+    "    Pi เอาไปเทียบตรงๆ ไม่ปัดอะไรอีก",
+    "  - offset_max = null คือโหมด IPM ที่ไม่เอา offset มาตัดสิน",
+    "    ถ้าจะทดสอบ New/Rework ให้ใส่ 0.03 (offset_tol ของ package_size นั้น)",
+    "  - package_size ส่งให้ MCU ตั้งฟิกซ์เจอร์ ส่งเฉพาะตอนข้ามรอยต่อกลุ่ม",
+    "  - session_id ในไฟล์ถูกทับด้วยตัวนับของ mock เสมอ ใส่อะไรไว้ก็ได้",
+    "",
+    "ค่า limits ของ package size อื่น (nominal ± 0.010/0.020 ทุกตัว)",
+    "  10x6.5      x 10.020-10.050   y  6.520- 6.550",
+    "  5x5         x  5.020- 5.050   y  5.020- 5.050",
+    "  7x7         x  7.020- 7.050   y  7.020- 7.050",
+    "  9x15        x  9.020- 9.050   y 15.020-15.050",
+    "  3.05x7.25   x  3.070- 3.100   y  7.270- 7.300"
+  ],
+
+  "action": "start",
+  "session_id": 1,
+  "target_count": 4,
+
+  "groups": [
+    {
+      "template_name": "1",
+      "alpl": [201, 202],
+      "package_size": "8x8",
+      "limits": {
+        "x_lo": 8.02,
+        "x_hi": 8.05,
+        "y_lo": 8.02,
+        "y_hi": 8.05,
+        "offset_max": null
+      }
+    },
+    {
+      "template_name": "1",
+      "alpl": [203, 204],
+      "package_size": "3.255x3.255",
+      "limits": {
+        "x_lo": 3.275,
+        "x_hi": 3.305,
+        "y_lo": 3.275,
+        "y_hi": 3.305,
+        "offset_max": null
+      }
+    }
+  ]
+}
