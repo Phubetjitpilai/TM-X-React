@@ -35,6 +35,7 @@ interface Part {
   nominal_y: number | null;
   upper_tol: number | null;
   lower_tol: number | null;
+  offset_tol: number | null;      // ← เพิ่มบรรทัดนี้
   template_name: string | null;
 }
 
@@ -56,6 +57,10 @@ interface Measurement {
    *    จึงว่างเปล่าทุกแถวโดยไม่มี error อะไรเตือน */
   offset_opx?: number | null;
   offset_opy?: number | null;
+  /** ทิศที่เยื้อง — รหัส 9 ค่าจาก `_get_min_position_label` ฝั่ง backend
+   *  (TOP / BOTTOM / LEFT / RIGHT / TOP LEFT / … / CENTER)
+   *  offset_opx/opy เป็น "ขนาด" ไม่มีเครื่องหมาย ตัวนี้เป็นตัวบอก "ทิศ" */
+  offset_pos_op?: string | null;
   offset_tol?: number | null;
   measure_type?: string | null;
   nominal_x?: number | null;
@@ -476,16 +481,23 @@ export default function EditPage() {
       errors.number_alpl = `ALPL ${nAlpl} มีอยู่ในตารางแล้ว`;
     }
 
-    // field อื่นนอกจาก ALPL บังคับกรอกเฉพาะตอน Add — ตอน Edit ปล่อยว่างได้หมด
+    /* บังคับกรอกแค่ **ALPL กับ Package Size** เท่านั้น (ตอน Add) — ที่เหลือ
+       เว้นว่างได้หมด และตอน Edit ไม่บังคับอะไรเลย
+
+       ทำไม Package Size ยังบังคับ: มันเป็น **แหล่งเกณฑ์ตัดสิน OK/NG เดียว
+       ของทั้งระบบ** ทุกโหมด (ดู `_load_criteria` ใน shared.py) — ALPL ที่ไม่มี
+       package_size จะวัดไม่ได้เลย กด Start แล้วเด้ง 404 "หาเกณฑ์ตัดสินไม่เจอ"
+       และมันยังเป็นตัวกรอง catalog ของ Part Number ที่เลือกได้ด้วย
+
+       ทำไมตัวอื่นไม่บังคับ: ทุกคอลัมน์ใน `parts_specifications` ยอมให้เป็น NULL
+       (ดู init.sql) และการลงทะเบียนแบบ IPM ก็มีแค่ ALPL + Package Size อยู่แล้ว
+       — ฟอร์มนี้จึงไม่ควรเข้มกว่าเส้นทางที่ระบบใช้จริง
+
+       ⚠ Part Number ว่าง = ไม่มี Handler/Template มาให้อัตโนมัติ ต้องเลือกเอง
+         (ถ้าเว้นทั้งคู่ Part นั้นจะไม่มีเครื่องผูกอยู่ ซึ่งจะหลุดจากรายงานที่
+          จัดกลุ่มตาม Handler) */
     if (isAdd) {
-      // package_size เป็นตัวกำหนด catalog ของ Part Number ที่เลือกได้ จึงบังคับก่อนเสมอ
-      if (!pkgValue.trim()) errors.package_size = "กรอก Package Size ก่อนถึงจะเลือก Part Number ได้";
-      // Part Number เป็นตัวกำหนด Handler/Nominal/Tolerance/Template ให้อัตโนมัติทั้งหมด
-      if (!pnValue) errors.part_number = "เลือก Part Number";
-      if (!get("vendor")) errors.vendor = "เลือก Vendor";
-      if (!get("description")) errors.description = "กรอก Description";
-      if (!get("po_number")) errors.po_number = "กรอก PO Number";
-      if (!get("owner")) errors.owner = "เลือก Owner";
+      if (!pkgValue.trim()) errors.package_size = "เลือก Package Size";
     }
 
     if (Object.keys(errors).length > 0) {
@@ -685,7 +697,7 @@ export default function EditPage() {
       <section className="card">
         <div className="card-header">
           <div className="card-title">
-            Parts <span className="count">({partsTotal})</span>
+            ALPL Profile <span className="count">({partsTotal})</span>
           </div>
           <button type="button" className="btn-add" onClick={() => openPartModal("add")}>
             + Add Part
@@ -711,9 +723,11 @@ export default function EditPage() {
               <tr>
                 {/* ⚠ `th-derived` (มีกุญแจ 🔒 ต่อท้าย + สีจาง) = คอลัมน์ read-only ที่
                     ระบบ derive มาให้ แก้ที่ตารางนี้ไม่ได้
-                    เหลือแค่ Template (มาจาก Package Size) ตัวเดียว
-                    Nominal/Tol ไม่อยู่ในตารางนี้ (ต้นฉบับไม่มี) — มันเป็นค่าของ
-                    package_size ไปดูที่การ์ด Lookup Tables แทน
+                    มี 4 ตัว: Template · Nominal X/Y · Tol (+/-) · Offset Tol
+                    ทั้งหมดมาจาก `package_size` ที่ ALPL ตัวนี้ผูกอยู่ (ดู PARTS_SELECT)
+                    จะแก้ค่าพวกนี้ต้องไปที่การ์ด Lookup Tables › Package Size
+                    ย้ายมาจากตาราง Measurements เพราะเป็นสเปกของ "ชิ้นงาน"
+                    ไม่ใช่ของ "การวัดครั้งนั้น"
 
                     ⚠ **Handler ไม่ใช่ derived แล้ว** — `parts_specifications` เก็บ
                       `handler_id` ของตัวเอง และฟอร์มมี dropdown ให้แก้ได้จริง
@@ -724,6 +738,9 @@ export default function EditPage() {
                 <th>Handler</th>
                 <th>Package Size</th>
                 <th className="th-derived">Template</th>
+                <th className="th-derived">Nominal X / Y</th>
+                <th className="th-derived">Tol (+/-)</th>
+                <th className="th-derived">Offset Tol</th>
                 <th>Vendor</th>
                 <th>Owner</th>
                 <th>PO Number</th>
@@ -735,7 +752,7 @@ export default function EditPage() {
             <tbody>
               {partsData.length === 0 ? (
                 <tr className="empty-row">
-                  <td colSpan={12}>{partsSearchRef.current ? "ไม่พบ Part ที่ตรงกับคำค้นหา" : "ยังไม่มีข้อมูล Parts"}</td>
+                  <td colSpan={15}>{partsSearchRef.current ? "ไม่พบ Part ที่ตรงกับคำค้นหา" : "ยังไม่มีข้อมูล Parts"}</td>
                 </tr>
               ) : (
                 partsData.map((p) => (
@@ -748,6 +765,19 @@ export default function EditPage() {
                     <td>{p.handler ?? ""}</td>
                     <td>{p.package_size ?? ""}</td>
                     <td className="td-derived">{p.template_name ?? ""}</td>
+                    <td className="td-derived">
+                      {p.nominal_x != null && p.nominal_y != null
+                        ? `${Number(p.nominal_x).toFixed(DP_MM)} / ${Number(p.nominal_y).toFixed(DP_MM)}`
+                        : "—"}
+                    </td>
+                    <td className="td-derived">
+                      {p.upper_tol != null && p.lower_tol != null
+                        ? `+${Number(p.upper_tol).toFixed(DP_MM)} / -${Number(p.lower_tol).toFixed(DP_MM)}`
+                        : "—"}
+                    </td>
+                    <td className="td-derived">
+                      {p.offset_tol != null ? Number(p.offset_tol).toFixed(DP_OFF) : "—"}
+                    </td>
                     <td>{p.vendor ?? ""}</td>
                     <td>{p.owner ?? ""}</td>
                     <td>{p.po_number ?? ""}</td>
@@ -801,7 +831,7 @@ export default function EditPage() {
       <section className="card">
         <div className="card-header">
           <div className="card-title">
-            Measurements <span className="count">({measTotal})</span>
+            Measurements History <span className="count">({measTotal})</span>
           </div>
         </div>
 
@@ -834,14 +864,16 @@ export default function EditPage() {
                 <th className="th-derived">ID</th>
                 <th className="th-derived">Session</th>
                 <th>ALPL</th>
-                {/* เกณฑ์ที่ใช้ตัดสินการวัดครั้งนั้น — วางไว้ "ก่อน" Value X
-                    เพื่อให้อ่านไล่ซ้าย→ขวาได้ว่า "เกณฑ์เท่านี้ วัดได้เท่านี้
-                    ผลเลยเป็นแบบนี้" (ลำดับเดียวกับหน้า Home) */}
-                <th className="th-derived">Nominal X / Y</th>
-                <th className="th-derived">Tol (+/-)</th>
-                <th className="th-derived">Offset Tol</th>
+                {/* เกณฑ์ตัดสิน (Nominal / Tol / Offset Tol) ย้ายไปอยู่ตาราง Parts
+                    ด้านบนแล้ว — เป็นสเปกของ "ชิ้นงาน" ไม่ใช่ของ "การวัดครั้งนั้น"
+                    ค่ายังถูกดึงมาใน MEASUREMENTS_SELECT อยู่ เพราะ Value X/Y กับ
+                    Offset X/Y ใช้มันระบายสีว่าเกินสเปกไหม (ดู axisValue/offsetValue)
+                    ถ้าอยากดูเกณฑ์ที่ใช้ตอนวัดจริงย้อนหลัง ดูได้จาก Export CSV */}
                 <th className="th-derived">Value X/Y</th>
                 <th className="th-derived">Offset X/Y</th>
+                {/* ทิศที่เยื้อง — รหัส 9 ค่าที่ backend คำนวณให้ (ดู `_get_min_position_label`)
+                    เงื่อนไขเดียวกับ Offset X/Y คือ IPM ขึ้น "—" ทั้งคอลัมน์ */}
+                <th className="th-derived">Offset Position</th>
                 <th className="th-derived">Result</th>
                 <th className="th-derived">Note</th>
                 <th>Operator</th>
@@ -853,7 +885,7 @@ export default function EditPage() {
             <tbody>
               {measurementsData.length === 0 ? (
                 <tr className="empty-row">
-                  <td colSpan={15}>{measSearchRef.current || measDate ? "ไม่พบ Measurement ที่ตรงกับตัวกรอง" : "ยังไม่มีข้อมูล Measurements"}</td>
+                  <td colSpan={12}>{measSearchRef.current || measDate ? "ไม่พบ Measurement ที่ตรงกับตัวกรอง" : "ยังไม่มีข้อมูล Measurements"}</td>
                 </tr>
               ) : (
                 measurementsData.map((m) => {
@@ -874,24 +906,6 @@ export default function EditPage() {
                         <strong>{m.number_alpl}</strong>
                       </td>
                       <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
-                        {m.nominal_x != null && m.nominal_y != null
-                          ? `${Number(m.nominal_x).toFixed(DP_MM)} / ${Number(m.nominal_y).toFixed(DP_MM)}`
-                          : "—"}
-                      </td>
-                      <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
-                        {m.upper_tol != null && m.lower_tol != null
-                          ? `+${Number(m.upper_tol).toFixed(DP_MM)} / -${Number(m.lower_tol).toFixed(DP_MM)}`
-                          : "—"}
-                      </td>
-                      {/* IPM ไม่เอา offset มาตัดสิน → คอลัมน์นี้กับ Offset X/Y เป็น "—"
-                          ค่ายังอยู่ใน DB ครบ (ดูได้จาก Export/Power BI) แค่ไม่เอามา
-                          แสดงเพราะไม่มีส่วนร่วมกับผล OK/NG ของแถวนั้นเลย */}
-                      <td className="td-derived">
-                        {isIpm ? "—"
-                          : m.offset_tol != null ? Number(m.offset_tol).toFixed(DP_OFF)
-                          : "ยังไม่ตั้ง"}
-                      </td>
-                      <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
                         {xyPair(
                           axisValue(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol, m.ok_x),
                           axisValue(m.value_y, m.nominal_y, m.upper_tol, m.lower_tol, m.ok_y),
@@ -903,6 +917,9 @@ export default function EditPage() {
                               offsetValue(m.offset_opx, m.offset_tol, m.ok_opx),
                               offsetValue(m.offset_opy, m.offset_tol, m.ok_opy),
                             )}
+                      </td>
+                      <td className="td-derived" style={{ whiteSpace: "nowrap" }}>
+                        {isIpm ? "—" : (m.offset_pos_op || "—")}
                       </td>
                       <td>
                         <span className={`result-badge ${cls}`}>{res}</span>
@@ -1050,7 +1067,7 @@ export default function EditPage() {
                     <div className="field-error">{fieldErrors.package_size}</div>
                   </div>
                   <div className="form-group">
-                    <label htmlFor="f-part_number">Part Number {reqMark}</label>
+                    <label htmlFor="f-part_number">Part Number</label>
                     {/* disabled จนกว่าจะมี Package Size ที่หา Part Number เจอ —
                         เลือกก่อนไม่ได้เพราะ catalog ของ Part Number ผูกกับ
                         Package Size อยู่ (ดู schema part_number) */}
@@ -1091,24 +1108,24 @@ export default function EditPage() {
                     <div className="field-error">{fieldErrors.handler}</div>
                   </div>
                   <div className="form-group">
-                    <label htmlFor="f-vendor">Vendor {reqMark}</label>
+                    <label htmlFor="f-vendor">Vendor</label>
                     <select id="f-vendor" name="vendor" defaultValue={pv("vendor")}>
                       {renderOptions(vendorOptions)}
                     </select>
                     <div className="field-error">{fieldErrors.vendor}</div>
                   </div>
                   <div className="form-group span-2">
-                    <label htmlFor="f-description">Description {reqMark}</label>
+                    <label htmlFor="f-description">Description</label>
                     <input type="text" id="f-description" name="description" defaultValue={pv("description")} />
                     <div className="field-error">{fieldErrors.description}</div>
                   </div>
                   <div className="form-group">
-                    <label htmlFor="f-po_number">PO Number {reqMark}</label>
+                    <label htmlFor="f-po_number">PO Number</label>
                     <input type="number" id="f-po_number" name="po_number" defaultValue={pv("po_number")} />
                     <div className="field-error">{fieldErrors.po_number}</div>
                   </div>
                   <div className="form-group">
-                    <label htmlFor="f-owner">Owner {reqMark}</label>
+                    <label htmlFor="f-owner">Owner</label>
                     <select id="f-owner" name="owner" defaultValue={pv("owner")}>
                       {renderOptions(ownerOptions)}
                     </select>

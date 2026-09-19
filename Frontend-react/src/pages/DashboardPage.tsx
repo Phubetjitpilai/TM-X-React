@@ -5,7 +5,9 @@ import { useSessionState, sessionStateLabel } from "../hooks/useSessionState";
 import { useToast } from "../components/Toast";
 import { useDialog } from "../components/Dialog";
 import AlplIcon from "../components/AlplIcon";
-import { axisValue, offsetValue, xyPair, DP_MM, DP_OFF } from "../components/measurementCells";
+// DP_OFF ถูกถอดออกตอนย้ายคอลัมน์ Offset Tol ไปตาราง Parts — ที่เหลือในไฟล์นี้
+// ใช้แค่ DP_MM · ตัวจัดรูปของ offset อยู่ใน offsetValue() ซึ่งเรียก DP_OFF เองข้างใน
+import { axisValue, offsetValue, xyPair, DP_MM } from "../components/measurementCells";
 import { ReportAxis } from "../components/dashboard/ReportAxis";
 import OffsetMap from "../components/dashboard/OffsetMap";
 import IpmSummaryModal, { type IpmSummaryRow } from "../components/dashboard/IpmSummaryModal";
@@ -1513,7 +1515,8 @@ export default function DashboardPage() {
           <div className="card">
             <div className="card-header">
               <div className="card-title">
-                Measurements <span className="count">({measTotal})</span>
+              
+              Measurements History <span className="count">({measTotal})</span>
               </div>
             </div>
             <div className="filter-bar">
@@ -1530,19 +1533,23 @@ export default function DashboardPage() {
                     <th>ID</th>
                     <th>Session</th>
                     <th>ALPL</th>
-                    {/* เกณฑ์ที่ใช้ตัดสินการวัดครั้งนั้น — แหล่งขึ้นกับโหมด
-                        (IPM → package_size · New/Rework → part_number) backend
-                        เลือกให้แล้วใน MEASUREMENTS_SELECT
-                        วางไว้ "ก่อน" Value X เพื่อให้อ่านไล่ซ้าย→ขวาได้ว่า
-                        "เกณฑ์เท่านี้ วัดได้เท่านี้ ผลเลยเป็นแบบนี้" */}
-                    <th className="th-spec">Nominal X / Y</th>
-                    <th className="th-spec">Tol (+/-)</th>
-                    <th className="th-spec">Offset Tol</th>
+                    {/* เกณฑ์ตัดสิน (Nominal / Tol / Offset Tol) ย้ายไปอยู่ตาราง Parts
+                        หน้า Edit แล้ว — เป็นสเปกของ "ชิ้นงาน" ไม่ใช่ของ "การวัด
+                        ครั้งนั้น" · ค่ายังถูกดึงมาใน MEASUREMENTS_SELECT อยู่ เพราะ
+                        Value X/Y กับ Offset X/Y ใช้มันระบายสีว่าเกินสเปกไหม
+                        (ดู axisValue / offsetValue) **ห้ามถอดออกจาก SELECT หรือ type**
+                        อยากดูเกณฑ์ที่ใช้ตอนวัดจริงย้อนหลัง → Export CSV หรือกดที่แถว
+                        เพื่อเปิด Report modal */}
                     {/* รวม X กับ Y ไว้ช่องเดียว — ระบายสีแยกทีละแกน จะได้เห็น
                         ทันทีว่าแกนไหนเป็นตัวที่ทำให้ทั้งแถวเป็น NG
                         (ตาราง Edit ใช้ชุดเดียวกัน ดู measurementCells.tsx) */}
                     <th>Value X/Y</th>
                     <th>Offset X/Y</th>
+                    {/* ทิศที่เยื้อง — `offset_pos_op` เป็นรหัส 9 ค่าที่ backend
+                        คำนวณให้ (TOP / BOTTOM / LEFT / … / CENTER) ไม่ได้เดาจาก
+                        เครื่องหมายของตัวเลข · เงื่อนไขเดียวกับ Offset X/Y คือ
+                        IPM ไม่เอา offset มาตัดสิน จึงขึ้น "—" ทั้งคอลัมน์ */}
+                    <th>Offset Position</th>
                     <th>Result</th>
                     <th>Note</th>
                     <th>Operator</th>
@@ -1554,7 +1561,7 @@ export default function DashboardPage() {
                 <tbody>
                   {measurements.length === 0 ? (
                     <tr className="empty-row">
-                      <td colSpan={15}>{measFilterAlplRef.current || measFilterDate ? "ไม่พบ Measurement ที่ตรงกับตัวกรอง" : "No measurements"}</td>
+                      <td colSpan={12}>{measFilterAlplRef.current || measFilterDate ? "ไม่พบ Measurement ที่ตรงกับตัวกรอง" : "No measurements"}</td>
                     </tr>
                   ) : (
                     measurements.map((m) => {
@@ -1569,29 +1576,6 @@ export default function DashboardPage() {
                           <td>{m.measurement_id}</td>
                           <td>{m.session_id ?? "—"}</td>
                           <td>{m.number_alpl}</td>
-                          <td className="td-spec">
-                            {m.nominal_x != null && m.nominal_y != null
-                              ? `${Number(m.nominal_x).toFixed(DP_MM)} / ${Number(m.nominal_y).toFixed(DP_MM)}`
-                              : "—"}
-                          </td>
-                          <td className="td-spec">
-                            {m.upper_tol != null && m.lower_tol != null
-                              ? `+${Number(m.upper_tol).toFixed(DP_MM)} / -${Number(m.lower_tol).toFixed(DP_MM)}`
-                              : "—"}
-                          </td>
-                          {/* ── โหมด IPM ไม่เอา offset มาตัดสิน → 2 คอลัมน์นี้เป็น "—"
-                              ค่ายังอยู่ใน DB ครบ (ดูได้จาก Export/Power BI) แค่ไม่
-                              เอามาแสดงในตารางที่คนหน้าเครื่องใช้ตัดสินใจ เพราะมัน
-                              ไม่มีส่วนร่วมกับผล OK/NG ของแถวนั้นเลย — กติกาเดียวกับ
-                              ที่ Live Telemetry กับ ReportModal ซ่อนการ์ด Offset
-
-                              ⚠ ดูจาก `measure_type` ของ **แถวนั้น** ไม่ใช่โหมดของ
-                                session ปัจจุบัน — ตารางแสดงข้อมูลย้อนหลังปนกันทุกโหมด */}
-                          <td className="td-spec">
-                            {isIpm ? "—"
-                              : m.offset_tol != null ? Number(m.offset_tol).toFixed(DP_OFF)
-                              : "ยังไม่ตั้ง"}
-                          </td>
                           <td style={{ whiteSpace: "nowrap" }}>
                             {xyPair(
                               axisValue(m.value_x, m.nominal_x, m.upper_tol, m.lower_tol, m.ok_x),
@@ -1608,6 +1592,9 @@ export default function DashboardPage() {
                                   offsetValue(m.offset_opx, m.offset_tol, m.ok_opx),
                                   offsetValue(m.offset_opy, m.offset_tol, m.ok_opy),
                                 )}
+                          </td>
+                          <td style={{ whiteSpace: "nowrap" }}>
+                            {isIpm ? "—" : (m.offset_pos_op || "—")}
                           </td>
                           <td>
                             <span className={`result-badge ${cls}`}>{res}</span>
