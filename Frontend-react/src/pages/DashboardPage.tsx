@@ -279,6 +279,20 @@ export default function DashboardPage() {
   >(null);
   const [mtLeft, setMtLeft] = useState(MT_ANSWER_TIMEOUT);
   const mtTimerRef = useRef<number | null>(null);
+
+  /** modal "ถาดเต็ม" — Pi หยุดรอให้คนมาเคลียร์ถาดก่อนวัดชิ้นถัดไป
+   *  (ทำงานเมื่อ `TRAY_CAPACITY` ใน .env > 0 · ค่าปัจจุบัน 8 ชิ้น)
+   *
+   *  ⚠⚠ **ห้ามใส่ตัวนับถอยหลังให้ตัวนี้** ต่างจาก `mtModal` ข้างบนโดยตั้งใจ —
+   *    `mtModal` นับถอยหลัง 60 วิแล้วหยุด session เองเพราะมันคือการวัดที่พัง
+   *    ไปแล้ว ปล่อยค้างไม่ได้ · ส่วนถาดเต็มเป็น **จุดพักตามแผน** คนต้องเดินไป
+   *    ยกของออกจากถาดจริง ๆ ใช้เวลาไม่แน่นอน ตั้งเพดานเวลาเมื่อไหร่ก็จะมีวันที่
+   *    session ตายกลางคันเพราะคนเดินช้าไป 10 วิ แล้วของทั้งถาดต้องวัดใหม่
+   *    (ฝั่ง Pi ก็รอไม่จำกัดเวลาเหมือนกัน — ดู `ask_tray_clear`)
+   */
+  const [trayModal, setTrayModal] = useState<
+    { session_id: number; piece?: number; target?: number; capacity?: number } | null
+  >(null);
   /** นับว่าส่งคำตอบใน modal ไปที่ Pi ไม่สำเร็จติดกันกี่ครั้ง
    *
    *  ใช้ `useRef` ไม่ใช่ `useState` เพราะเป็นค่าที่ใช้ **ตัดสินใจภายใน** อย่างเดียว
@@ -371,6 +385,7 @@ export default function DashboardPage() {
     session_timeout: () => onSessionTimeout(),
     image_updated: (d) => onImageUpdated(d),
     measure_timeout: (d) => onMeasureTimeout(d),
+    tray_full: (d) => setTrayModal(d),
     station_event: (d) => onStationEvent(d),
   });
   const stationStatusRef = useRef(stationStatus);
@@ -828,11 +843,46 @@ export default function DashboardPage() {
     }
   }
 
+  /** ตอบ modal "ถาดเต็ม" — วัดต่อ หรือ หยุด
+   *
+   *  ⚠ ปิด modal **หลัง** request สำเร็จเท่านั้น ต่างจาก `resolveMeasureTimeout`
+   *    ที่ปิดก่อนได้เพราะมีตัวนับถอยหลังบังคับปิดอยู่แล้ว · ตัวนี้ถ้าปิดไปก่อน
+   *    แล้วคำสั่งส่งไม่ถึง Pi ผู้ใช้จะเหลือหน้าจอเปล่าที่ไม่มีปุ่มอะไรให้กด
+   *    ทั้งที่เครื่องยังยืนรอคำตอบอยู่จริง — ไม่มีทางไปต่อนอกจากกด Stop
+   */
+  async function resolveTrayFull(action: "resume" | "stop") {
+    const sid = trayModal?.session_id ?? null;
+    if (sid == null) { setTrayModal(null); return; }
+
+    // หยุด = เดินเส้นทางเดียวกับปุ่ม Stop ทุกประการ (ทางหยุด session มีทางเดียว)
+    if (action === "stop") { setTrayModal(null); await doStopSession(sid); return; }
+
+    try {
+      await apiPost("/api/session/resume", { session_id: sid });
+      setTrayModal(null);
+    } catch (e: any) {
+      const msg = String(e?.message ?? "");
+      // 404 = คำถามหมดอายุ (session ถูกหยุดจากที่อื่นไปแล้ว) — ปิด modal ได้เลย
+      //       ไม่มีใครรออยู่แล้ว ค้างไว้มีแต่ให้กดแล้วได้ 404 ซ้ำ ๆ
+      if (msg.includes("404")) {
+        setTrayModal(null);
+        showToast("session นี้ถูกหยุดไปแล้ว");
+        return;
+      }
+      // 502 = backend ยิง /command ไปแล้วแต่ Pi ไม่รับ — Pi ยังบล็อกรออยู่จริง
+      //       ต้องคง modal ไว้ให้กดซ้ำได้ ไม่งั้นเครื่องค้างโดยไม่มีทางสั่งต่อ
+      showToast(`สั่งวัดต่อไม่สำเร็จ: ${msg} — กดใหม่อีกครั้ง หรือกดหยุดการวัด`);
+    }
+  }
+
   function onSessionStopped(d?: { agent_error?: string | null }) {
     resetTelemetry();
     resultsRef.current = [];
     updateSession({ state: "stopped" });
     clearAllQueuesAndForms();
+    // session จบแล้ว ไม่มีใครรอคำตอบอีก — ถ้าไม่ปิด modal จะค้างบนจอโดยที่
+    // กดปุ่มไหนก็ได้ 404 (backend ล้าง tray_pending ไปพร้อมกับ session แล้ว)
+    setTrayModal(null);
 
     // แท็บที่ **ไม่ได้เป็นคนกด Stop** ก็ต้องรู้ด้วยว่าเครื่องอาจยังวัดต่ออยู่
     // (คนกดได้เห็นจาก response ของตัวเองไปแล้วใน doStopSession)
@@ -848,6 +898,7 @@ export default function DashboardPage() {
     // เก็บ session_id ไว้ "ก่อน" clearAllQueuesAndForms() — ตัวนั้นล้าง state ทิ้ง
     const sid = d.session_id ?? sessionRef.current.session_id;
     resetTelemetry();
+    setTrayModal(null);      // เหตุผลเดียวกับ onSessionStopped
     updateSession({ state: "stopped", measured_count: d.measured, target_count: d.target });
     clearAllQueuesAndForms();
     showIpmSummary(sid);
@@ -1670,6 +1721,47 @@ export default function DashboardPage() {
       {/* สรุปผล IPM ตอนวัดครบ — ตารางสำหรับคัดลอกไปวางใน Excel */}
       {ipmSummary && ipmSummary.length > 0 && (
         <IpmSummaryModal rows={ipmSummary} onClose={() => setIpmSummary(null)} />
+      )}
+
+      {/* ── ถาดเต็ม — รอคนมาเคลียร์ ─────────────────────────────────────────
+          ⚠⚠ **ไม่มีตัวนับถอยหลัง** ต่างจาก modal measure_timeout ข้างล่างโดยตั้งใจ
+            เคลียร์ถาดเป็นงานมือที่ใช้เวลาไม่แน่นอน (เดินไปหยิบถาดใหม่ ยกของออก
+            นับชิ้น อาจติดงานอื่นกลางทาง) ถ้าตั้งเพดานเวลาไว้จะมีวันที่ session
+            ตายกลางคันเพราะคนเดินช้าไปนิดเดียว แล้วของทั้งถาดที่วัดไปแล้วเสียเปล่า
+            — ฝั่ง Pi (`ask_tray_clear`) ก็รอไม่จำกัดเวลาเหมือนกัน
+
+          ⚠ ไม่มีปุ่มปิด (✕) และคลิกพื้นหลังปิดไม่ได้ ด้วยเหตุผลเดียวกับ
+            measure_timeout — Pi กำลังบล็อกรอคำตอบอยู่จริง ปิดทิ้งเฉย ๆ
+            เครื่องจะค้างโดยไม่มีใครรู้ ทางออกมี 2 ทางคือวัดต่อหรือหยุด         */}
+      {trayModal && (
+        <div className="modal-overlay open">
+          <div className="pe-modal-box" style={{ maxWidth: 460 }}>
+            <div className="pe-modal-header">
+              <div className="card-title">🧺 ถาดเต็มแล้ว</div>
+            </div>
+            <div style={{ fontSize: "0.9rem", lineHeight: 1.7, marginBottom: "0.75rem" }}>
+              วัดครบ <strong>{trayModal.capacity ?? "—"}</strong> ชิ้นแล้ว
+              {" "}(สะสม <strong>{trayModal.piece ?? "—"}/{trayModal.target ?? "—"}</strong> ชิ้น)
+              <br />กรุณาเคลียร์ถาดรับชิ้นงาน แล้วกด &ldquo;วัดต่อ&rdquo;
+            </div>
+            <div style={{
+              fontSize: "0.8rem", lineHeight: 1.6, color: "var(--muted)",
+              background: "var(--surface2)", border: "1px solid var(--border)",
+              borderRadius: "var(--radius)", padding: "0.6rem 0.75rem", marginBottom: "1.25rem",
+            }}>
+              เครื่องหยุดรออยู่ <strong>ไม่มีกำหนดเวลา</strong> — ใช้เวลาได้ตามต้องการ
+              ชิ้นที่วัดไปแล้วถูกบันทึกครบแล้ว
+            </div>
+            <div className="entry-actions" style={{ justifyContent: "flex-end" }}>
+              <button type="button" className="btn-edit-entry" onClick={() => resolveTrayFull("stop")}>
+                หยุดการวัด
+              </button>
+              <button type="button" className="btn-submit-entry" onClick={() => resolveTrayFull("resume")}>
+                ▶ เคลียร์ถาดแล้ว วัดต่อ
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Measure timeout ────────────────────────────────────────────────
