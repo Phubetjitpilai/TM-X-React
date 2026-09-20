@@ -81,6 +81,8 @@ MOCK_FAIL_ROUNDS = int(os.getenv("MOCK_FAIL_ROUNDS", 1))
 # ── ถามผู้ใช้ (ต้องตรงกับ Pi.py ทุกประการ) ──────────────────────────────────
 # รอคำตอบจากคนได้นานสุดกี่วิ — ต้อง **มากกว่า** ตัวนับถอยหลังในหน้าเว็บ (60 วิ)
 ASK_USER_TIMEOUT    = float(os.getenv("ASK_USER_TIMEOUT", 70))
+# ⚠ ต้องอ่านจากคีย์เดียวกับ Pi — ถ้าตั้งคนละค่ากันจะเทสต์ไม่ตรงกับเครื่องจริง
+TRAY_CAPACITY       = int(os.getenv("TRAY_CAPACITY", 0))
 MAX_ASK_USER_ROUNDS = int(os.getenv("MAX_ASK_USER_ROUNDS", 3))
 
 # ── State ───────────────────────────────────────────────────────────────────
@@ -337,6 +339,39 @@ def ask_user(session_id, piece, target) -> str:
         return _answer_action or "stop"
 
 
+def ask_tray_clear(session_id, piece, target) -> str:
+    """ถาดเต็ม — เด้งบนหน้าเว็บให้คนมาเคลียร์ แล้วบล็อกรอจนกว่าจะกด "วัดต่อ"
+
+    ⚠ **ไม่มี timeout** ต่างจาก `ask_user` ข้างบนโดยตั้งใจ — ต้องตรงกับ
+      `ask_tray_clear` ใน Pi ทุกประการ เคลียร์ถาดเป็นงานมือที่ใช้เวลาไม่แน่นอน
+      ตั้งเพดานเวลาเมื่อไหร่ session ก็จะตายกลางคันเพราะคนเดินช้าไปนิดเดียว
+    """
+    global _answer_action
+    with _answer_lock:
+        _answer_action = None
+        _answer_event.clear()
+
+    try:
+        r = httpx.post(f"{BACKEND_URL}/api/tray-full",
+                       json={"session_id": session_id, "piece": piece,
+                             "target": target, "capacity": TRAY_CAPACITY},
+                       timeout=5)
+        if r.status_code != 200:
+            print(f"   ⚠️ Backend ไม่รับคำถาม (HTTP {r.status_code}) — ถือว่าหยุด")
+            return "stop"
+    except Exception as exc:
+        print(f"   ⚠️ ถามผู้ใช้ไม่ได้: {exc} — ถือว่าหยุด")
+        return "stop"
+
+    print(f"   🧺 ถาดเต็มแล้ว ({TRAY_CAPACITY} ชิ้น) — รอผู้ใช้เคลียร์ถาด (ไม่มีกำหนดเวลา)")
+    while is_running:
+        if _answer_event.wait(1.0):
+            with _answer_lock:
+                return _answer_action or "stop"
+    print("   ⏹ ได้รับคำสั่ง Stop ระหว่างรอเคลียร์ถาด")
+    return "stop"
+
+
 def mock_should_fail(mode: str, piece: int, rounds: int) -> bool:
     """โหมดนี้ควรทำให้ชิ้นที่ `piece` พังในรอบที่ `rounds` ไหม (rounds เริ่มที่ 0)
 
@@ -466,6 +501,16 @@ def measurement_flow(session_id, groups, target_count):
         if not is_running:
             print("\n⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
             break
+
+        # ── ถาดเต็มหรือยัง — ต้องตรงกับ Pi ทุกประการ (เงื่อนไข + ตำแหน่ง) ──
+        # เช็คที่หัวลูปเหมือนกัน จึงไม่มีทางถามหลังชิ้นสุดท้ายโดยอัตโนมัติ
+        if TRAY_CAPACITY and piece > 1 and (piece - 1) % TRAY_CAPACITY == 0:
+            print(f"\n🧺 วัดครบ {TRAY_CAPACITY} ชิ้นแล้ว ({piece-1}/{target_count}) — ถาดเต็ม")
+            if ask_tray_clear(session_id, piece - 1, target_count) != "resume":
+                stop_reason = (f"ผู้ใช้หยุดการวัดตอนเคลียร์ถาด "
+                               f"(วัดไปแล้ว {piece-1}/{target_count} ชิ้น)")
+                break
+            print(f"   ▶ เคลียร์ถาดแล้ว — วัดต่อชิ้นที่ {piece}")
 
         if template_name != prev_template:
             print(f"\n🔄 สลับโปรแกรมวัด → PW,1,{template_name}  (Pi จริงยิงคำสั่งนี้ตรงนี้)")
@@ -640,6 +685,16 @@ async def command(req: CommandRequest):
         print("\n📥 ได้รับคำสั่ง Accept จาก Backend")
         with _answer_lock:
             _answer_action = "accept"
+        _answer_event.set()
+
+    elif req.action == "resume":
+        # ผู้ใช้เคลียร์ถาดแล้วกด "วัดต่อ" — ปลด ask_tray_clear() ที่บล็อกรออยู่
+        # ⚠ ต้องมีให้ตรงกับ Pi เสมอ ถ้า mock ไม่รู้จัก action นี้จะตอบ 400 แล้ว
+        #   เทสต์ด้วย mock จะค้างตลอดกาลทั้งที่เครื่องจริงผ่าน (กลับด้านกับบั๊ก
+        #   `pause` ที่เคยเจอ — mock รองรับแต่ Pi ไม่รองรับ)
+        print("\n▶ ได้รับคำสั่ง Resume จาก Backend — ผู้ใช้เคลียร์ถาดแล้ว")
+        with _answer_lock:
+            _answer_action = "resume"
         _answer_event.set()
 
     elif req.action == "trigger":

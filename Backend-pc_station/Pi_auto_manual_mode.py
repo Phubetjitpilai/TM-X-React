@@ -28,11 +28,14 @@ TIMEOUT_SEC = 1
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [Pi] %(message)s")
 log = logging.getLogger(__name__)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), "..", ".env"))
 TMX_IP = os.getenv("TMX_HOST", "192.168.10.11")
 TMX_PORT = int(os.getenv("TMX_PORT", 8600))
 BUFFER_SIZE = 1024
+
 
 def find_mega_port() -> str | None:
     """ค้นหาพอร์ต USB ที่เชื่อมต่อกับ Mega 2560 อัตโนมัติ"""
@@ -121,6 +124,12 @@ _answer_lock   = threading.Lock()
 # ตัวนี้เป็นแค่ตาข่ายกันค้างถาวรตอนหน้าเว็บไม่ได้เปิดอยู่เลย
 ASK_USER_TIMEOUT = float(os.getenv("ASK_USER_TIMEOUT", 70))
 
+# ถาดรับชิ้นงานจุได้กี่ชิ้น — วัดครบเท่านี้แล้วหยุดรอให้คนมาเคลียร์ถาด
+# 0 = ปิดฟีเจอร์ (วัดรวดเดียวจนครบ target_count)
+#
+# ⚠ **ไม่มีคู่ TIMEOUT** ต่างจาก ASK_USER_TIMEOUT ข้างบนโดยตั้งใจ — ดู ask_tray_clear
+TRAY_CAPACITY = int(os.getenv("TRAY_CAPACITY", 0))
+
 # คำสั่งล้างค่าเก่า — คู่มือหน้า 5-9 พิมพ์ 2 แบบไม่ตรงกันเอง ต้องลองเอง
 CLEAR_CANDIDATES = ["MRS", "MSR"]
 _clear_cmd = None    # None=ยังไม่ได้ลอง · "MRS"/"MSR"=ตัวที่ใช้ได้ · False=ไม่ผ่านทั้งคู่
@@ -150,7 +159,6 @@ GM_IDX_OFFSET_Y = _idx("GM_IDX_OFFSET_Y", "7")
 # กด Start → NameError
 is_running = False          # ตอนนี้มี session กำลังวัดอยู่ไหม (ไม่ใช่ "สคริปต์รันอยู่ไหม")
 current_session_id = None   # session ที่กำลังวัด (None = idle) heartbeat แนบไปด้วย
-_tmx_sock = None            # socket ที่ค้างไว้คุย TM-X ให้ stop handler ยิง S0 ได้
 _hb_last_ok = time.time()   # เวลาที่ heartbeat ยิงออกสำเร็จครั้งล่าสุด
 
 # "กระดิ่ง" ที่บอกว่าชิ้นงานเข้าที่พร้อมวัดแล้ว — ใช้เฉพาะโหมด manual
@@ -164,14 +172,14 @@ _waiting_for_trigger = False
 
 # โหมด trigger ของ session ที่กำลังวัด — "manual" (ปุ่มบนเว็บ) | "auto" (MCU)
 #
-# ⚠ **ล็อกทั้ง session ห้ามสลับกลางคัน** — `current_pkg` ใน command_flow จำว่า
-#   บอก <PKG:...> ให้ MCU ไปแล้ว ถ้าสลับโหมดกลางรอบ MCU จะพลาด <PKG> ของกลุ่ม
-#   ที่ข้ามไปตอนอยู่โหมด manual แล้วตั้งฟิกซ์เจอร์ผิดขนาดโดยไม่มีใครรู้
+# ⚠ **ล็อกทั้ง session ห้ามสลับกลางคัน** — `send_package_size_to_mcu` ไม่ส่ง
+#   <PKG:...> เลยเมื่ออยู่โหมด manual ถ้าสลับโหมดกลางรอบ MCU จะพลาด <PKG> ของ
+#   ชิ้นที่ผ่านไปตอนอยู่โหมด manual แล้วตั้งฟิกซ์เจอร์ผิดขนาดโดยไม่มีใครรู้
 #
 # ค่าตั้งต้นเป็น "auto" เพราะเป็นโหมดใช้งานจริง · payload รุ่นเก่าที่ไม่ส่ง
 # trigger_mode มาจะได้ auto แล้วยืนรอ Serial เงียบ ๆ จึงต้อง log ทุกรอบ
 # ตอนเริ่ม session (ดู command_flow) ไม่งั้นจะหาสาเหตุไม่เจอ
-_trigger_mode = "์None"
+_trigger_mode = "None"
 
 http_app = FastAPI()
 
@@ -228,14 +236,17 @@ async def command(req: CommandRequest):
                 400,
                 f"trigger_mode '{req.trigger_mode}' ไม่ถูกต้อง — ต้องเป็น 'manual' หรือ 'auto'",
             )
-        # โหมด auto ต้องมี Mega จริง ๆ · เช็คตรงนี้เพื่อให้ผู้ใช้เห็น error บน
-        # หน้าเว็บทันทีที่กด Start แทนที่จะให้ session เริ่มแล้วค้างรอสัญญาณ
+
         if req.trigger_mode == "auto" and not open_mega():
             raise HTTPException(
                 503,
                 "โหมด auto ต้องต่อ Arduino/Mega ผ่าน USB — หาพอร์ตไม่เจอ "
                 "(ตรวจสาย USB หรือเลือกโหมด manual แทน)",
             )
+        elif req.trigger_mode =="auto":
+            start_msg ="<START>\n"
+            mega_ser.write(start_msg.encode("utf-8"))
+            log.info(f" [TX -> Mega] {start_msg.strip()}")
 
         with _answer_lock:
             _answer_action = None
@@ -263,7 +274,18 @@ async def command(req: CommandRequest):
         log.info("📥 ได้รับคำสั่ง Accept จาก Backend")
         with _answer_lock:
             _answer_action = "accept"
-        _answer_event.set()    
+        _answer_event.set()
+
+    elif req.action == "resume":
+        # ผู้ใช้เคลียร์ถาดแล้วกด "วัดต่อ" — ปลดเธรดวัดที่บล็อกใน ask_tray_clear
+        #
+        # ⚠ ห้ามแตะ is_running เหมือน retry/accept — session ไม่เคยหยุด แค่ยืนรอ
+        #   อยู่เฉย ๆ ถ้าเซ็ต is_running ใหม่ตรงนี้จะทับสถานะที่ Stop เพิ่งเปลี่ยนไป
+        #   (เคสกด Stop กับ Resume ไล่หลังกันเสี้ยววินาที)
+        log.info("▶ ได้รับคำสั่ง Resume จาก Backend — ผู้ใช้เคลียร์ถาดแล้ว")
+        with _answer_lock:
+            _answer_action = "resume"
+        _answer_event.set()
 
 
     elif req.action == "trigger":
@@ -316,7 +338,7 @@ def heartbeat_loop():
                 json={
                     "session_id": current_session_id,
                     # 2 ตัวนี้เป็นตัวคุมปุ่ม ⚡ บนหน้าเว็บ
-                    #   trigger_mode        → จะ "แสดงปุ่มไหม"
+                    #   00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000                                                                                                                                                                                                                     → จะ "แสดงปุ่มไหม"
                     #   waiting_for_trigger → จะ "กดได้ไหม"
                     # backend เก็บไว้ใน memory แล้วแนบไปกับ /api/session/state
                     "waiting_for_trigger": _waiting_for_trigger,
@@ -435,6 +457,7 @@ def wait_for_trigger_web():
 def wait_for_trigger():
     """แยกทางตามโหมดของ session นี้ — ตัวเรียกไม่ต้องรู้ว่ามาจากไหน"""
     if _trigger_mode == "auto":
+        print("Auto")
         return wait_for_trigger_serial()
     return wait_for_trigger_web()
 
@@ -643,6 +666,7 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
         resp, ok = send_recv(sock, "GM,3,0", timeout=2.0)
         polls += 1
         tools = parse_gm(resp) if ok else None
+        log.info(tools)
         if tools and has_real_value(tools):
             tools_new = clean_tools(tools)
             log.info(tools_new)
@@ -682,44 +706,80 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
     return "UNKNOWN", None, None, None, None, None, None, None, None
 
 #วนไปถามว่าพร้อมรับ result ยัง ให้ MCU set Flag เอา idle(ยังไม่มีชิ้นงาน) -> obj_is_ready(เมื่อวางชิ้นงานแล้ว) -> waiting_for_result(พร้อมรับ result) -> idle(เสร็จการวัด 1 ชิ้น)
-def send_result_to_mcu(result, mcu_timeout=MCU_TIMEOUT):
+def send_result_to_mcu(result) -> bool:
+    """ส่งผลตัดสินให้ MCU ไปคัดแยกชิ้นงาน — คืน True เมื่อส่งสำเร็จ
+
+    ⚠ ห้าม raise — ผู้เรียก (`command_flow`) เช็คค่าที่คืนแล้วตั้ง `stop_reason`
+      เอง ถ้า raise ออกไปจะตกไปที่ `except` ก้อนใหญ่แล้วได้ข้อความแนว
+      "session พังกลางทาง — SerialException: ..." ซึ่งคนหน้างานอ่านไม่รู้เรื่อง
+      และหน้าเว็บไม่เด้งอะไรเลย (onSessionStopped อ่านแค่ agent_error)
+    """
+    global mega_ser
 
     icon = {"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
     if _trigger_mode != "auto":
         log.info("   🔀 (manual) ไม่ได้ส่งผลให้ MCU: %s %s", icon, result)
         return True
 
-    deadline = time.time() + mcu_timeout
-    while time.time() < deadline:
-        # กำหนด Token ที่จะส่งกลับหา Mega ตามผลลัพธ์
-        if result == "OK":
-            ack_msg = "<MEASURE_OK>\n"
-        elif result == "NG":
-            ack_msg = "<MEASURE_NG>\n"
-        else:
-            break
-        log.info("   🔀 → MCU: %s %s", icon, result)
-        mega_ser.write(ack_msg.encode("utf-8"))
-        log.info(f"   [TX → Mega] {ack_msg.strip()}")
-        return True
-    return False
+    elif not open_mega():
+        log.error("   ❌ ยังไม่ได้ต่อ Arduino/Mega — ส่งผลไม่ได้")
+        report("MCU_NOT_CONNECTED",
+               "ยังไม่ได้ต่อ Arduino/Mega — ตรวจสาย USB แล้วกด Start ใหม่")
+        return False
+    # กำหนด Token ที่จะส่งกลับหา Mega ตามผลลัพธ์
+    if result == "OK":
+        ack_msg = "<MEASURE_OK>\n"
+    elif result == "NG":
+        ack_msg = "<MEASURE_NG>\n"
+    else:
+        return False
 
-def send_package_size_to_mcu(package_size,mcu_timeout=MCU_TIMEOUT):
-    # เราจะได้รับมาเป็น  String เช่น 8x8
-    #
-    # โหมด manual ไม่มี MCU ให้ตั้งฟิกซ์เจอร์ — คืน True ทันที
-    # (`current_pkg` ฝั่งผู้เรียกยังเดินตามปกติ ไม่ต้องแก้ตรรกะข้ามกลุ่ม)
+    log.info("   🔀 → MCU: %s %s", icon, result)
+    try:
+        mega_ser.write(ack_msg.encode("utf-8"))
+    except Exception as exc:
+        log.error("   ❌ เขียนลง Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
+        report("MCU_WRITE_FAILED",
+               f"ส่งผลการวัดให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
+               f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
+        # ⚠ ต้องล้าง handle ทิ้ง — pyserial ยังรายงาน is_open == True ต่อไป
+        #   แม้อุปกรณ์หลุดแล้ว ถ้าไม่ล้าง open_mega() จะตอบ True ตลอด
+        #   แล้วต้องรีสตาร์ทสคริปต์ทั้งตัวถึงจะกลับมาใช้ได้
+        try:
+            mega_ser.close()
+        except Exception:
+            pass
+        mega_ser = None
+        return False
+
+    log.info(f"   [TX → Mega] {ack_msg.strip()}")
+    return True
+
+def send_package_size_to_mcu(package_size) -> bool:
+    global mega_ser
     if _trigger_mode != "auto":
         log.info("   🔀 (manual) ไม่ได้บอกขนาดชิ้นงานให้ MCU: %s", package_size)
         return True
-
-    deadline = time.time() + mcu_timeout
-    while time.time() < deadline:
-        ack_msg  = f"<PKG:{package_size}>\n"
-        mega_ser.write(ack_msg.encode("utf-8"))
+    elif not open_mega():
+        log.error("   ❌ ยังไม่ได้ต่อ Arduino/Mega")
+        report("MCU_NOT_CONNECTED", "ยังไม่ได้ต่อ Arduino/Mega — ตรวจสาย USB")
+        return False
+    else:
+        ack_msg = f"<PKG:{package_size}>\n"
+        try:
+            mega_ser.write(ack_msg.encode("utf-8"))
+        except Exception as exc:
+            log.error("   ❌ เขียนลง Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
+            report("MCU_WRITE_FAILED",
+                   f"ส่งขนาดชิ้นงานให้ MCU ไม่สำเร็จ ({type(exc).__name__}) — ตรวจสาย USB")
+            try:
+                mega_ser.close()
+            except Exception:
+                pass
+            mega_ser = None          # ← กด Start ใหม่แล้วเปิดพอร์ตใหม่ได้ ไม่ต้องรีสตาร์ท
+            return False
         log.info(f"   [TX → Mega] {ack_msg.strip()}")
-        return True
-    return False
+        return True                  # ← บรรทัดที่ขาดไป
 
 def wait_for_measurement(session_id, count_before, timeout=MEASURE_TIMEOUT):
 
@@ -773,6 +833,51 @@ def ask_user(session_id, piece, target) -> str:
 
     with _answer_lock:
         return _answer_action or "stop"
+
+
+def ask_tray_clear(session_id, piece, target) -> str:
+    """ถาดเต็ม — บอกผู้ใช้ให้มาเคลียร์ แล้วรอจนกว่าจะกด "วัดต่อ"
+
+    คืน `"resume"` เมื่อผู้ใช้กดวัดต่อ · อย่างอื่นทั้งหมดถือว่าหยุด
+
+    ⚠ **ไม่มี timeout โดยตั้งใจ** ต่างจาก `ask_user` ที่รอแค่ ASK_USER_TIMEOUT
+      แล้วถือว่า stop — เคลียร์ถาดเป็นงานมือที่ใช้เวลาไม่แน่นอน (เดินไปหยิบถาด
+      ใหม่ ยกของออก นับชิ้น อาจติดงานอื่นกลางทาง) ตั้งเพดานเวลาเมื่อไหร่ก็จะมี
+      วันที่ session ตายกลางคันเพราะคนเดินช้าไป 10 วิ แล้วของที่วัดไปแล้วทั้งถาด
+      ต้องมาเริ่มใหม่ · `ask_user` ต่างออกไปเพราะมันคือการวัดที่พังไปแล้ว
+      ปล่อยค้างไม่ได้
+
+    ⚠ ห้ามใช้ `_answer_event.wait()` แบบไม่มีพารามิเตอร์ — จะบล็อกจนกว่าจะมีคน
+      ตอบเท่านั้น กด Stop บนหน้าเว็บแล้วเธรดนี้จะไม่มีวันตื่น จึงตื่นทุก 1 วิ
+      มาเช็ค `is_running` ด้วย (Stop จาก backend เซ็ต flag นี้เป็น False)
+    """
+    global _answer_action
+    with _answer_lock:
+        _answer_action = None
+        _answer_event.clear()
+
+    try:
+        resp = httpx.post(
+            f"{BACKEND_URL}/api/tray-full",
+            json={"session_id": session_id, "piece": piece, "target": target,
+                  "capacity": TRAY_CAPACITY},
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            log.info("   ⚠️ Backend ไม่รับคำถาม (HTTP %s) — ถือว่าหยุด", resp.status_code)
+            return "stop"
+    except Exception as exc:
+        log.info("   ⚠️ ถามผู้ใช้ไม่ได้: %s — ถือว่าหยุด", exc)
+        return "stop"
+
+    log.info("   🧺 ถาดเต็มแล้ว (%s ชิ้น) — รอผู้ใช้เคลียร์ถาดแล้วกด 'วัดต่อ' "
+             "(ไม่มีกำหนดเวลา)", TRAY_CAPACITY)
+    while is_running:
+        if _answer_event.wait(1.0):
+            with _answer_lock:
+                return _answer_action or "stop"
+    log.info("   ⏹ ได้รับคำสั่ง Stop ระหว่างรอเคลียร์ถาด")
+    return "stop"
 
 def handle_error(kind, session_id, piece, target, detail, rounds) -> bool:
     report(f"{kind}_FAILED",
@@ -847,7 +952,7 @@ def post_measurement_from_pi(session_id, piece, x, y, horizon_left, horizon_righ
 
 def command_flow(session_id, groups, target_count, trigger_mode="auto"):
 
-    global current_session_id, is_running, _tmx_sock, _hb_last_ok, _trigger_mode
+    global current_session_id, is_running,_hb_last_ok, _trigger_mode
     _hb_last_ok = time.time()
     current_session_id = session_id  # heartbeat จะเริ่มแนบ session นี้ทันที
     # ⚠ ตั้ง **ก่อน** is_running = True — heartbeat_loop อ่านตัวนี้จากอีกเธรด
@@ -902,7 +1007,6 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
             stop_reason = (f"ต่อ TM-X ที่ {TMX_IP}:{TMX_PORT} ไม่ได้ ({type(exc).__name__}) "f"— ตรวจสาย LAN · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env")
             return
 
-        _tmx_sock = client_socket  # ให้ stop handler ยิง S0 ผ่าน socket นี้ได้
 
         # Running (เข้าโหมดดำเนินงาน)
         log.info("→ R0 : %s", send_command(client_socket, "R0"))
@@ -910,12 +1014,32 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
 
         # `PW` ย้ายเข้าไปในลูปแล้ว (ดูข้างล่าง) เพราะแต่ละกลุ่มใช้ template คนละตัวได้
         current_tmpl = None      # template ที่โหลดค้างอยู่ใน TM-X ตอนนี้
-        current_pkg  = None      # package size ที่บอก MCU ไปแล้ว
 
         for piece in range(1, target_count + 1):
             if not is_running:
                 log.info("⏹ ได้รับคำสั่ง Stop — หยุดการวัด")
                 break
+
+            # ── ⓪.1 ถาดเต็มหรือยัง — หยุดรอให้คนมาเคลียร์ก่อนวัดชิ้นถัดไป ────
+            #
+            # เช็ค **ก่อนเริ่มชิ้นถัดไป** ไม่ใช่หลังวัดชิ้นที่ 8 เสร็จ — ผลลัพธ์
+            # เหมือนกันเป๊ะแต่มีจุดแทรกเดียว ถ้าไปวางท้ายลูปต้องแทรก 3 ที่
+            # (`continue` ตอนบันทึกสำเร็จ · `continue` ตอนค่ามาถึงระหว่างรอคำตอบ ·
+            # ทางที่ตกลงมาถึงท้ายลูป) แล้ววันหลังใครเพิ่ม `continue` อีกเส้น
+            # ถาดจะถูกข้ามไปเงียบ ๆ
+            #
+            # `piece > 1` กันไม่ให้ถามตั้งแต่ชิ้นแรก และการเช็คที่หัวลูปทำให้
+            # **ไม่มีทางถามหลังชิ้นสุดท้าย** โดยอัตโนมัติ (ไม่มีรอบถัดไปให้เช็ค)
+            # เช่น TRAY_CAPACITY=8 · target=16 → ถามครั้งเดียวก่อนชิ้นที่ 9
+            if TRAY_CAPACITY and piece > 1 and (piece - 1) % TRAY_CAPACITY == 0:
+                log.info("\n🧺 วัดครบ %s ชิ้นแล้ว (%s/%s) — ถาดเต็ม",
+                         TRAY_CAPACITY, piece - 1, target_count)
+                if ask_tray_clear(session_id, piece - 1, target_count) != "resume":
+                    stop_reason = (f"ผู้ใช้หยุดการวัดตอนเคลียร์ถาด "
+                                   f"(วัดไปแล้ว {piece - 1}/{target_count} ชิ้น)")
+                    break
+                log.info("   ▶ เคลียร์ถาดแล้ว — วัดต่อชิ้นที่ %s", piece)
+
 
             # ── ⓪ โหลดโปรแกรมวัดของกลุ่มนี้ ถ้ายังไม่ตรงกับที่ค้างอยู่ ──────
             #
@@ -937,15 +1061,19 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
                 time.sleep(PW_LOAD_WAIT)
                 current_tmpl = tmpl
 
-            # ── ⓪.5 บอก MCU ว่ากลุ่มนี้ชิ้นงานขนาดไหน ─────────────────────    
+            # ── ⓪.5 บอก MCU ว่าชิ้นนี้ขนาดไหน ────────────────────────────
+            #
+            # ส่ง **ทุกชิ้น** ไม่ใช่เฉพาะตอนเปลี่ยนกลุ่ม — เดิมมี `current_pkg`
+            # จำไว้ว่าบอกไปแล้ว แต่ถอดออกโดยตั้งใจ เพราะถ้า Mega รีเซ็ตกลางคิว
+            # (ไฟตก / USB re-enumerate) มันจะลืม <PKG> ของกลุ่มที่บอกไปแล้ว
+            # แล้วตั้งฟิกซ์เจอร์ผิดขนาดต่อไปเงียบ ๆ จนจบกลุ่ม — ส่งซ้ำทุกชิ้น
+            # ราคาถูกกว่ามาก (ข้อความเดียวต่อชิ้น) และกู้ตัวเองได้
             pkg = groups[group_of[piece - 1]].package_size
-            if pkg and pkg != current_pkg:
-                if not send_package_size_to_mcu(pkg):
-                    stop_reason = (f"ชิ้นที่ {piece}/{target_count}: "
-                                   f"บอกขนาดชิ้นงาน ({pkg}) ให้ MCU ไม่สำเร็จ")
-                    break
-                current_pkg = pkg
-            # ── ⓪.5 บอก MCU ว่ากลุ่มนี้ชิ้นงานขนาดไหน ─────────────────────  
+            if not send_package_size_to_mcu(pkg):
+                stop_reason = (f"ชิ้นที่ {piece}/{target_count}: "
+                               f"บอกขนาดชิ้นงาน ({pkg}) ให้ MCU ไม่สำเร็จ "
+                               f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
+                break
 
             # ── ① รอสัญญาณว่าชิ้นงานเข้าที่แล้ว ──────────────────────────
             #    auto   → <TRIGGER_TMX> จาก MCU ผ่าน Serial
@@ -960,42 +1088,52 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
             # measured_count จะขยับตั้งแต่ยังไม่ได้ยิง T1 ของชิ้นนี้
             count_before = get_measured_count(session_id)
 
-            # ── ② MRS ล้างค่าเก่า แล้วยิง T1 ────────────────────────────────
+
+            # ── ② MRS ล้างค่าเก่า แล้วยิง T1 และ GM ────────────────────────────────
             rounds = 0
+            result = "UNKNOWN"          # ← ① ต้องมี กัน NameError รอบแรก
             while True:
                 ok, t1_resp = trigger_tmx(client_socket)
                 if ok:
-                    break
+                    result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom, offset_x, offset_y = get_measurement_tmx(client_socket, groups[group_of[piece - 1]].limits)
+                    if result != "UNKNOWN":
+                        break
+                else:
+                    result = "UNKNOWN"  # ← T1 ไม่ผ่าน = ยังไม่มีค่าของชิ้นนี้
                 rounds += 1
-                if not handle_error("T1", session_id, piece, target_count,
-                                    f"TM-X ปฏิเสธคำสั่ง T1 — {t1_resp}", rounds):
-                    stop_reason = f"ชิ้นที่ {piece}/{target_count}: ยิง T1 ไม่สำเร็จ ({t1_resp})"
-                    break
-            if not ok:
-                break                     # ← ออกจาก for → finally → ยิง stop
-                
-            # ── ③ วน GM จนได้ค่า ────────────────────────────────────────────
+                if not ok:
+                    if not handle_error("T1", session_id, piece, target_count,
+                        f"TM-X ปฏิเสธคำสั่ง T1 — {t1_resp}", rounds):
+                        stop_reason = f"ชิ้นที่ {piece}/{target_count}: ยิง T1 ไม่สำเร็จ ({t1_resp})"
+                        break
+                else:                   # ← ② else ไม่ใช่ if — รอบนึงถามครั้งเดียว
+                    if not handle_error("GM", session_id, piece, target_count,
+                        f"รอ {GM_MAX_WAIT:.0f} วิแล้ว GM ไม่คืนค่าใหม่", rounds):
+                        stop_reason = f"ชิ้นที่ {piece}/{target_count}: TM-X วัดไม่ติด"
+                        break
+
+            # ── ③ ยอมแพ้ทั้ง T1 และ GM แล้ว — ออกจากคิวเลย ────────────────
             #
-            # ⚠⚠ **ต้องเป็น limits ของกลุ่มที่ชิ้นนี้อยู่ ห้ามใช้ groups[0]** —
-            #   ถ้าโหลด template ถูกแต่ตัดสินด้วยเกณฑ์ของกลุ่มแรก ค่าที่ได้จะ
-            #   ดูปกติทุกอย่างแต่คัดของผิดทั้งกลุ่มหลัง โดยไม่มี error ใด ๆ
-            #   (backend บันทึกด้วยเกณฑ์รายตัวที่ถูกต้อง → DB กับ MCU ขัดกันเงียบ ๆ)
-            rounds = 0
-            while True:
-                result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom, offset_x, offset_y = get_measurement_tmx(client_socket, groups[group_of[piece - 1]].limits)
-                if result != "UNKNOWN":
-                    break
-                rounds += 1
-                if not handle_error("GM", session_id, piece, target_count,
-                                    f"รอ {GM_MAX_WAIT:.0f} วิแล้ว GM ไม่คืนค่าใหม่", rounds):
-                    stop_reason = f"ชิ้นที่ {piece}/{target_count}: TM-X วัดไม่ติด"
-                    break
+            # ⚠ ห้ามปล่อยให้ไหลลงไป `send_result_to_mcu(result)` ข้างล่าง —
+            #   ตัวนั้นคืน False สำหรับ UNKNOWN (ไม่มี token จะส่ง) แล้ว
+            #   `stop_reason` ที่บอกสาเหตุจริง (ER,T1,03 / GM ไม่คืนค่า) ซึ่ง
+            #   ตั้งไว้แล้วข้างบน จะถูกเขียนทับด้วย "ส่งผลให้ MCU ไม่สำเร็จ"
+            #   ที่ชี้ไปหาสาย USB ทั้งที่สายปกติดี — คนหน้างานจะไล่ผิดทางทั้งวัน
             if result == "UNKNOWN":
                 break
 
-            # ── ④ ส่งผลให้ MCU ไปคัดแยก — ส่งทุกชิ้นรวมถึง UNKNOWN ─────────
+            # ── ④ ส่งผลให้ MCU ไปคัดแยก ───────────────────────────────────
+            #
+            # ⚠ **ไม่ได้ส่ง UNKNOWN** ต่างจากเจตนาเดิมของดีไซน์ (ดู docstring
+            #   ของ `get_measurement_tmx` ที่บอกว่าห้ามเดา UNKNOWN เป็น NG) —
+            #   เพราะฝั่ง Mega ยังไม่มี token สำหรับ "ไม่รู้ผล" ชิ้นที่วัดไม่ติด
+            #   จึงจบด้วยการหยุด session ที่บรรทัดข้างบนแทน แล้วให้คนมาจัดการเอง
+            #   ถ้าวันหลังตกลงกับคนเขียน sketch ได้ว่าจะใช้ <MEASURE_UNKNOWN>
+            #   ให้เอา `if result == "UNKNOWN": break` ข้างบนออก แล้วแก้สาขา
+            #   `else` ใน `send_result_to_mcu` ให้ส่ง token นั้นจริง
             if not send_result_to_mcu(result):
-                stop_reason = f"ชิ้นที่ {piece}/{target_count}: ส่งผลให้ MCU ไม่สำเร็จ"
+                stop_reason = (f"ชิ้นที่ {piece}/{target_count}: ส่งผลการวัด ({result}) "
+                               f"ให้ MCU ไม่สำเร็จ — ตรวจสาย USB ของ Arduino")
                 break
             # TODO: รอ MCU ตอบรับ (wait_mcu_ack) ก่อนไปชิ้นถัดไป — ยังไม่ทำ
             if not is_running:
@@ -1037,7 +1175,23 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
     except Exception as exc:
         log.info("\n❌ session พังกลางทาง — %s: %s", type(exc).__name__, exc)
         stop_reason = f"session พังกลางทาง — {type(exc).__name__}: {exc}" 
-    finally:  
+    finally:
+        # บอก MCU ว่าจบรอบแล้ว — best effort เท่านั้น
+        #
+        # ⚠⚠ ห้ามเขียนแบบเปลือย ๆ (`mega_ser.write(...)`) เด็ดขาด — โค้ดใน
+        #   `finally` ต้องไม่ raise ไม่ว่ากรณีใด ถ้ามันพังตรงนี้ exception เดิม
+        #   ที่บอกสาเหตุจริงจะถูกกลบ แล้วบรรทัดที่เหลือ (ปิด socket · ตั้ง
+        #   is_running=False · แจ้ง backend ปิด session) จะไม่ได้ทำงานเลย
+        #   → session ค้างที่ 'running' จนกว่า heartbeat จะ timeout
+        #
+        #   `mega_ser` เป็น None ได้จริงใน 2 กรณี: โหมด manual (ไม่เคยเปิดพอร์ต)
+        #   และหลัง `send_*_to_mcu` ล้าง handle ทิ้งเพราะสาย USB หลุด
+        if trigger_mode == "auto" and mega_ser is not None:
+            try:
+                mega_ser.write(b"<STOP>\n")
+                log.info(" [TX → Mega] <STOP>")
+            except Exception as exc:
+                log.warning(" ⚠️ บอก <STOP> ให้ MCU ไม่สำเร็จ: %s", exc)
         if client_socket is not None:
             try:
                 client_socket.shutdown(socket.SHUT_RDWR)
@@ -1047,7 +1201,6 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
                 client_socket.close()
             except Exception:
                 pass
-        _tmx_sock = None
         is_running = False
         current_session_id = None  # heartbeat กลับไปยิงแบบ idle (ไม่แนบ session)
         log.info("\n✅ จบ session — ปิดการเชื่อมต่อ TM-X แล้ว")

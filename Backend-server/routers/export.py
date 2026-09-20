@@ -662,7 +662,7 @@ def _load_report_layout(cur, export_template_id: int) -> Dict[str, Any]:
 def export_preview(
     export_template_id: int,
     filters: Dict[str, Any] = Depends(export_filters_dep),
-    limit:   int = Query(5, ge=1, le=50),
+    limit:   int = Query(100, ge=1, le=100),
 ):
     """คืนหัวคอลัมน์ + ข้อมูลตัวอย่างไม่กี่แถว + จำนวนแถวทั้งหมดที่ตรงกับ filter
     ให้หน้าเว็บโชว์ก่อนกดดาวน์โหลดจริง (จะได้รู้ว่ากรองถูกไหม ไฟล์ใหญ่แค่ไหน)

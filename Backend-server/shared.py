@@ -720,6 +720,7 @@ async def heartbeat_checker() -> None:
         for sid in timed_out:
             session_queues.pop(sid, None)
             measure_timeouts.pop(sid, None)  # คำถามค้างของ session ที่ตายไปแล้ว ไม่มีใครตอบได้อีก
+            tray_pending.pop(sid, None)      # เหตุผลเดียวกัน — ถาดเต็มของ session ที่ตายแล้ว
             log.warning("Session %s: ไม่ได้ heartbeat เกิน %ss — mark เป็น 'timeout'", sid, HEARTBEAT_TIMEOUT)
             await push_event("session_timeout", {"session_id": sid})
 
@@ -918,6 +919,21 @@ class MeasureTimeoutRequest(BaseModel):
     session_id: int
     piece: int | None = None
     target: int | None = None
+
+# คำถาม "ถาดเต็ม" ที่ค้างอยู่ — session_id → {piece, target}
+#
+# ⚠ แยกจาก `measure_timeouts` โดยตั้งใจ ห้ามเอามารวมกัน — ทั้งสองอย่างมีอายุ
+#   ต่างกันคนละขั้ว: measure_timeout มีตัวนับถอยหลัง 60 วิบนหน้าเว็บแล้วหยุด
+#   session อัตโนมัติ ส่วนถาดเต็ม **รอไม่จำกัดเวลา** เพราะคนต้องเดินไปเคลียร์
+#   ถาดจริง ๆ ถ้าใช้ dict เดียวกันแล้ววันหลังมีใครเติม timeout ให้ตัวเดียว
+#   อีกตัวจะโดนไปด้วยโดยไม่มีใครทันสังเกต
+tray_pending: dict[int, dict] = {}
+
+class TrayFullRequest(BaseModel):
+    session_id: int
+    piece: int | None = None
+    target: int | None = None
+    capacity: int | None = None
 
 class SessionEventRequest(BaseModel):
     """Recieve_tm-x.py แจ้งสาเหตุที่มัน "ทิ้งค่า" ไปโดยไม่บันทึกลง DB
@@ -1290,16 +1306,13 @@ EXPORT_SELECT = """
            m.offset_opx, m.offset_opy, m.offset_pos_op,
            -- ค่าที่ใช้ตัดสิน OK/NG คือแกนที่แย่ที่สุด (ทั้งสองแกนเทียบ limit เดียวกัน
            -- ดู _judge) — คอลัมน์ "Offset" ในเทมเพลตเก่าจึงหมายถึงตัวนี้
-           GREATEST(ABS(m.offset_opx), ABS(m.offset_opy)) AS `offset`,
            m.result, m.note, m.measure_type, m.timestamp,
            op.operator_name,
            pn.part_number_name,
            -- ⚠ เหมือน MEASUREMENTS_SELECT — nominal/tolerance มาจาก package_size
            --    ทุกโหมด ต้องตรงกับ `_load_criteria()` เสมอ
            ps.nominal_x, ps.nominal_y, ps.upper_tol, ps.lower_tol,
-           -- offset ยังแยกตามโหมด · NULL ในโหมด IPM คือสิ่งที่ `_offset_state()`
-           -- ใช้ตัดสินว่าจะไม่ระบายสีช่อง Offset (ดูคอมเมนต์ในฟังก์ชันนั้น)
-           CASE WHEN m.measure_type = 'IPM' THEN NULL ELSE ps.offset_tol END AS offset_tol,
+           ps.offset_tol AS offset_tol,
            h.handler_name, ps.package_size, t.template_name,
            v.vendor_name, o.owner_name,
            p.po_number, p.description, p.recieve_date
@@ -1341,22 +1354,6 @@ def _axis_state(r, axis: str) -> str:
     if val is None or nom is None or r["upper_tol"] is None or r["lower_tol"] is None:
         return ""
     return "OK" if _within_tolerance(val, nom, r["upper_tol"], r["lower_tol"]) else "NG"
-
-def _offset_state(r) -> str:
-    """Offset ของแถวนี้ผ่านเกณฑ์ไหม — คืน "OK"/"NG" ("" ถ้าเทียบไม่ได้)
-
-    ⚠ ของเดิมบรรทัดนี้เรียก `_offset_ok()` ซึ่ง **นิยามอยู่ใน routers/measurements.py
-      ไม่ใช่ที่นี่** — shared.py ถูก import โดย measurements.py (ทางเดียว) จึงมองไม่เห็น
-      แล้วจะระเบิดเป็น NameError ตอน render คอลัมน์ Offset เท่านั้น ไม่ใช่ตอน import
-      ทำให้ซ่อนตัวอยู่ได้นาน (บั๊ก SQL เรื่องคอลัมน์ `offset` บังไว้อีกชั้นด้วย)
-
-    เรียก `_offset_ok()` ตัวเดียวกับที่ `_judge()` ใช้ — **ห้ามลอกสูตรมาเขียนซ้ำ
-    ที่นี่อีก** ไม่งั้นสีในไฟล์ export จะขัดกับคอลัมน์ Result ที่มาจาก DB
-    """
-    off, tol = r.get("offset"), r.get("offset_tol")
-    if off is None or tol is None:
-        return ""           # IPM (tol เป็น NULL) หรือยังไม่มีค่า → ไม่ตัดสิน
-    return "OK" if _offset_ok(off, tol) else "NG"
 
 def _tolerance_spec(r) -> str:
     """สเปกขนาดชิ้นงานแบบย่อบรรทัดเดียว — ใช้ในรายงาน PDF/Excel เท่านั้น
@@ -1407,21 +1404,12 @@ EXPORT_COLUMNS: Dict[str, Dict[str, Any]] = {
     "value_y":       {"label": "Value Y",       "group": "ข้อมูลการวัด", "scope": "csv",
                       "values": ["OK", "NG"], "state": lambda r: _axis_state(r, "y"),
                       "get": lambda r: _fmt_num(r["value_y"])},
-    # offset ไม่ได้เทียบกับช่วง nominal ± tol เหมือน X/Y แต่เทียบกับเพดาน
-    # offset_tol ตัวเดียว จึงมี state เป็นของตัวเองไม่ใช้ _axis_state
-    #
-    # ⚠ `offset_tol` เป็น NULL เสมอในโหมด IPM (ดู CASE ใน EXPORT_SELECT) →
-    #   state คืน "" = ไม่ระบายสี ซึ่งถูกต้อง เพราะ IPM ไม่เอา offset มาตัดสิน
-    "offset":        {"label": "Offset",        "group": "ข้อมูลการวัด", "scope": "csv",
-                      "values": ["OK", "NG"],
-                      "state": lambda r: _offset_state(r),
-                      "get": lambda r: _fmt_num(r.get("offset"))},
     # แกนแยก — ข้อมูลมีอยู่ในตารางอยู่แล้วแต่เดิม export ออกไม่ได้เลย
-    "offset_opx":    {"label": "Offset X",      "group": "ข้อมูลการวัด", "scope": "csv",
+    "offset_opx":    {"label": "Offset X",      "group": "ข้อมูลการวัด",
                       "get": lambda r: _fmt_num(r.get("offset_opx"))},
-    "offset_opy":    {"label": "Offset Y",      "group": "ข้อมูลการวัด", "scope": "csv",
+    "offset_opy":    {"label": "Offset Y",      "group": "ข้อมูลการวัด",
                       "get": lambda r: _fmt_num(r.get("offset_opy"))},
-    "offset_pos_op": {"label": "Offset Position", "group": "ข้อมูลการวัด", "scope": "csv",
+    "offset_pos_op": {"label": "Offset Position", "group": "ข้อมูลการวัด",
                       "get": lambda r: r.get("offset_pos_op") or ""},
     # ── บล็อก Tolerance (รายงานเท่านั้น) ────────────────────────────────
     # ลากครั้งเดียวได้ผังกว้าง 2 คอลัมน์ สูง 3 แถว:
@@ -1468,6 +1456,7 @@ EXPORT_COLUMNS: Dict[str, Dict[str, Any]] = {
     "nominal_y":     {"label": "Nominal Y",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["nominal_y"])},
     "upper_tol":     {"label": "Upper Tol",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["upper_tol"])},
     "lower_tol":     {"label": "Lower Tol",     "group": "ข้อมูลชิ้นงาน", "scope": "csv", "get": lambda r: _fmt_num(r["lower_tol"])},
+    "offset":        {"label": "Offset Tolerance", "group": "ข้อมูลชิ้นงาน","get": lambda r: _fmt_num(r.get("offset_tol"))},
     "vendor":        {"label": "Vendor",        "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["vendor_name"] or ""},
     "owner":         {"label": "Owner",         "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["owner_name"] or ""},
     "po_number":     {"label": "PO Number",     "group": "ข้อมูลชิ้นงาน", "get": lambda r: r["po_number"] if r["po_number"] is not None else ""},
@@ -1551,7 +1540,7 @@ def export_filters_dep(
         "latest_only": latest_only,
     }
 
-REPORT_PREVIEW_LIMIT = 300
+REPORT_PREVIEW_LIMIT = 100
 
 REPORT_MAX_ROWS = int(os.getenv("REPORT_MAX_ROWS", 20000))
 
@@ -1653,6 +1642,7 @@ __all__ = [
     "LookupUpdate",
     "MEASUREMENTS_SELECT",
     "MeasureTimeoutRequest",
+    "TrayFullRequest",
     "MeasurementCreate",
     "Optional",
     "PARTS_SELECT",
@@ -1728,6 +1718,7 @@ __all__ = [
     "log",
     "logging",
     "measure_timeouts",
+    "tray_pending",
     "os",
     "pd",
     "push_event",

@@ -193,22 +193,31 @@ export default function ExportFilters({
 
         <div className="fg">
           <label>PO Number</label>
+          {/* ⚠ `type="text"` ไม่ใช่ `type="number"` — number มีลูกศรขึ้น/ลงติดมา
+              ซึ่งไม่มีความหมายเลยกับ PO (เลขที่เอกสาร ไม่ใช่ปริมาณที่จะบวกลบ)
+              แถมเลื่อนล้อเมาส์ผ่านช่องแล้วค่าเปลี่ยนเองโดยไม่ตั้งใจ
+              `inputMode="numeric"` ยังทำให้มือถือเด้งแป้นตัวเลขให้เหมือนเดิม */}
           <input
-            type="number"
+            type="text"
+            inputMode="numeric"
             placeholder="ทั้งหมด"
             value={value.poNumber}
             onChange={(e) => set("poNumber", e.target.value)}
           />
         </div>
-        <div className="fg">
-          <label>Description</label>
-          <input
-            type="text"
-            placeholder="พิมพ์บางส่วนได้"
-            value={value.description}
-            onChange={(e) => set("description", e.target.value)}
-          />
-        </div>
+      </div>
+
+      {/* ⚠ Description อยู่ **นอก** grid ของตัวกรองอื่นโดยตั้งใจ — เป็นช่องที่
+          ข้อความยาวที่สุด ถ้าอยู่ในคอลัมน์เดียวกับช่องสั้น ๆ จะบีบจนพิมพ์แล้ว
+          มองไม่เห็นว่าพิมพ์อะไรไป · ย้ายมาล่างสุดแล้วกินเต็มความกว้างแทน */}
+      <div className="fg filters-desc">
+        <label>Description</label>
+        <input
+          type="text"
+          placeholder="พิมพ์บางส่วนได้"
+          value={value.description}
+          onChange={(e) => set("description", e.target.value)}
+        />
       </div>
 
       <div className="filters-actions">

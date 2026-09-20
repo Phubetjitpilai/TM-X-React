@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { apiPost } from "../../api/client";
+import { orderForDatalist } from "../../utils/datalistOrder";
 
 export type EntryMode = "IPM" | "New" | "Rework";
 
@@ -460,15 +461,21 @@ export default function EntryGroups({ mode, groups, onChange, disabled, errors, 
                         </select>
                       ) : def.type === "datalist" ? (
                         <>
+                          {/* ⚠ id ต้องไม่ซ้ำข้ามกลุ่ม — ลิสต์ถูกเรียงใหม่ตามสิ่งที่
+                              พิมพ์ใน **ช่องนั้น** ถ้าใช้ id เดียวกันทุกกลุ่ม กลุ่มที่
+                              render ทีหลังจะทับของกลุ่มก่อน แล้วทุกช่องจะเห็นลำดับ
+                              ที่จัดตามค่าของกลุ่มสุดท้ายเหมือนกันหมด */}
                           <input
-                            list="package-size-list"
+                            list={`package-size-list-${gi}`}
                             className={`${err ? "invalid" : ""}${locked ? " auto-locked" : ""}`.trim() || undefined}
                             disabled={disabled || locked}
                             value={val}
                             onChange={(e) => setField(gi, f, e.target.value)}
                           />
-                          <datalist id="package-size-list">
-                            {options.packageSize.map((o) => <option key={o} value={o} />)}
+                          <datalist id={`package-size-list-${gi}`}>
+                            {orderForDatalist(options.packageSize, val).map((o) => (
+                              <option key={o} value={o} />
+                            ))}
                           </datalist>
                         </>
                       ) : (

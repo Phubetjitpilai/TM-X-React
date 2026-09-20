@@ -17,6 +17,7 @@ export type SSEEventName =
   | "session_timeout"
   | "image_updated"
   | "measure_timeout"
+  | "tray_full"
   | "station_event"
   | "station_online"
   | "pi_status"
@@ -30,6 +31,9 @@ const EVENT_NAMES: SSEEventName[] = [
   "session_timeout",
   "image_updated",
   "measure_timeout",
+  // ⚠ เพิ่มชื่อใน type อย่างเดียวไม่พอ ต้องใส่ใน array นี้ด้วย — EventSource
+  //   ผูก listener จาก array นี้ ถ้าลืมใส่ event จะมาไม่ถึงโดยไม่มี error ใด ๆ
+  "tray_full",
   "station_event",
   "station_online",
   "pi_status",

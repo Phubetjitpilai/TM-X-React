@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { apiPost } from "../../api/client";
 import EntryGroups, {
   GROUP_FIELDS, OPTIONAL_FIELDS, emptyGroup,
@@ -137,6 +137,10 @@ export default function PartEntryModal({
   );
   const [errors, setErrors] = useState<Record<number, Record<string, string>>>({});
   const [operatorError, setOperatorError] = useState("");
+  /** กล่อง modal — ใช้จำกัดขอบเขตการค้นหาช่องที่ลืมกรอก (ดู focusFirstInvalid)
+   *  ⚠ ต้องผูกกับ `.pe-modal-box` ซึ่งเป็นตัวที่ scroll ได้ ไม่ใช่ `.modal-overlay`
+   *    ข้างนอก — `scrollIntoView` ต้องมีตัว scroll จริงถึงจะขยับ */
+  const boxRef = useRef<HTMLDivElement | null>(null);
   const [busy, setBusy] = useState(false);
 
   /** ฟอร์มมีข้อมูลที่จะหายไหม — ใช้ตัดสินว่าต้องถามยืนยันก่อนสลับโหมดไหม
@@ -165,6 +169,35 @@ export default function PartEntryModal({
     setGroups([emptyGroup(next)]);
     setErrors({});
     setOperatorError("");
+  }
+
+  /** เลื่อนไปหาช่องที่ลืมกรอก "ตัวบนสุด" แล้วโฟกัสให้
+   *
+   *  ทำไมต้องมี: ฟอร์มกรอกได้หลายกลุ่ม พอกด Save แล้วไม่ผ่าน ข้อความแดงอาจอยู่
+   *  นอกจอ (ต้องเลื่อนลงไปอีก 2-3 หน้าจอถึงจะเห็น) ผู้ใช้จะเห็นแค่ปุ่มกดแล้วไม่
+   *  เกิดอะไรขึ้น แล้วกดซ้ำอยู่อย่างนั้น
+   *
+   *  ⚠ ต้องรอ **หลัง** React วาดจอใหม่ถึงจะหาเจอ — ตอนที่บรรทัดนี้ทำงาน
+   *    `setErrors` เพิ่งถูกเรียก DOM ยังไม่มีคลาส `.invalid` เลยสักอัน
+   *    `requestAnimationFrame` คือจังหวะที่สั้นที่สุดที่การันตีว่าวาดเสร็จแล้ว
+   *
+   *  ⚠ `querySelector` คืน **ตัวแรกตามลำดับใน DOM** ซึ่งตรงกับ "บนสุดบนจอ"
+   *    พอดีเพราะฟอร์มนี้เรียงจากบนลงล่างตรง ๆ ไม่มี CSS ที่สลับตำแหน่ง
+   *    (ถ้าวันหลังใส่ `order` หรือ grid ที่สลับที่ ต้องเปลี่ยนมาเทียบ
+   *     getBoundingClientRect().top แทน)
+   *
+   *  ⚠ `focus({ preventScroll: true })` — ไม่งั้นเบราว์เซอร์จะเลื่อนของมันเอง
+   *    แบบกระตุกทับ smooth scroll ที่เพิ่งสั่งไป
+   */
+  function focusFirstInvalid() {
+    requestAnimationFrame(() => {
+      const box = boxRef.current;
+      if (!box) return;
+      const el = box.querySelector<HTMLElement>(".invalid");
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.focus({ preventScroll: true });
+    });
   }
 
   async function handleSave() {
@@ -205,7 +238,10 @@ export default function PartEntryModal({
 
     setErrors(errs);
     setOperatorError(opErr);
-    if (opErr || Object.keys(errs).length) return;
+    if (opErr || Object.keys(errs).length) {
+      focusFirstInvalid();
+      return;
+    }
 
     const all = perGroupLists.flat();
 
@@ -255,7 +291,7 @@ export default function PartEntryModal({
 
   return (
     <div className="modal-overlay open">
-      <div className="pe-modal-box">
+      <div className="pe-modal-box" ref={boxRef}>
         <div className="pe-modal-header">
           <div className="card-title">Part Entry</div>
           <button className="pe-modal-close" title="Close" onClick={onClose}>✕</button>
@@ -296,8 +332,11 @@ export default function PartEntryModal({
           </div>
         )}
 
-        {/* Operator อยู่นอกกลุ่ม ใช้ร่วมกันทั้ง session (คนวัดคนเดียวกัน) */}
-        <div className="form-group" style={{ marginBottom: "1rem" }}>
+        {/* Operator อยู่นอกกลุ่ม ใช้ร่วมกันทั้ง session (คนวัดคนเดียวกัน)
+            ⚠ ต้องมีคลาส `entry-field` ด้วย — ช่องนี้อยู่นอก `.entry-form-grid`
+              จึงไม่ได้รับ style ของฟิลด์ในกลุ่ม (ดาวแดงชิดขวา + กรอบแดงตอนผิด)
+              ถ้าลืมใส่ ช่องนี้จะเป็นช่องเดียวในฟอร์มที่ลืมกรอกแล้วไม่ขึ้นกรอบแดง */}
+        <div className="form-group entry-field" style={{ marginBottom: "1rem" }}>
           <label>Operator<span className="req">*</span></label>
           <select
             className={operatorError ? "invalid" : undefined}

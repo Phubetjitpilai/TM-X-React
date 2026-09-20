@@ -4,6 +4,7 @@ import { useToast } from "../components/Toast";
 import TrashCard from "../components/TrashCard";
 import LookupTables from "../components/LookupTables";
 import HistoryCard from "../components/HistoryCard";
+import { orderForDatalist } from "../utils/datalistOrder";
 import { axisValue, offsetValue, xyPair, DP_MM, DP_OFF } from "../components/measurementCells";
 import { useSessionState } from "../hooks/useSessionState";
 
@@ -1009,9 +1010,12 @@ export default function EditPage() {
         }}
       />
 
-      {/* Shared datalist: Package Size */}
+      {/* Shared datalist: Package Size
+          เรียงใหม่ตามสิ่งที่พิมพ์อยู่ใน `pkgValue` — เบราว์เซอร์กรองแบบ substring
+          แล้วแสดงตามลำดับใน DOM เฉย ๆ ถ้าไม่จัดอันดับเอง พิมพ์ "5x5" จะเห็น
+          "3.5x5" ขึ้นก่อน "5x5" (ดู utils/datalistOrder.ts) */}
       <datalist id="package-size-datalist">
-        {packageSizeOptions.map((ps) => (
+        {orderForDatalist(packageSizeOptions, pkgValue).map((ps) => (
           <option key={ps} value={ps} />
         ))}
       </datalist>

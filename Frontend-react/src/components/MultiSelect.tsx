@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { orderForDatalist } from "../utils/datalistOrder";
 
 interface MultiSelectProps {
   label: string;
@@ -34,10 +35,15 @@ export default function MultiSelect({
   emptyText = "ไม่มีตัวเลือก",
 }: MultiSelectProps) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
 
   // ปิดเมื่อคลิกที่อื่นหรือกด Escape — ผูก listener เฉพาะตอนเปิดอยู่เท่านั้น
   // จะได้ไม่มี listener ค้างอยู่ทั้งหน้าเวลามีช่องแบบนี้หลายช่อง
+  // ล้างคำค้นทุกครั้งที่ปิดแผง — เปิดมารอบหน้าต้องเห็นลิสต์เต็มเสมอ ไม่งั้น
+  // จะเห็นลิสต์ถูกกรองค้างจากคำที่พิมพ์ไว้เมื่อกี้แล้วนึกว่าตัวเลือกหายไป
+  useEffect(() => { if (!open) setQuery(""); }, [open]);
+
   useEffect(() => {
     if (!open) return;
     const onClick = (e: MouseEvent) => {
@@ -63,6 +69,17 @@ export default function MultiSelect({
   const toggle = (value: string, on: boolean) =>
     onChange(on ? [...selected, value] : selected.filter((v) => v !== value));
 
+  /* ── ช่องพิมพ์ค้นหา ──────────────────────────────────────────────────────
+     ลิสต์ Package Size / Part Number ยาวเกินกว่าจะกวาดตาหา — พิมพ์แล้วกรอง
+     ให้เหลือเฉพาะที่ตรง เร็วกว่าเลื่อนหาเยอะ โดยยัง **ติ๊กได้หลายค่าเหมือนเดิม**
+
+     ⚠ ล้างคำค้นทุกครั้งที่ปิดแผง ไม่งั้นเปิดมารอบหน้าจะเห็นลิสต์ถูกกรองค้างอยู่
+       จากคำที่พิมพ์ไว้เมื่อกี้ แล้วนึกว่าตัวเลือกหายไป                        */
+  const q = query.trim().toLowerCase();
+  const shown = q
+    ? orderForDatalist(options.filter((o) => o.toLowerCase().includes(q)), query)
+    : options;
+
   return (
     <div className="fg">
       <label>
@@ -87,20 +104,40 @@ export default function MultiSelect({
             <div className="ms-empty">{emptyText}</div>
           ) : (
             <>
+              <input
+                className="ms-search"
+                type="text"
+                placeholder="พิมพ์เพื่อค้นหา…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                /* ⚠ กัน Escape ทะลุไปหา listener ที่ปิดแผง — คนพิมพ์ผิดแล้วกด Esc
+                   ตั้งใจจะล้างคำค้น ไม่ได้ตั้งใจปิดแผงทิ้งทั้งอัน */
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && query) { e.stopPropagation(); setQuery(""); }
+                }}
+              />
               <div className="ms-tools">
-                <button type="button" onClick={() => onChange([...options])}>เลือกทั้งหมด</button>
+                {/* "เลือกทั้งหมด" = ทั้งหมดที่เห็นอยู่ตอนนี้ ไม่ใช่ทั้งลิสต์ —
+                    ถ้ากรองอยู่แล้วกดปุ่มนี้ คนคาดหวังว่าได้เฉพาะที่กรองไว้ */}
+                <button type="button" onClick={() => onChange([...new Set([...selected, ...shown])])}>
+                  {q ? "เลือกที่เห็น" : "เลือกทั้งหมด"}
+                </button>
                 <button type="button" onClick={() => onChange([])}>ล้าง</button>
               </div>
-              {options.map((o) => (
-                <label className="ms-opt" key={o}>
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(o)}
-                    onChange={(e) => toggle(o, e.target.checked)}
-                  />
-                  {o}
-                </label>
-              ))}
+              {shown.length === 0 ? (
+                <div className="ms-empty">ไม่พบ "{query}"</div>
+              ) : (
+                shown.map((o) => (
+                  <label className="ms-opt" key={o}>
+                    <input
+                      type="checkbox"
+                      checked={selected.includes(o)}
+                      onChange={(e) => toggle(o, e.target.checked)}
+                    />
+                    {o}
+                  </label>
+                ))
+              )}
             </>
           )}
         </div>

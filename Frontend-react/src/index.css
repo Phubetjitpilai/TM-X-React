@@ -376,6 +376,11 @@ button.topbar-link {
    minmax(0,1fr) กัน content ที่ยาว (เช่น multi-select ที่ติ๊กหลายค่า) ดัน
    คอลัมน์ให้ล้นออกนอกกรอบ */
 .filters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0.9rem 1.1rem; }
+/* Description — ช่องเดียวที่อยู่นอก grid ของตัวกรอง กินเต็มความกว้าง
+   เพราะเป็นช่องที่ข้อความยาวที่สุด (ดูคอมเมนต์ใน ExportFilters.tsx) */
+.filters-desc { margin-top: 0.9rem; }
+.filters-desc input { width: 100%; }
+
 .filters-actions { display: flex; justify-content: flex-end; margin-top: 0.9rem; }
 @media (max-width: 1250px) { .filters { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 @media (max-width: 1000px) { .filters { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
@@ -848,6 +853,21 @@ button.topbar-link {
   box-shadow: 0 2px 8px rgba(0,0,0,.08);
 }
 .ms.open .ms-panel { display: block; }
+/* ช่องพิมพ์ค้นหาในแผงตัวเลือก — ติดบนสุดไว้ตอนเลื่อนดูลิสต์ยาว ๆ
+   ⚠ ต้องมี background ทึบ ไม่งั้นตัวเลือกจะไหลผ่านใต้ช่องนี้ตอน scroll */
+.ms-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  width: 100%;
+  background: var(--surface);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+}
+.ms-search:focus { outline: none; border-bottom-color: var(--accent); }
 .ms-opt {
   display: flex; align-items: center; gap: 0.45rem;
   padding: 0.3rem 0.4rem; font-size: 0.82rem; cursor: pointer; border-radius: 5px;
@@ -1010,6 +1030,109 @@ button.topbar-link {
   align-items: center;
   gap: 1.5rem;
   flex-wrap: wrap;
+}
+
+/* ── Part Entry ที่ยุบเข้ามาอยู่ในแถบ Session Control ───────────────────
+   เดิมเป็นการ์ดแยกอยู่ใต้ Live View — operator ต้องเลื่อนลงไปกรอกคิวทุกครั้ง
+   ที่เริ่มรอบใหม่ แล้วเลื่อนกลับขึ้นไปดูค่าที่วัดได้                        */
+/* 2 การ์ดวางคู่กัน — ซ้าย Session Control (จอแสดงสถานะล้วน ๆ)
+   ขวา Part Entry (ที่เดียวที่มีปุ่มให้กด)                                    */
+.session-split {
+  display: grid;
+  /* ⚠ ต้องตรงกับ `.live-view-grid` (1.1fr 1fr · gap 1.5rem) **เป๊ะ ๆ** —
+     ขอบขวาของ Session Control ต้องตรงกับขอบขวาของ Live Telemetry และขอบซ้าย
+     ของ Part Entry ต้องตรงกับ Camera Preview · ต่างกันแค่ 0.05fr สายตาก็จับได้
+     ว่าการ์ดเยื้องกัน แก้ที่ไหนต้องแก้ทั้งสองที่พร้อมกันเสมอ */
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  align-items: stretch;      /* สองการ์ดสูงเท่ากันเสมอ ดูเป็นแถบเดียว */
+}
+@media (max-width: 1000px) {
+  .session-split { grid-template-columns: 1fr; }
+}
+
+/* การ์ด Part Entry — ต้องเป็น flex column เพื่อให้ .pe-card-empty ยืดเต็ม
+   ความสูงที่เหลือแล้วจัดปุ่มไว้กึ่งกลางแนวตั้งได้                            */
+.pe-card { display: flex; flex-direction: column; }
+.pe-card-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.6rem 0 0.2rem;
+}
+.session-entry-hint { font-size: 0.72rem; color: var(--muted); }
+
+/* grid 2 คอลัมน์: [dropdown] [ปุ่มควบคุม]
+   หัวข้อ + badge + Clear อยู่ **คอลัมน์ซ้ายอย่างเดียว** จึงกว้างเท่า dropdown
+   เป๊ะ → badge กับ Clear ที่ชิดขวาไปหยุดตรงขอบขวาของ dropbox พอดี
+   ไม่เลยออกไปลอยอยู่เหนือปุ่ม Start เหมือนตอนใช้ flex ทั้งแถว               */
+.session-entry-filled {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0.75rem;
+  row-gap: 0.4rem;
+  align-items: center;
+  min-width: 0;
+}
+.session-entry-head {
+  grid-column: 1;            /* ← คอลัมน์ dropdown เท่านั้น ห้ามพาดถึงคอลัมน์ปุ่ม */
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.session-entry-filled > .session-entry-summary { grid-column: 1; }
+.session-entry-filled > .session-btns { grid-column: 2; grid-row: 2; }
+.session-entry-title {
+  font-size: 0.8rem; font-weight: 700; color: var(--text);
+  letter-spacing: .04em; text-transform: uppercase;
+  margin-right: auto;
+}
+
+/* ⚠⚠ **ต้องเขียนเป็น `.pe-summary-dropdown.session-entry-summary` เท่านั้น**
+     ห้ามเขียนแค่ `.session-entry-summary { overflow: visible }`
+
+     `.pe-summary-dropdown { overflow: hidden }` (บรรทัด ~1325 ข้างล่าง) มี
+     specificity เท่ากันเป๊ะ (0,1,0) และอยู่ **ทีหลัง** ในไฟล์ → มันชนะ →
+     ดรอปดาวน์ที่ถูกทำให้ลอย (position: absolute) จะถูกตัดหายไปทั้งก้อน
+     กดแล้วไม่มีอะไรโผล่ ทั้งที่ DOM มีครบและ class `.open` ติดแล้ว
+     (บั๊กนี้เกิดจริงแล้ว — หาสาเหตุยากมากเพราะ inspect แล้วเห็น element อยู่)
+
+     การเขียนคู่กัน 2 คลาสทำให้ specificity เป็น (0,2,0) ชนะไม่ว่าลำดับจะเป็นยังไง */
+.pe-summary-dropdown.session-entry-summary { position: relative; overflow: visible; }
+.session-entry-summary .pe-summary-toggle { padding: 0.45rem 0.8rem; }
+.session-entry-summary .pe-summary-toggle-left { min-width: 0; overflow: hidden; }
+.session-entry-summary .pe-summary-toggle-left > span {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 0.85rem; font-weight: 600;
+}
+
+/* กางแล้ว **ลอยทับ Camera Preview** ไม่ดันกล่อง Session Control ให้สูงขึ้น
+   — ถ้าปล่อยให้ดัน การ์ด Live View กับ Camera จะกระโดดลงทุกครั้งที่กดดูคิว
+     ซึ่งน่ารำคาญมากตอนกำลังจ้องค่าที่วัดอยู่                                */
+.session-entry-summary .pe-summary-body.open {
+  position: absolute;
+  top: calc(100% + 0.4rem);
+  right: 0;
+  z-index: 60;                /* สูงกว่าการ์ดข้างล่างทั้งหมด */
+  min-width: 380px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+  padding: 0.9rem 1rem;
+}
+@media (max-width: 1000px) {
+  /* จอแคบ — ปุ่มตกลงไปเต็มความกว้าง ดีกว่าบีบ dropdown จนอ่าน ALPL ไม่ออก */
+  .session-entry-filled { grid-template-columns: minmax(0, 1fr); }
+  .session-entry-filled > .session-btns {
+    grid-column: 1; grid-row: auto; justify-content: flex-end;
+  }
+  .session-entry-summary .pe-summary-body.open { min-width: 0; left: 0; }
 }
 .session-info { flex: 1; min-width: 180px; }
 .session-state-label {
@@ -1373,6 +1496,21 @@ button.topbar-link {
   justify-content: space-between;
 }
 .entry-form-grid label .req { color: var(--ng); }
+
+/* ── ฟิลด์ที่อยู่ **นอก** .entry-form-grid แต่ต้องหน้าตาเหมือนกัน ────────
+   ตอนนี้มีตัวเดียวคือ Operator (อยู่นอกกลุ่มเพราะใช้ร่วมกันทั้ง session)
+
+   ⚠ ถ้าไม่มีบล็อกนี้ Operator จะเป็นช่องเดียวในฟอร์มที่ **ลืมกรอกแล้วไม่ขึ้น
+     กรอบแดง** และดาว * จะไปเกาะติดข้อความแทนที่จะชิดขวาเหมือนช่องอื่น —
+     ผู้ใช้กด Save ไม่ผ่านแล้วหาไม่เจอว่าตกตรงไหน                            */
+.entry-field label {
+  display: flex;
+  justify-content: space-between;   /* ดัน * ไปชิดขวาเหมือนฟิลด์ในกลุ่ม */
+}
+.entry-field label .req { color: var(--ng); }
+.entry-field select.invalid,
+.entry-field input.invalid,
+.entry-field textarea.invalid { border-color: var(--ng); }
 .entry-form-grid input,
 .entry-form-grid textarea,
 .entry-form-grid select { width: 100%; }

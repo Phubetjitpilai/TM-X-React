@@ -439,6 +439,7 @@ async def _fail_start(session_id: int, msg: str, *, notify_stop: bool = False) -
     """
     session_queues.pop(session_id, None)
     measure_timeouts.pop(session_id, None)
+    tray_pending.pop(session_id, None)
     try:
         db = get_db()
         try:
@@ -753,6 +754,7 @@ async def start_session(request: Request):
         }
         session_queues[session_id] = queue_state
         measure_timeouts.pop(session_id, None)  # session ใหม่ต้องไม่มีคำถามค้างจากรอบก่อน
+        tray_pending.pop(session_id, None)      # เหตุผลเดียวกัน — ถาดเต็มของรอบก่อน
 
         # เขียนสำเนา queue_state ลง DB ด้วย (คอลัมน์ sessions.queue_state) — ถ้า
         # backend restart กลาง session นี้ จะโหลดกลับเข้า memory ได้ตอน boot
@@ -827,6 +829,7 @@ async def stop_session(req: StopSessionRequest):
 
         session_queues.pop(req.session_id, None)  # กดหยุดเองก่อนคิวหมด ก็เคลียร์ memory ทิ้งด้วย
         measure_timeouts.pop(req.session_id, None)  # กันคำถามค้างจาก session ที่จบไปแล้ว
+        tray_pending.pop(req.session_id, None)      # เหตุผลเดียวกัน — ถาดเต็มที่ไม่มีใครตอบแล้ว
 
         # ⚠ สั่ง Pi ไม่สำเร็จ = **เครื่องอาจยังวัดอยู่จริง** ทั้งที่ DB ปิดไปแล้ว
         #   ไม่ raise (DB หยุดไปเรียบร้อยแล้ว กดซ้ำไม่ช่วยอะไร) แต่ต้องบอกให้คน
@@ -1026,6 +1029,67 @@ async def retry_session(body: SessionContinueRequest):
         raise HTTPException(502, f"สั่งให้ Pi ลองใหม่ไม่สำเร็จ — {agent_err}")
 
     log.info("Session %s: ผู้ใช้เลือกลองใหม่ — ชิ้นเดิม ตำแหน่งคิวไม่ขยับ", session_id)
+    return {"ok": True}
+
+
+@router.post("/api/tray-full")
+async def report_tray_full(req: TrayFullRequest):
+    """Pi แจ้งว่าถาดรับชิ้นงานเต็มแล้ว — รอผู้ใช้มาเคลียร์ก่อนวัดต่อ
+
+    ต่างจาก `report_measure_timeout` ตรงที่นี่ **ไม่ใช่ความผิดพลาด** — เป็นจุดพัก
+    ตามแผนที่ตั้งไว้ใน `TRAY_CAPACITY` จึงไม่ต้องไปขุด `last_event` มาอธิบายสาเหตุ
+    และไม่ต้องเติม `number_alpl` เพราะไม่มีชิ้นไหนค้างอยู่ (ชิ้นที่ `piece`
+    บันทึกลง DB ไปเรียบร้อยแล้วฝั่ง Pi ถึงจะถามมา)
+
+    ⚠ **ห้ามใส่ตัวนับถอยหลังทั้งฝั่งนี้และฝั่งหน้าเว็บ** — คนต้องเดินไปเคลียร์ถาด
+      จริง ๆ ใช้เวลาไม่แน่นอน ถ้าตั้งเพดานเวลาไว้ จะมีวันที่ session ตายกลางคัน
+      เพราะคนเดินช้าไปนิดเดียว (measure_timeout มีเพดาน 60 วิเพราะมันคือการวัด
+      ที่พังไปแล้ว ปล่อยค้างไม่ได้ — คนละเรื่องกัน)
+    """
+    tray_pending[req.session_id] = {"piece": req.piece, "target": req.target}
+    log.info("Session %s: ถาดเต็มที่ชิ้น %s/%s — รอผู้ใช้เคลียร์ถาด",
+             req.session_id, req.piece, req.target)
+    await push_event(
+        "tray_full",
+        {
+            "session_id": req.session_id,
+            "piece": req.piece,
+            "target": req.target,
+            "capacity": req.capacity,
+        },
+    )
+    return {"ok": True}
+
+
+@router.post("/api/session/resume")
+async def resume_session(body: SessionContinueRequest):
+    """ผู้ใช้กด "เคลียร์ถาดแล้ว วัดต่อ" — ปลด Pi ที่บล็อกรออยู่
+
+    ⚠⚠ **ห้ามแตะ `session_queues[...]["position"]` ที่นี่เด็ดขาด** — ชิ้นที่
+       `piece` วัดเสร็จและ INSERT ลง DB ไปแล้ว ตำแหน่งคิวขยับไปเองตอนนั้น
+       (ดู `create_measurement`) ถ้ามาขยับซ้ำตรงนี้ ชิ้นถัดไปจะถูกแปะ ALPL
+       ผิดตัวแล้วเหลื่อมไปทั้งคิวโดยไม่มี error — บั๊กแบบเดียวกับที่ทำให้ต้อง
+       ถอด action `continue` ทิ้งไปเมื่อ 22 ส.ค. 2569
+
+    ส่วน "หยุดการวัด" ไม่ผ่านที่นี่ — หน้าเว็บเรียก `POST /api/session/stop`
+    ตรง ๆ เพื่อให้เส้นทางการหยุด session มีทางเดียวตลอดทั้งระบบ
+    """
+    session_id = body.session_id
+
+    # กันกดรัว ๆ และกันกดหลัง session จบไปแล้ว (Pi เลิกรอไปแล้ว ไม่มีใครรับคำสั่ง)
+    if tray_pending.get(session_id) is None:
+        raise HTTPException(404, "ไม่พบคำถามถาดเต็มของ session นี้ (อาจหยุดไปแล้ว)")
+    pending = tray_pending.pop(session_id)
+
+    # ⚠ เหมือน retry: สั่งไม่ถึง = **Pi ยังบล็อกรออยู่เฉย ๆ** ไม่มีอะไรเดินหน้า
+    #   ต้องคืนคำถามค้างกลับไปแล้วบอกผู้ใช้ ไม่งั้นกดปุ่มไหนก็ได้ 404 หมด
+    #   ทั้งที่เครื่องยังยืนรอคำตอบอยู่จริง
+    agent_err = await _notify_agent_action("resume", session_id)
+    if agent_err:
+        tray_pending[session_id] = pending
+        raise HTTPException(502, f"สั่งให้ Pi วัดต่อไม่สำเร็จ — {agent_err}")
+
+    log.info("Session %s: ผู้ใช้เคลียร์ถาดแล้ว — วัดต่อ", session_id)
     return {"ok": True}
 
 

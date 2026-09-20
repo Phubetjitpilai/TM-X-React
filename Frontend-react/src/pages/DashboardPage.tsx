@@ -1042,7 +1042,13 @@ export default function DashboardPage() {
     if (!qState) return null;
     try { return typeof qState === "string" ? JSON.parse(qState) : qState; } catch { return null; }
   })();
-  const sessionOperator = parsedQueue?.operator ?? parsedQueue?.groups?.[0]?.operator ?? null;
+  // ⚠ `sessionOperator` ถูกถอดออกแล้ว — ชิป Operator ไม่ได้แสดงบนแถบ Session
+  //   Control อีกต่อไป (ชื่อคนอยู่ในดรอปดาวน์สรุปของ Part Entry แล้ว) ถ้าวันหลัง
+  //   ต้องใช้อีก เอา `parsedQueue?.operator ?? parsedQueue?.groups?.[0]?.operator`
+  //   กลับมาได้เลย — `parsedQueue` ยังถูกแกะไว้ให้อยู่
+  //
+  // `sessionMode` ยังต้องมี! ไม่ได้ใช้แสดงผลแล้วก็จริง แต่ `telemetry-grid` ใช้
+  // ตัดสินว่าจะซ่อนการ์ด Offset ไหม (โหมด IPM ไม่เอา offset มาตัดสิน OK/NG)
   const sessionMode = parsedQueue?.measure_mode ?? parsedQueue?.mode ?? null;
 
   // ── ผลรายแกนของค่าที่เพิ่งวัด ────────────────────────────────────────────
@@ -1187,8 +1193,16 @@ export default function DashboardPage() {
   return (
     <div className="layout">
       <main className="main">
-        {/* Section 1 — Session Control */}
+        {/* ══ Section 1 — Session Control (ซ้าย) + Part Entry (ขวา) ═══════════
+            2 การ์ดวางคู่กัน แบ่งหน้าที่ให้ขาด:
+              ซ้าย = **จอแสดงสถานะล้วน ๆ** ไม่มีอะไรให้กดเลย
+              ขวา  = **ที่เดียวที่มีปุ่ม** (New Entry / Start / Trigger / Stop)
+
+            ⚠ ปุ่ม Start/Trigger/Stop ถูกย้ายจากการ์ดซ้ายมาอยู่ขวาทั้งหมด —
+              ปุ่มควบคุมการวัดควรอยู่ที่เดียว ไม่ใช่กระจายสองการ์ด ไม่งั้น
+              ตอนฉุกเฉินคนจะต้องกวาดตาหาว่า Stop อยู่ไหน                    */}
         <section>
+          <div className="session-split">
           <div className="card">
             <div className="card-title">Session Control</div>
             {/* ทุกอย่างอยู่บรรทัดเดียว — ชิปที่ยังไม่มีค่าถูกซ่อนทั้งชิป ไม่ใช่โชว์
@@ -1199,24 +1213,14 @@ export default function DashboardPage() {
                 {/* คลาสยังใช้ค่าดิบ (`timeout`) — เปลี่ยนเฉพาะข้อความ ดู sessionStateLabel */}
                 <span className={`session-state-badge ${session.state}`}>{sessionStateLabel(session.state)}</span>
               </div>
-              {sessionOperator && (
-                <div className="session-chip">
-                  <span className="sc-label">Operator</span>
-                  <span className="sc-value">{sessionOperator}</span>
-                </div>
-              )}
-              {sessionMode && (
-                <div className="session-chip">
-                  <span className="sc-label">Measure Type</span>
-                  <span className="sc-value">{sessionMode}</span>
-                </div>
-              )}
-              {session.session_id != null && (
-                <div className="session-chip">
-                  <span className="sc-label">Session</span>
-                  <span className="sc-value">{session.session_id}</span>
-                </div>
-              )}
+              {/* ชิป Operator · Measure Type · Session (เลข id) ถอดออกแล้ว
+                  ทั้งสามตัวซ้ำกับที่อื่นบนหน้าเดียวกัน: Operator กับ Measure Type
+                  อยู่ในดรอปดาวน์สรุปของ Part Entry ข้าง ๆ อยู่แล้ว ส่วนเลข session
+                  เป็นเลขรันนิ่งของฐานข้อมูลที่คนหน้าเครื่องเอาไปทำอะไรต่อไม่ได้
+                  (ดูได้จากคอลัมน์ Session ในตาราง Measurements ด้านล่าง)
+
+                  ⚠ ตัวแปร `sessionOperator` / `sessionMode` / `session.session_id`
+                    ไม่ได้ถูกลบ ยังถูกใช้ในที่อื่นตามปกติ — ถอดเฉพาะการแสดงผล */}
               {/* ⚠ ชิป PI ไม่ซ่อนตอน idle ต่างจากชิปอื่น — ประโยชน์หลักคือดูก่อน
                   กด Start ว่าเครื่องพร้อมไหม ซ่อนตอนไม่มี session ก็หมดความหมาย */}
               <div className="session-chip">
@@ -1228,31 +1232,122 @@ export default function DashboardPage() {
                   {piOnline ? "Online" : piStatus === false ? "Offline" : "Connecting"}
                 </span>
               </div>
-              <div className="session-btns">
-                <button className="btn-start" disabled={!canStart} title={startTitle} onClick={startFromQueue}>
-                  {startLabel}
-                </button>
-                {isRunning && manualTrigger && (
-                  <button
-                    className="btn-trigger"
-                    disabled={!triggerReady}
-                    title={
-                      triggerReady
-                        ? "ส่งสัญญาณให้เริ่มวัดชิ้นนี้ (แทน MCU ชั่วคราว)"
-                        : "ยังไม่ถึงจังหวะ — ระบบกำลังโหลดโปรแกรมวัด หรือกำลังรอผลของชิ้นก่อนหน้าอยู่"
-                    }
-                    onClick={sendManualTrigger}
-                  >
-                    ⚡ Trigger
-                  </button>
-                )}
-                {isRunning && (
-                  <button className="btn-stop" onClick={stopSession}>
-                    ■ Stop
-                  </button>
-                )}
-              </div>
             </div>
+          </div>
+
+          {/* ── การ์ดขวา — Part Entry + ปุ่มควบคุมทั้งหมด ────────────────────
+              2 สถานะชัดเจน:
+                ยังไม่มีคิว → ปุ่ม "+ New Entry" อยู่กลางกล่อง ไม่มีอย่างอื่นเลย
+                มีคิวแล้ว   → หัวข้อ + โหมด + Clear บรรทัดบน
+                              แถวล่าง: dropdown สรุป (ซ้าย) · Start (ขวา)      */}
+          <div className="card pe-card">
+            {!entryQueue ? (
+              <>
+                <div className="card-title">Part Entry</div>
+                {/* จัดกึ่งกลางทั้งแนวตั้งและแนวนอน — ตอนนี้มีอย่างเดียวที่ทำได้
+                    ไม่ต้องให้ตาไปหาปุ่มที่มุมไหน */}
+                <div className="pe-card-empty">
+                  <button className="btn-pe-action" onClick={openPeModal}>
+                    + New Entry
+                  </button>
+                  <span className="session-entry-hint">กด "New Entry" เพื่อเตรียมคิว</span>
+                </div>
+              </>
+            ) : (
+              <div className="session-entry-filled">
+                {/* หัวข้อ + โหมด + Clear อยู่บรรทัดบน ให้แถวล่างเหลือแค่
+                    dropdown กับปุ่ม — ถ้ายัด badge เข้าไปในตัว toggle ด้วย
+                    ชื่อ ALPL ที่ยาวจะถูกบีบจนอ่านไม่ออกก่อนใครเพื่อน */}
+                <div className="session-entry-head">
+                  <span className="session-entry-title">Part Entry</span>
+                  <span className={`pe-mode-badge-lg ${entryQueue.mode.toLowerCase()}`}>
+                    {entryQueue.mode}
+                  </span>
+                  {/* ล้างคิวที่กรอกไว้ทั้งหมด — ล็อกตอน running เพราะคิวระหว่างวัด
+                      คือของที่ backend ถืออยู่จริง ล้างฝั่งหน้าเว็บอย่างเดียวจะทำให้
+                      สองฝั่งไม่ตรงกัน แล้วผลวัดที่ตามมาจะไปแปะกับ ALPL ผิดตัว */}
+                  <button
+                    type="button"
+                    className="btn-clear"
+                    disabled={isRunning}
+                    title={isRunning ? "กดไม่ได้ระหว่างกำลังวัด — กด Stop ก่อน"
+                                     : "ล้างคิว Part Entry ที่กรอกไว้ทั้งหมด"}
+                    onClick={clearPartEntry}
+                  >
+                    🧹 Clear
+                  </button>
+                </div>
+
+                {/* dropdown สรุป — อยู่คอลัมน์ซ้ายของ grid ร่วมกับหัวข้อข้างบน
+                    จึงกว้างเท่ากันเป๊ะ ทำให้ badge/Clear ที่ชิดขวาของหัวข้อ
+                    ตรงกับขอบขวาของ dropdown พอดี ไม่เลยไปอยู่เหนือปุ่ม Start */}
+                  <div className="pe-summary-dropdown session-entry-summary">
+                    <button type="button" className="pe-summary-toggle" onClick={() => setPeSummaryOpen((v) => !v)}>
+                      <span className="pe-summary-toggle-left">
+                        <span>ALPL: {entryQueue.list.join(", ")}</span>
+                      </span>
+                      <span className={`pe-summary-arrow${peSummaryOpen ? " open" : ""}`}>▼</span>
+                    </button>
+                    {/* แสดงทีละกลุ่ม — ของเดิมโชว์ field ชุดเดียวเพราะมีได้กลุ่มเดียว
+                        ตอนนี้ต้องบอกให้ได้ว่า ALPL ไหนใช้ config ชุดไหน ไม่งั้น
+                        ผู้ใช้ตรวจก่อนกด Start ไม่ได้ว่ากรอกถูกกลุ่มหรือเปล่า */}
+                    <div className={`pe-summary-body${peSummaryOpen ? " open" : ""}`}>
+                      <div className="pe-summary-grid">
+                        <span className="pg-label">Operator</span>
+                        <span className="pg-value">{entryQueue.operator}</span>
+                      </div>
+                      {entryQueue.groups.map((g, gi) => (
+                        <div key={gi} className="pe-summary-grid" style={{ marginTop: "0.6rem" }}>
+                          <span className="pg-label">กลุ่มที่ {gi + 1}</span>
+                          <span className="pg-value">{(g.number_alpl as number[]).join(", ")}</span>
+                          {Object.entries(g)
+                            .filter(([k, v]) => k !== "number_alpl" && v !== "" && v != null)
+                            .map(([k, v]) => (
+                              <span key={k} style={{ display: "contents" }}>
+                                <span className="pg-label">{k.replace(/_/g, " ")}</span>
+                                <span className="pg-value">{String(v)}</span>
+                              </span>
+                            ))}
+                        </div>
+                      ))}
+                      <div className="pe-summary-actions">
+                        {canEditQueue && (
+                          <button className="btn-pe-action" onClick={openPeModal}>✎ Edit</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ⚠ ปุ่มควบคุมทั้งหมดอยู่ที่นี่ที่เดียว ไม่กระจายไปการ์ดซ้าย —
+                      ตอนต้องกด Stop ด่วน คนต้องรู้ทันทีว่ามองที่ไหน ไม่ใช่กวาดตา
+                      หาสองที่ · การ์ดซ้ายจึงเป็นจอแสดงสถานะล้วน ๆ ไม่มีปุ่มเลย */}
+                  <div className="session-btns">
+                    <button className="btn-start" disabled={!canStart} title={startTitle} onClick={startFromQueue}>
+                      {startLabel}
+                    </button>
+                    {isRunning && manualTrigger && (
+                      <button
+                        className="btn-trigger"
+                        disabled={!triggerReady}
+                        title={
+                          triggerReady
+                            ? "ส่งสัญญาณให้เริ่มวัดชิ้นนี้ (แทน MCU ชั่วคราว)"
+                            : "ยังไม่ถึงจังหวะ — ระบบกำลังโหลดโปรแกรมวัด หรือกำลังรอผลของชิ้นก่อนหน้าอยู่"
+                        }
+                        onClick={sendManualTrigger}
+                      >
+                        ⚡ Trigger
+                      </button>
+                    )}
+                    {isRunning && (
+                      <button className="btn-stop" onClick={stopSession}>
+                        ■ Stop
+                      </button>
+                    )}
+                  </div>
+              </div>
+            )}
+          </div>
           </div>
         </section>
 
@@ -1431,84 +1526,10 @@ export default function DashboardPage() {
             (Total ซ้ำกับ "x / y measured" ที่มีอยู่เดิม จึงเหลือแค่ OK/NG +
              แถบสัดส่วน) — ตรงกับ index.html ที่ถอด section นี้ออกไปแล้ว */}
 
-        {/* Section 4 — Part Entry */}
-        <section>
-          <div className="card">
-            <div className="pe-card-header">
-              <div className="card-title" style={{ marginBottom: 0 }}>
-                Part Entry
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                  {entryQueue && (
-                    <span className={`pe-mode-badge-lg ${entryQueue.mode.toLowerCase()}`}>
-                      {entryQueue.mode}
-                    </span>
-                  )}
-                {/* ล้างคิวที่กรอกไว้ทั้งหมด — ล็อกตอน running เพราะคิวระหว่างวัด
-                    คือของที่ backend ถืออยู่จริง ล้างฝั่งหน้าเว็บอย่างเดียวจะทำให้
-                    สองฝั่งไม่ตรงกัน แล้วผลวัดที่ตามมาจะไปแปะกับ ALPL ผิดตัว */}
-                <button
-                  type="button"
-                  className="btn-clear"
-                  disabled={isRunning}
-                  title={isRunning ? "กดไม่ได้ระหว่างกำลังวัด — กด Stop ก่อน"
-                                   : "ล้างคิว Part Entry ที่กรอกไว้ทั้งหมด"}
-                  onClick={clearPartEntry}
-                >
-                  🧹 Clear
-                </button>
-              </div>
-            </div>
-
-            {!entryQueue ? (
-              <>
-                <div className="pe-empty">ยังไม่มีข้อมูล Part Entry ค้างอยู่ — กด "New Entry" เพื่อเตรียมคิว IPM, ลงทะเบียน Part ใหม่ หรือส่ง Rework</div>
-                <div style={{ marginTop: "1rem", textAlign: "center" }}>
-                  <button className="btn-pe-action" onClick={openPeModal}>
-                    + New Entry
-                  </button>
-                </div>
-              </>
-            ) : (
-                <div className="pe-summary-dropdown">
-                  <button type="button" className="pe-summary-toggle" onClick={() => setPeSummaryOpen((v) => !v)}>
-                    <span className="pe-summary-toggle-left">
-                      <span>ALPL: {entryQueue!.list.join(", ")}</span>
-                    </span>
-                    <span className={`pe-summary-arrow${peSummaryOpen ? " open" : ""}`}>▼</span>
-                  </button>
-                  <div className={`pe-summary-body${peSummaryOpen ? " open" : ""}`}>
-                    {/* แสดงทีละกลุ่ม — ของเดิมโชว์ field ชุดเดียวเพราะมีได้กลุ่มเดียว
-                        ตอนนี้ต้องบอกให้ได้ว่า ALPL ไหนใช้ config ชุดไหน ไม่งั้น
-                        ผู้ใช้ตรวจก่อนกด Start ไม่ได้ว่ากรอกถูกกลุ่มหรือเปล่า */}
-                    <div className="pe-summary-grid">
-                      <span className="pg-label">Operator</span>
-                      <span className="pg-value">{entryQueue!.operator}</span>
-                    </div>
-                    {entryQueue!.groups.map((g, gi) => (
-                      <div key={gi} className="pe-summary-grid" style={{ marginTop: "0.6rem" }}>
-                        <span className="pg-label">กลุ่มที่ {gi + 1}</span>
-                        <span className="pg-value">{(g.number_alpl as number[]).join(", ")}</span>
-                        {Object.entries(g)
-                          .filter(([k, v]) => k !== "number_alpl" && v !== "" && v != null)
-                          .map(([k, v]) => (
-                            <span key={k} style={{ display: "contents" }}>
-                              <span className="pg-label">{k.replace(/_/g, " ")}</span>
-                              <span className="pg-value">{String(v)}</span>
-                            </span>
-                          ))}
-                      </div>
-                    ))}
-                    <div className="pe-summary-actions">
-                      {canEditQueue && (
-                        <button className="btn-pe-action" onClick={openPeModal}>✎ Edit</button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-            )}
-          </div>
-        </section>
+        {/* Part Entry: ยุบขึ้นไปอยู่ในแถบ Session Control ข้างบนแล้ว (.session-entry)
+            เดิมเป็นการ์ดแยกตรงนี้ ทำให้ operator ต้องเลื่อนหน้าจอลงมากรอกคิวทุกครั้ง
+            ที่เริ่มรอบใหม่ แล้วเลื่อนกลับขึ้นไปดูค่าที่วัดได้ — สองอย่างที่ใช้
+            ต่อเนื่องกันในรอบเดียวแต่อยู่คนละฟากของหน้าจอ */}
 
         {/* Section 5 — Measurements Table */}
         <section>
