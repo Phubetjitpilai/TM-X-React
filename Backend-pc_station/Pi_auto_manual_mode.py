@@ -76,6 +76,41 @@ def open_mega() -> bool:
     time.sleep(2)  # รอ Mega รีเซ็ตตัวเองหลังเชื่อมต่อ
     log.info("[INFO] Mega Serial Connected Successfully.")
     return True
+
+
+def _drop_mega(where: str) -> None:
+    """ทิ้ง handle ที่ตายแล้ว เพื่อให้ Start รอบหน้าเปิดพอร์ตใหม่ได้
+
+    เรียกทุกครั้งที่ `mega_ser.write()` พัง
+
+    ── ทำไมต้องมี ───────────────────────────────────────────────────────────
+    pyserial **ไม่รู้ตัว** ว่าอุปกรณ์หลุดไปแล้ว — `ser.is_open` ยังตอบ `True`
+    ต่อไปและตัวแปรยังชี้ไปที่ object เดิม ส่วน `open_mega()` เช็คแค่
+    `if mega_ser is not None: return True` มันจึงตอบว่า "พร้อมใช้งาน" ตลอด
+
+    ผลคือกด Start รอบใหม่ → ใช้ handle ศพตัวเดิม → `[Errno 5] Input/output
+    error` ซ้ำทันที **วนแบบนี้จนกว่าจะรีสตาร์ทสคริปต์ทั้งตัว** (ซึ่งได้ผลก็เพราะ
+    `mega_ser` กลับไปเป็น None ตามค่าตั้งต้น ไม่ใช่เพราะฮาร์ดแวร์หายเอง)
+
+    พอล้างเป็น None แล้ว `open_mega()` ที่ `/command` จะเห็นว่าต้องเปิดใหม่จริง —
+    คนหน้างานแค่เสียบสายให้แน่นแล้วกด Start ใหม่บนหน้าเว็บ ไม่ต้อง SSH เข้ามา
+
+    ⚠ ตัวนี้ **ไม่เปิดพอร์ตใหม่และไม่มี `sleep`** — คนละเรื่องกับ `open_mega()`
+      ที่ถูกถอดออกจาก `send_*_to_mcu` เพราะช้าเกินไปสำหรับลูปที่วิ่งทุกชิ้น
+
+    ⚠ `close()` ต้องอยู่ใน try แยก — ปิดพอร์ตที่อุปกรณ์หายไปแล้วโยน exception
+      ได้เหมือนกัน ถ้าไม่ครอบไว้จะไปพังทับ exception เดิมที่กำลังจัดการอยู่
+    """
+    global mega_ser
+    if mega_ser is None:
+        return
+    try:
+        mega_ser.close()
+    except Exception:
+        pass
+    mega_ser = None
+    log.warning("   ⚠️ ทิ้งการเชื่อมต่อ Mega แล้ว (พังตอน%s) "
+                "— กด Start ใหม่บนหน้าเว็บเพื่อเปิดพอร์ตใหม่ ไม่ต้องรีสตาร์ทสคริปต์", where)
 #########################
 
 TRIGGER_COMMAND = "T1\r"
@@ -243,10 +278,7 @@ async def command(req: CommandRequest):
                 "โหมด auto ต้องต่อ Arduino/Mega ผ่าน USB — หาพอร์ตไม่เจอ "
                 "(ตรวจสาย USB หรือเลือกโหมด manual แทน)",
             )
-        elif req.trigger_mode =="auto":
-            start_msg ="<START>\n"
-            mega_ser.write(start_msg.encode("utf-8"))
-            log.info(f" [TX -> Mega] {start_msg.strip()}")
+        
 
         with _answer_lock:
             _answer_action = None
@@ -707,79 +739,47 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
 
 #วนไปถามว่าพร้อมรับ result ยัง ให้ MCU set Flag เอา idle(ยังไม่มีชิ้นงาน) -> obj_is_ready(เมื่อวางชิ้นงานแล้ว) -> waiting_for_result(พร้อมรับ result) -> idle(เสร็จการวัด 1 ชิ้น)
 def send_result_to_mcu(result) -> bool:
-    """ส่งผลตัดสินให้ MCU ไปคัดแยกชิ้นงาน — คืน True เมื่อส่งสำเร็จ
-
-    ⚠ ห้าม raise — ผู้เรียก (`command_flow`) เช็คค่าที่คืนแล้วตั้ง `stop_reason`
-      เอง ถ้า raise ออกไปจะตกไปที่ `except` ก้อนใหญ่แล้วได้ข้อความแนว
-      "session พังกลางทาง — SerialException: ..." ซึ่งคนหน้างานอ่านไม่รู้เรื่อง
-      และหน้าเว็บไม่เด้งอะไรเลย (onSessionStopped อ่านแค่ agent_error)
-    """
-    global mega_ser
-
-    icon = {"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
+    # หมายเหตุ: ไม่ต้องประกาศ `global mega_ser` ที่นี่ — การล้าง handle ทำใน
+    # `_drop_mega()` ซึ่งประกาศ global ของมันเอง ฟังก์ชันนี้แค่ *อ่าน* mega_ser
+    icon ={"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
     if _trigger_mode != "auto":
         log.info("   🔀 (manual) ไม่ได้ส่งผลให้ MCU: %s %s", icon, result)
         return True
-
-    elif not open_mega():
-        log.error("   ❌ ยังไม่ได้ต่อ Arduino/Mega — ส่งผลไม่ได้")
-        report("MCU_NOT_CONNECTED",
-               "ยังไม่ได้ต่อ Arduino/Mega — ตรวจสาย USB แล้วกด Start ใหม่")
-        return False
     # กำหนด Token ที่จะส่งกลับหา Mega ตามผลลัพธ์
     if result == "OK":
         ack_msg = "<MEASURE_OK>\n"
     elif result == "NG":
         ack_msg = "<MEASURE_NG>\n"
-    else:
-        return False
-
-    log.info("   🔀 → MCU: %s %s", icon, result)
-    try:
+    try: 
         mega_ser.write(ack_msg.encode("utf-8"))
+        log.info(f"   [TX → Mega] {ack_msg.strip()}")
+        log.info("   🔀 → MCU: %s %s", icon, result)
+        return True
     except Exception as exc:
-        log.error("   ❌ เขียนลง Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
+        log.error("   ❌ ส่ง Result ให้ Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
         report("MCU_WRITE_FAILED",
                f"ส่งผลการวัดให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
                f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
-        # ⚠ ต้องล้าง handle ทิ้ง — pyserial ยังรายงาน is_open == True ต่อไป
-        #   แม้อุปกรณ์หลุดแล้ว ถ้าไม่ล้าง open_mega() จะตอบ True ตลอด
-        #   แล้วต้องรีสตาร์ทสคริปต์ทั้งตัวถึงจะกลับมาใช้ได้
-        try:
-            mega_ser.close()
-        except Exception:
-            pass
-        mega_ser = None
+        _drop_mega("ส่งผลการวัด")
         return False
 
-    log.info(f"   [TX → Mega] {ack_msg.strip()}")
-    return True
-
 def send_package_size_to_mcu(package_size) -> bool:
-    global mega_ser
+    # ไม่ต้อง `global mega_ser` — เหตุผลเดียวกับ send_result_to_mcu ข้างบน
     if _trigger_mode != "auto":
         log.info("   🔀 (manual) ไม่ได้บอกขนาดชิ้นงานให้ MCU: %s", package_size)
         return True
-    elif not open_mega():
-        log.error("   ❌ ยังไม่ได้ต่อ Arduino/Mega")
-        report("MCU_NOT_CONNECTED", "ยังไม่ได้ต่อ Arduino/Mega — ตรวจสาย USB")
-        return False
-    else:
+    try:
         ack_msg = f"<PKG:{package_size}>\n"
-        try:
-            mega_ser.write(ack_msg.encode("utf-8"))
-        except Exception as exc:
-            log.error("   ❌ เขียนลง Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
-            report("MCU_WRITE_FAILED",
-                   f"ส่งขนาดชิ้นงานให้ MCU ไม่สำเร็จ ({type(exc).__name__}) — ตรวจสาย USB")
-            try:
-                mega_ser.close()
-            except Exception:
-                pass
-            mega_ser = None          # ← กด Start ใหม่แล้วเปิดพอร์ตใหม่ได้ ไม่ต้องรีสตาร์ท
-            return False
+        mega_ser.write(ack_msg.encode("utf-8"))
         log.info(f"   [TX → Mega] {ack_msg.strip()}")
-        return True                  # ← บรรทัดที่ขาดไป
+        return True   
+    except Exception as exc:
+        log.error("   ❌ ส่ง Package Size ให้ Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
+        report("MCU_WRITE_FAILED",
+               f"ส่งค่า Package Size ให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
+               f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
+        _drop_mega("ส่งขนาดชิ้นงาน")
+        return False
 
 def wait_for_measurement(session_id, count_before, timeout=MEASURE_TIMEOUT):
 
@@ -1006,6 +1006,21 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
             log.info("   → กด Stop ที่หน้าเว็บเพื่อล้าง session นี้ แล้วลองใหม่")
             stop_reason = (f"ต่อ TM-X ที่ {TMX_IP}:{TMX_PORT} ไม่ได้ ({type(exc).__name__}) "f"— ตรวจสาย LAN · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env")
             return
+        #ส่ง Start ให้ MCU
+
+        if trigger_mode =="auto":
+            start_msg ="<START>\n"
+            try:
+                mega_ser.write(start_msg.encode("utf-8"))
+                log.info(f" [TX -> Mega] {start_msg.strip()}")
+            except Exception as exc:
+                log.error("   ❌ ส่ง Start ให้ Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
+                report("MCU_WRITE_FAILED",
+                f"ส่ง Start ให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
+                f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
+                _drop_mega("ส่ง Start")
+                stop_reason = ("ไม่สามารถส่ง Start ไปที่ MCU ได้")
+                return
 
 
         # Running (เข้าโหมดดำเนินงาน)
@@ -1087,7 +1102,6 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
             # ถ้าอ่านก่อนรอ แล้วค่าของชิ้นก่อนที่มาช้าหลุดเข้ามาระหว่างนั้น
             # measured_count จะขยับตั้งแต่ยังไม่ได้ยิง T1 ของชิ้นนี้
             count_before = get_measured_count(session_id)
-
 
             # ── ② MRS ล้างค่าเก่า แล้วยิง T1 และ GM ────────────────────────────────
             rounds = 0
@@ -1191,7 +1205,11 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
                 mega_ser.write(b"<STOP>\n")
                 log.info(" [TX → Mega] <STOP>")
             except Exception as exc:
+                report("MCU_STOP_FAILED", f"ส่ง <STOP> ให้ MCU ไม่สำเร็จ: {exc}")
                 log.warning(" ⚠️ บอก <STOP> ให้ MCU ไม่สำเร็จ: %s", exc)
+                # ล้าง handle ที่ตายแล้วด้วย — session นี้จบอยู่แล้ว แต่ถ้าไม่ล้าง
+                # รอบหน้าจะกด Start ไม่ติดโดยไม่มีอะไรบอกว่าเกี่ยวกับรอบนี้
+                _drop_mega("ส่ง Stop")
         if client_socket is not None:
             try:
                 client_socket.shutdown(socket.SHUT_RDWR)
