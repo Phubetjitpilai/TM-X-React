@@ -757,7 +757,9 @@ def send_result_to_mcu(result) -> bool:
         return True
     except Exception as exc:
         log.error("   ❌ ส่ง Result ให้ Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
-        report("MCU_WRITE_FAILED",
+        # รหัสแยกตามจังหวะที่พัง — `sessions.last_event` มีช่องเดียว ถ้าใช้รหัส
+        # เดียวกันหมดจะแยกไม่ออกว่าสายหลุดตอนไหนของรอบ (ดู MCU_START_FAILED)
+        report("MCU_RESULT_FAILED",
                f"ส่งผลการวัดให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
                f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
         _drop_mega("ส่งผลการวัด")
@@ -775,7 +777,7 @@ def send_package_size_to_mcu(package_size) -> bool:
         return True   
     except Exception as exc:
         log.error("   ❌ ส่ง Package Size ให้ Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
-        report("MCU_WRITE_FAILED",
+        report("MCU_PKG_FAILED",
                f"ส่งค่า Package Size ให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
                f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
         _drop_mega("ส่งขนาดชิ้นงาน")
@@ -1015,11 +1017,19 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
                 log.info(f" [TX -> Mega] {start_msg.strip()}")
             except Exception as exc:
                 log.error("   ❌ ส่ง Start ให้ Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
-                report("MCU_WRITE_FAILED",
-                f"ส่ง Start ให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
-                f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
+                # ⚠ ใช้รหัสเฉพาะ `MCU_START_FAILED` ไม่ใช่ `MCU_WRITE_FAILED` ที่
+                #   send_result/send_package ใช้อยู่ — `sessions.last_event` เก็บ
+                #   ได้ช่องเดียว ถ้าทุกจุดใช้รหัสเดียวกันจะแยกไม่ออกว่าพังจังหวะไหน
+                #   ของรอบ (ยังไม่เริ่มวัด / กลางคิว / ตอนส่งผล) ซึ่งคนละสาเหตุกัน
+                #
+                # ⚠ ข้อความเดียวกันใช้ทั้ง report() และ stop_reason — ทำเป็นตัวแปร
+                #   ไม่งั้นแก้ที่เดียวลืมอีกที่ แล้ว toast บนหน้าเว็บกับข้อความใน DB
+                #   จะไม่ตรงกัน (ตอนไล่ย้อนหลังจะงงว่าอันไหนคือของจริง)
+                msg = (f"ส่ง Start ให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
+                       f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
+                report("MCU_START_FAILED", msg)
                 _drop_mega("ส่ง Start")
-                stop_reason = ("ไม่สามารถส่ง Start ไปที่ MCU ได้")
+                stop_reason = msg
                 return
 
 
@@ -1205,7 +1215,8 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
                 mega_ser.write(b"<STOP>\n")
                 log.info(" [TX → Mega] <STOP>")
             except Exception as exc:
-                report("MCU_STOP_FAILED", f"ส่ง <STOP> ให้ MCU ไม่สำเร็จ: {exc}")
+                report("MCU_STOP_FAILED",
+                       f"ส่ง <STOP> ให้ MCU ไม่สำเร็จ ({type(exc).__name__}): {exc}")
                 log.warning(" ⚠️ บอก <STOP> ให้ MCU ไม่สำเร็จ: %s", exc)
                 # ล้าง handle ที่ตายแล้วด้วย — session นี้จบอยู่แล้ว แต่ถ้าไม่ล้าง
                 # รอบหน้าจะกด Start ไม่ติดโดยไม่มีอะไรบอกว่าเกี่ยวกับรอบนี้
