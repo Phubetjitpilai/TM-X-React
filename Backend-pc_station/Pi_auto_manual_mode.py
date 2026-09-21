@@ -79,28 +79,6 @@ def open_mega() -> bool:
 
 
 def _drop_mega(where: str) -> None:
-    """ทิ้ง handle ที่ตายแล้ว เพื่อให้ Start รอบหน้าเปิดพอร์ตใหม่ได้
-
-    เรียกทุกครั้งที่ `mega_ser.write()` พัง
-
-    ── ทำไมต้องมี ───────────────────────────────────────────────────────────
-    pyserial **ไม่รู้ตัว** ว่าอุปกรณ์หลุดไปแล้ว — `ser.is_open` ยังตอบ `True`
-    ต่อไปและตัวแปรยังชี้ไปที่ object เดิม ส่วน `open_mega()` เช็คแค่
-    `if mega_ser is not None: return True` มันจึงตอบว่า "พร้อมใช้งาน" ตลอด
-
-    ผลคือกด Start รอบใหม่ → ใช้ handle ศพตัวเดิม → `[Errno 5] Input/output
-    error` ซ้ำทันที **วนแบบนี้จนกว่าจะรีสตาร์ทสคริปต์ทั้งตัว** (ซึ่งได้ผลก็เพราะ
-    `mega_ser` กลับไปเป็น None ตามค่าตั้งต้น ไม่ใช่เพราะฮาร์ดแวร์หายเอง)
-
-    พอล้างเป็น None แล้ว `open_mega()` ที่ `/command` จะเห็นว่าต้องเปิดใหม่จริง —
-    คนหน้างานแค่เสียบสายให้แน่นแล้วกด Start ใหม่บนหน้าเว็บ ไม่ต้อง SSH เข้ามา
-
-    ⚠ ตัวนี้ **ไม่เปิดพอร์ตใหม่และไม่มี `sleep`** — คนละเรื่องกับ `open_mega()`
-      ที่ถูกถอดออกจาก `send_*_to_mcu` เพราะช้าเกินไปสำหรับลูปที่วิ่งทุกชิ้น
-
-    ⚠ `close()` ต้องอยู่ใน try แยก — ปิดพอร์ตที่อุปกรณ์หายไปแล้วโยน exception
-      ได้เหมือนกัน ถ้าไม่ครอบไว้จะไปพังทับ exception เดิมที่กำลังจัดการอยู่
-    """
     global mega_ser
     if mega_ser is None:
         return
@@ -163,7 +141,8 @@ ASK_USER_TIMEOUT = float(os.getenv("ASK_USER_TIMEOUT", 70))
 # 0 = ปิดฟีเจอร์ (วัดรวดเดียวจนครบ target_count)
 #
 # ⚠ **ไม่มีคู่ TIMEOUT** ต่างจาก ASK_USER_TIMEOUT ข้างบนโดยตั้งใจ — ดู ask_tray_clear
-TRAY_CAPACITY = int(os.getenv("TRAY_CAPACITY", 0))
+#ถ้า tray = 0 คือปิดการทำงาน
+TRAY_CAPACITY = 8
 
 # คำสั่งล้างค่าเก่า — คู่มือหน้า 5-9 พิมพ์ 2 แบบไม่ตรงกันเอง ต้องลองเอง
 CLEAR_CANDIDATES = ["MRS", "MSR"]
@@ -554,38 +533,8 @@ def parse_gm(resp):
 
 
 def has_real_value(tools):
-    """ค่าที่ได้เป็นของจริงหรือยัง — 9999.999 = TM-X ยังวัดไม่เสร็จ/วัดไม่ติด
-
-    เช็ค **เฉพาะช่องที่ `GM_IDX_*` ชี้ไป** และต้องได้ครบทุกช่อง
-
-    ── ของเดิมใช้ `any()` ซึ่งหลวมเกินไป ────────────────────────────────────
-    `any(...)` แปลว่า "มีเครื่องมือใดเครื่องมือหนึ่งวัดติดก็พอ" — การวัดที่
-    สำเร็จแค่บางส่วนจึงหลุดผ่านด่านนี้มาได้ แล้ว `_val()` หยิบค่าตามช่อง
-    ช่องที่ยังวัดไม่เสร็จก็ติด sentinel 9999.999 มาด้วย → บันทึกลง DB เป็น
-    ค่าขยะ หรือถ้าผู้ใช้กด "รับค่าจาก Pi" ก็ได้ตัวเลขแปลก ๆ ไปเลย
-
-    เปลี่ยนเป็น `all()` แล้ว GM จะวนถามต่อจนกว่าจะครบทุกช่องที่ใช้จริง —
-    ตรงกับเจตนาของลูป (`T1` ตอบตอนรับทริกเกอร์ ไม่ใช่ตอนวัดเสร็จ ค่าทยอยมา)
-
-    ⚠ ไม่ได้เช็คทุกเครื่องมือที่ TM-X ส่งมา แต่เช็คเฉพาะช่องที่ map ไว้ —
-      โปรแกรมวัดบางตัวมีเครื่องมือเสริมที่เราไม่ได้ใช้ ถ้าไปบังคับให้ครบหมด
-      จะรอเก้อทั้งที่ค่าที่ต้องการมาครบแล้ว
-
-    ⚠ `abs()` ไม่ใช่ `>= 0` — sentinel ของ TM-X เป็น -9999.999 ได้ และค่า
-      offset ที่ติดลบเป็นค่าปกติ (การเยื้องมีทิศทาง) ห้ามตัดทิ้ง
-    """
-    if not tools:
-        return False
-
-    idxs = [i for i in (GM_IDX_X, GM_IDX_Y,
-                        GM_IDX_HORIZON_LEFT, GM_IDX_HORIZON_RIGHT,
-                        GM_IDX_VERTICAL_TOP, GM_IDX_VERTICAL_BOTTOM,
-                        GM_IDX_OFFSET_X, GM_IDX_OFFSET_Y) if i is not None]
-    if not idxs or max(idxs) >= len(tools):
-        return False                      # TM-X ยังส่งมาไม่ครบจำนวนเครื่องมือ
-
-    return all(tools[i][0] is not None and abs(tools[i][0]) < NO_VALUE_ABS
-               for i in idxs)
+    """ค่าครบ 8 ตัวและใช้ได้จริงทุกตัวหรือยัง"""
+    return sum(1 for m, _, _ in tools or [] if m is not None and abs(m) < NO_VALUE_ABS) >= 8
 
 
 def clear_measurement(sock):
@@ -649,7 +598,6 @@ def trigger_tmx(sock):
     log.info(f"❌ ส่ง T1 ไม่สำเร็จหลังลอง {T1_RETRY} ครั้ง")
     return False, f"{resp} (ลองครบ {T1_RETRY} ครั้ง)"
 
-
 def _f3(v):
     """จัดรูปตัวเลขเป็น 3 ตำแหน่งสำหรับ **แสดงผลเท่านั้น** — `None` คืน `"—"`
 
@@ -661,18 +609,6 @@ def _f3(v):
 
 
 def judge(x, y, offset_x, offset_y, limits):
-    """ตัดสิน OK/NG จาก limits ที่ Backend คำนวณมาให้ — คืน ("OK"|"NG", เหตุผล[])
-
-    เทียบขอบตรงๆ ไม่ต้องคำนวณอะไรเอง เพราะ Backend ปัดทศนิยมมาให้เรียบร้อยแล้ว
-    (ดู `_limits_of` ใน `routers/session.py`)
-
-    ⚠ **ห้ามปัดค่า x/y ซ้ำที่นี่** — ค่าฝั่งนี้มาจากการ parse ข้อความ `GM` ตรง ๆ
-      ไม่เคยผ่านคอลัมน์ FLOAT จึงไม่มีหางให้ต้องปัด · `float("8.05")` กับขอบที่
-      backend ปัดมาแล้วเป็น double ตัวเดียวกันเป๊ะอยู่แล้ว ปัดซ้ำมีแต่จะทำให้
-      กฎการปัดไปอยู่ 2 ที่แล้วเพี้ยนกันวันหลัง
-
-    `offset_max = None` → โหมดนี้ไม่ตรวจ offset (IPM) ให้ถือว่าผ่าน
-    """
 
     reasons = []
     if x is None:
@@ -752,12 +688,6 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
                 log.info("      • %s", r)
 
             # เทียบกับผลที่ TM-X ตัดสินมาเอง (j) — ได้ตัวเฝ้าระวัง config drift ฟรีๆ
-            '''j_x = tools[GM_IDX_X][2] if GM_IDX_X is not None and GM_IDX_X < len(tools) else None
-            if j_x is not None and limits is not None:
-                tmx_says = "OK" if j_x == 0 else "NG"
-                if tmx_says != result:
-                    print(f"   ⚠️ TM-X ตัดสินว่า {tmx_says} แต่เราคำนวณได้ {result} — "
-                          f"tolerance ในโปรแกรมวัดกับใน DB อาจเพี้ยนกันแล้ว")'''
             return result, x, y, horizon_left, horizon_right,vertical_top, vertical_bottom,offset_x, offset_y
         time.sleep(GM_POLL_INTERVAL)
 
@@ -767,9 +697,12 @@ def get_measurement_tmx(sock, limits, timeout=GM_MAX_WAIT):
 
 #วนไปถามว่าพร้อมรับ result ยัง ให้ MCU set Flag เอา idle(ยังไม่มีชิ้นงาน) -> obj_is_ready(เมื่อวางชิ้นงานแล้ว) -> waiting_for_result(พร้อมรับ result) -> idle(เสร็จการวัด 1 ชิ้น)
 def send_result_to_mcu(result) -> bool:
-    # หมายเหตุ: ไม่ต้องประกาศ `global mega_ser` ที่นี่ — การล้าง handle ทำใน
-    # `_drop_mega()` ซึ่งประกาศ global ของมันเอง ฟังก์ชันนี้แค่ *อ่าน* mega_ser
-    icon ={"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
+    # ⚠ ต้องมี `global` — ข้างล่างมีการเขียน `mega_ser = None` ถ้าไม่ประกาศ
+    #   Python จะถือว่าเป็นตัวแปรท้องถิ่นของฟังก์ชันนี้ โค้ดรันผ่านไม่มี error
+    #   แต่ตัวแปรระดับโมดูลไม่ถูกแตะเลย = พฤติกรรมเหมือนไม่ได้แก้อะไร
+    global mega_ser
+
+    icon = {"OK": "✅", "NG": "❌", "UNKNOWN": "❓"}.get(result, "•")
     if _trigger_mode != "auto":
         log.info("   🔀 (manual) ไม่ได้ส่งผลให้ MCU: %s %s", icon, result)
         return True
@@ -785,16 +718,15 @@ def send_result_to_mcu(result) -> bool:
         return True
     except Exception as exc:
         log.error("   ❌ ส่ง Result ให้ Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
-        # รหัสแยกตามจังหวะที่พัง — `sessions.last_event` มีช่องเดียว ถ้าใช้รหัส
-        # เดียวกันหมดจะแยกไม่ออกว่าสายหลุดตอนไหนของรอบ (ดู MCU_START_FAILED)
-        report("MCU_RESULT_FAILED",
+        report("MCU_WRITE_FAILED",
                f"ส่งผลการวัดให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
                f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
         _drop_mega("ส่งผลการวัด")
         return False
 
 def send_package_size_to_mcu(package_size) -> bool:
-    # ไม่ต้อง `global mega_ser` — เหตุผลเดียวกับ send_result_to_mcu ข้างบน
+    global mega_ser              # ⚠ เหตุผลเดียวกับ send_result_to_mcu ข้างบน
+
     if _trigger_mode != "auto":
         log.info("   🔀 (manual) ไม่ได้บอกขนาดชิ้นงานให้ MCU: %s", package_size)
         return True
@@ -805,7 +737,7 @@ def send_package_size_to_mcu(package_size) -> bool:
         return True   
     except Exception as exc:
         log.error("   ❌ ส่ง Package Size ให้ Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
-        report("MCU_PKG_FAILED",
+        report("MCU_WRITE_FAILED",
                f"ส่งค่า Package Size ให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
                f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
         _drop_mega("ส่งขนาดชิ้นงาน")
@@ -980,6 +912,19 @@ def post_measurement_from_pi(session_id, piece, x, y, horizon_left, horizon_righ
                persist=False)   # ← ค่าลง DB แล้ว ห้ามทับสาเหตุที่ Pi กำลังรอ
     return True
 
+def pi_values_problem(x, y, hl, hr, vt, vb, ox, oy):
+    """ค่าที่ Pi ถืออยู่ใช้ได้จริงไหม — คืนข้อความอธิบายปัญหา หรือ None ถ้าปกติ
+
+    ⚠ ต้องเช็คแยกจาก `has_real_value()` ที่ใช้ตอนวน GM — ตัวนั้นใช้ `any()`
+      แปลว่า "มีอย่างน้อย 1 เครื่องมือที่วัดติด" การวัดที่สำเร็จบางส่วนจึงผ่าน
+      มาได้ แล้ว sentinel 9999.999 / None ติดมากับช่องที่วัดไม่ติด
+    """
+    names = ["X", "Y", "Horizon L", "Horizon R",
+             "Vertical T", "Vertical B", "Offset X", "Offset Y"]
+    bad = [n for n, v in zip(names, (x, y, hl, hr, vt, vb, ox, oy))
+           if v is None or abs(v) >= NO_VALUE_ABS]
+    return "ค่าไม่สมบูรณ์: " + ", ".join(bad) if bad else None
+
 def command_flow(session_id, groups, target_count, trigger_mode="auto"):
 
     global current_session_id, is_running,_hb_last_ok, _trigger_mode
@@ -1034,30 +979,26 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
             log.info("\n❌ ต่อ TM-X ที่ %s:%s ไม่ได้ — %s: %s", TMX_IP, TMX_PORT, type(exc).__name__, exc)
             log.info("   ตรวจ: สาย LAN ต่ออยู่ไหม · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env ถูกไหม")
             log.info("   → กด Stop ที่หน้าเว็บเพื่อล้าง session นี้ แล้วลองใหม่")
-            stop_reason = (f"ต่อ TM-X ที่ {TMX_IP}:{TMX_PORT} ไม่ได้ ({type(exc).__name__}) "f"— ตรวจสาย LAN · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env")
+            msg = (f"ต่อ TM-X ที่ {TMX_IP}:{TMX_PORT} ไม่ได้ ({type(exc).__name__}) "
+                   f"— ตรวจสาย LAN · TM-X เปิดอยู่ไหม · TMX_HOST/TMX_PORT ใน .env")
+            report("TMX_CONNECT_FAILED", msg, persist=False)
+            stop_reason = msg
             return
+        
         #ส่ง Start ให้ MCU
-
         if trigger_mode =="auto":
+            global mega_ser
             start_msg ="<START>\n"
             try:
                 mega_ser.write(start_msg.encode("utf-8"))
                 log.info(f" [TX -> Mega] {start_msg.strip()}")
             except Exception as exc:
                 log.error("   ❌ ส่ง Start ให้ Mega ไม่สำเร็จ (%s): %s", type(exc).__name__, exc)
-                # ⚠ ใช้รหัสเฉพาะ `MCU_START_FAILED` ไม่ใช่ `MCU_WRITE_FAILED` ที่
-                #   send_result/send_package ใช้อยู่ — `sessions.last_event` เก็บ
-                #   ได้ช่องเดียว ถ้าทุกจุดใช้รหัสเดียวกันจะแยกไม่ออกว่าพังจังหวะไหน
-                #   ของรอบ (ยังไม่เริ่มวัด / กลางคิว / ตอนส่งผล) ซึ่งคนละสาเหตุกัน
-                #
-                # ⚠ ข้อความเดียวกันใช้ทั้ง report() และ stop_reason — ทำเป็นตัวแปร
-                #   ไม่งั้นแก้ที่เดียวลืมอีกที่ แล้ว toast บนหน้าเว็บกับข้อความใน DB
-                #   จะไม่ตรงกัน (ตอนไล่ย้อนหลังจะงงว่าอันไหนคือของจริง)
-                msg = (f"ส่ง Start ให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
-                       f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
-                report("MCU_START_FAILED", msg)
+                report("MCU_WRITE_FAILED",
+                f"ส่ง Start ให้ MCU ไม่สำเร็จ ({type(exc).__name__}) "
+                f"— ตรวจสาย USB ของ Arduino แล้วกด Start ใหม่")
+                stop_reason = ("ไม่สามารถส่ง Start ไปที่ MCU ได้")
                 _drop_mega("ส่ง Start")
-                stop_reason = msg
                 return
 
 
@@ -1084,14 +1025,15 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
             # `piece > 1` กันไม่ให้ถามตั้งแต่ชิ้นแรก และการเช็คที่หัวลูปทำให้
             # **ไม่มีทางถามหลังชิ้นสุดท้าย** โดยอัตโนมัติ (ไม่มีรอบถัดไปให้เช็ค)
             # เช่น TRAY_CAPACITY=8 · target=16 → ถามครั้งเดียวก่อนชิ้นที่ 9
-            if TRAY_CAPACITY and piece > 1 and (piece - 1) % TRAY_CAPACITY == 0:
-                log.info("\n🧺 วัดครบ %s ชิ้นแล้ว (%s/%s) — ถาดเต็ม",
-                         TRAY_CAPACITY, piece - 1, target_count)
-                if ask_tray_clear(session_id, piece - 1, target_count) != "resume":
-                    stop_reason = (f"ผู้ใช้หยุดการวัดตอนเคลียร์ถาด "
-                                   f"(วัดไปแล้ว {piece - 1}/{target_count} ชิ้น)")
-                    break
-                log.info("   ▶ เคลียร์ถาดแล้ว — วัดต่อชิ้นที่ %s", piece)
+            if trigger_mode == "auto":
+                if TRAY_CAPACITY and piece > 1 and (piece - 1) % TRAY_CAPACITY == 0:
+                    log.info("\n🧺 วัดครบ %s ชิ้นแล้ว (%s/%s) — ถาดเต็ม",
+                            TRAY_CAPACITY, piece - 1, target_count)
+                    if ask_tray_clear(session_id, piece - 1, target_count) != "resume":
+                        stop_reason = (f"ผู้ใช้หยุดการวัดตอนเคลียร์ถาด "
+                                    f"(วัดไปแล้ว {piece - 1}/{target_count} ชิ้น)")
+                        break
+                    log.info("   ▶ เคลียร์ถาดแล้ว — วัดต่อชิ้นที่ %s", piece)
 
 
             # ── ⓪ โหลดโปรแกรมวัดของกลุ่มนี้ ถ้ายังไม่ตรงกับที่ค้างอยู่ ──────
@@ -1205,6 +1147,20 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
                    f"ชิ้นที่ {piece}/{target_count}: วัดได้แล้วแต่ค่าไม่ถึงฐานข้อมูลใน "
                    f"{MEASURE_TIMEOUT:.0f} วิ — ตรวจว่า Recieve_tm-x.py รันอยู่ไหม")
 
+            problem = pi_values_problem(x, y, horizon_left, horizon_right,
+                                        vertical_top, vertical_bottom, offset_x, offset_y)
+            preview = (f"X={_f3(x)} · Y={_f3(y)} · "
+                       f"OffX={_f3(offset_x)} · OffY={_f3(offset_y)}")
+
+            if problem:
+                report("PI_VALUE_BAD",
+                       f"ชิ้นที่ {piece}/{target_count}: ค่าไม่ถึงฐานข้อมูล และค่าที่ Pi "
+                       f"ถืออยู่ก็ใช้ไม่ได้ ({problem}) — {preview}")
+                stop_reason = (f"ชิ้นที่ {piece}/{target_count}: ค่าไม่ถึงฐานข้อมูล "
+                               f"และค่าที่ Pi ถืออยู่ไม่สมบูรณ์ ({problem}) — วัดชิ้นนี้ใหม่")
+                break
+
+
             if ask_user(session_id, piece, target_count) != "accept":
                 stop_reason = (f"ชิ้นที่ {piece}/{target_count}: ค่าไม่ถึงฐานข้อมูล "
                                f"— ผู้ใช้เลือกหยุด")
@@ -1239,16 +1195,15 @@ def command_flow(session_id, groups, target_count, trigger_mode="auto"):
         #   `mega_ser` เป็น None ได้จริงใน 2 กรณี: โหมด manual (ไม่เคยเปิดพอร์ต)
         #   และหลัง `send_*_to_mcu` ล้าง handle ทิ้งเพราะสาย USB หลุด
         if trigger_mode == "auto" and mega_ser is not None:
+            global mega_ser            
             try:
                 mega_ser.write(b"<STOP>\n")
                 log.info(" [TX → Mega] <STOP>")
             except Exception as exc:
-                report("MCU_STOP_FAILED",
-                       f"ส่ง <STOP> ให้ MCU ไม่สำเร็จ ({type(exc).__name__}): {exc}")
+                report("MCU_STOP_FAILED", f"ส่ง <STOP> ให้ MCU ไม่สำเร็จ: {exc}")
                 log.warning(" ⚠️ บอก <STOP> ให้ MCU ไม่สำเร็จ: %s", exc)
-                # ล้าง handle ที่ตายแล้วด้วย — session นี้จบอยู่แล้ว แต่ถ้าไม่ล้าง
-                # รอบหน้าจะกด Start ไม่ติดโดยไม่มีอะไรบอกว่าเกี่ยวกับรอบนี้
                 _drop_mega("ส่ง Stop")
+                
         if client_socket is not None:
             try:
                 client_socket.shutdown(socket.SHUT_RDWR)
