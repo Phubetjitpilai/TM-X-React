@@ -17,7 +17,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const show = useCallback((msg: string) => {
     setMessage(msg);
     if (timerRef.current) window.clearTimeout(timerRef.current);
-    timerRef.current = window.setTimeout(() => setMessage(null), 2600);
+    timerRef.current = window.setTimeout(() => setMessage(null), 5000);
   }, []);
 
   return (

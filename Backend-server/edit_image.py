@@ -20,7 +20,7 @@ import numpy as np
 #
 # ปรับได้ที่ .env — ต้องใหญ่พอครอบ package ที่ใหญ่ที่สุดที่ใช้จริง (10x6.5)
 # พร้อมขอบเผื่อ ถ้าเล็กไปชิ้นงานจะโดนตัดขอบแล้วตรวจจับไม่ครบ (มี log เตือนให้)
-DEFAULT_CROP_SIZE = 900
+DEFAULT_CROP_SIZE = 850
 
 
 def crop_size() -> int:

@@ -1897,12 +1897,11 @@ tr[data-clickable] { cursor: pointer; }
 .confirm-box p strong { color: var(--text); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }
 
-/* ── Toast (Editor page — single bottom-center toast) ─────────────────── */
 .toast {
   position: fixed;
-  bottom: 1.5rem;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%) translateY(12px);
+  transform: translate(-50%, -50%) scale(0.95);
   background: var(--text);
   color: #fff;
   padding: 0.65rem 1.25rem;
@@ -1913,7 +1912,7 @@ tr[data-clickable] { cursor: pointer; }
   transition: opacity .2s, transform .2s;
   z-index: 300;
 }
-.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 
 /* ══════════════════════════════════════════════════════════════════════
    Measurement report modal (ยกจาก Frontend/index.html ทั้งชุด)

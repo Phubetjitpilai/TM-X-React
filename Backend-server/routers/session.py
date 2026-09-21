@@ -1035,7 +1035,6 @@ async def retry_session(body: SessionContinueRequest):
 @router.post("/api/tray-full")
 async def report_tray_full(req: TrayFullRequest):
     """Pi แจ้งว่าถาดรับชิ้นงานเต็มแล้ว — รอผู้ใช้มาเคลียร์ก่อนวัดต่อ
-
     ต่างจาก `report_measure_timeout` ตรงที่นี่ **ไม่ใช่ความผิดพลาด** — เป็นจุดพัก
     ตามแผนที่ตั้งไว้ใน `TRAY_CAPACITY` จึงไม่ต้องไปขุด `last_event` มาอธิบายสาเหตุ
     และไม่ต้องเติม `number_alpl` เพราะไม่มีชิ้นไหนค้างอยู่ (ชิ้นที่ `piece`
